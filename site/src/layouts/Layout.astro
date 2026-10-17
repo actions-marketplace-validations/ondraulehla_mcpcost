@@ -37,6 +37,21 @@ const year = new Date().getFullYear();
 // stays its own canonical; noindex plus a canonical that points elsewhere are two signals that contradict each other.
 const noindex = /\bnoindex\b/.test(robots ?? '');
 const canonical = new URL(noindex ? path + Astro.url.search : path, Astro.site ?? Astro.url).toString();
+// The home page is the brand page: its title names the product and says what it does. Every other page adds the brand after its own title.
+const HOME_TITLE = 'mcpcost: health and token cost of every MCP server';
+const fullTitle = title === 'mcpcost' ? HOME_TITLE : `${title} · mcpcost`;
+// Structured data. A page with its own data sends it; every other indexable page tells search engines that "mcpcost" is the
+// name of this website, so the one-word query is a brand query and not "mcp cost".
+const siteUrl = new URL('/', Astro.site ?? Astro.url).toString();
+const website = {
+  '@context': 'https://schema.org',
+  '@type': 'WebSite',
+  name: 'mcpcost',
+  alternateName: 'mcpcost.ulehla.dev',
+  url: siteUrl,
+  description
+};
+const structured = jsonld ?? (noindex ? undefined : website);
 // Cloudflare Web Analytics: page views without cookies. The token is the CF_BEACON_TOKEN var in wrangler.jsonc; no token, no script.
 const beaconToken = import.meta.env.DEV ? '' : ((env as unknown as { CF_BEACON_TOKEN?: string }).CF_BEACON_TOKEN ?? '').trim();
 ---
@@ -46,7 +61,7 @@ const beaconToken = import.meta.env.DEV ? '' : ((env as unknown as { CF_BEACON_T
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{title === 'mcpcost' ? 'mcpcost' : `${title} · mcpcost`}</title>
+    <title>{fullTitle}</title>
     <script is:inline>
       // Before paint: the stored choice, else the system setting. No flash of the wrong theme.
       (function () {
@@ -61,14 +76,14 @@ const beaconToken = import.meta.env.DEV ? '' : ((env as unknown as { CF_BEACON_T
     <link rel="canonical" href={canonical} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preload" href={antonWoff2} as="font" type="font/woff2" crossorigin />
-    <meta property="og:title" content={title} />
+    <meta property="og:title" content={fullTitle} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
     <meta property="og:url" content={canonical} />
     <meta name="theme-color" content="#f6f3ec" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#1c1a17" media="(prefers-color-scheme: dark)" />
     <meta name="msvalidate.01" content="4F4EE13471EED503A00DC72F10CE2BB9" />
-    {jsonld && <script type="application/ld+json" set:html={JSON.stringify(jsonld)} />}
+    {structured && <script type="application/ld+json" set:html={JSON.stringify(structured)} />}
   </head>
   <body>
     <header class="band">

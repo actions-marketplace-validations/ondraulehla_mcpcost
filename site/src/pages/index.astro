@@ -22,9 +22,38 @@ const example = alive[0]
   : run?.heaviest[0]
     ? { name: run.heaviest[0].name, label: run.heaviest[0].name, tools: run.heaviest[0].toolCount, cost: run.heaviest[0].claudeTokens ?? run.heaviest[0].toolsTokens, exact: run.heaviest[0].claudeTokens != null }
     : null;
+
+// The product and the website, named "mcpcost", so search engines read the one-word query as a brand query.
+const description =
+  'Is this MCP server alive? What does it cost your context window? Daily health and token cost of every remote and package server in the official MCP registry.';
+const siteUrl = new URL('/', Astro.site ?? Astro.url).toString();
+const jsonld = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'WebSite',
+      '@id': `${siteUrl}#website`,
+      name: 'mcpcost',
+      alternateName: 'mcpcost.ulehla.dev',
+      url: siteUrl,
+      description
+    },
+    {
+      '@type': 'SoftwareApplication',
+      '@id': `${siteUrl}#software`,
+      name: 'mcpcost',
+      url: siteUrl,
+      description,
+      applicationCategory: 'DeveloperApplication',
+      operatingSystem: 'Any',
+      offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+      sameAs: ['https://github.com/ondraulehla/mcpcost', 'https://www.npmjs.com/package/mcpcost']
+    }
+  ]
+};
 ---
 
-<Layout title="mcpcost">
+<Layout title="mcpcost" description={description} jsonld={jsonld}>
   <p class="kicker">every server in the MCP registry, probed each day</p>
   <h1 class="poster">mcpcost measures what MCP servers cost before the first prompt</h1>
   <p class="lede">Every server you connect hands its tool definitions to the model at the start of a session. Those definitions are tokens, and you pay them in every turn. mcpcost tells you if a server is alive and how many tokens its tools take, as Claude counts them.</p>
