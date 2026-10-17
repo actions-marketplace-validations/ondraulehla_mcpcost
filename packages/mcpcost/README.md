@@ -11,7 +11,7 @@ Every MCP server you configure hands your agent its tool definitions at the star
 ```
 $ npx mcpcost --config .mcp.json --tools 3
 
-mcpcost 0.3.0 · tool definitions your agent loads before the first prompt
+mcpcost 0.3.1 · tool definitions your agent loads before the first prompt
   .mcp.json
 
   server      source     result               tools  tokens  of 200k

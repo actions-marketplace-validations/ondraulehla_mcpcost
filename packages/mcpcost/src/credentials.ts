@@ -114,6 +114,14 @@ export function createProvider(store: CredentialStore, url: string, options: Pro
   if (options.scope) oauth.scope = options.scope;
   const redirectUrl = options.redirectUrl ?? 'http://127.0.0.1/callback';
   let changed = false;
+  // A client registered for another redirect URI (an earlier port) cannot be used; register again.
+  if (options.onRedirect && oauth.clientInformation && !oauth.tokens) {
+    const uris = (oauth.clientInformation as { redirect_uris?: string[] }).redirect_uris;
+    if (uris && !uris.includes(redirectUrl)) {
+      delete oauth.clientInformation;
+      changed = true;
+    }
+  }
   let verifier: string | undefined;
   let state: string | undefined;
   const touched = () => {

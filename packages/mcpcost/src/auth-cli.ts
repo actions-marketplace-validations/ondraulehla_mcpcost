@@ -22,8 +22,9 @@ Usage
 Options
   --credentials <file>   the credentials file (default ~/.mcpcost/credentials.json, or $MCPCOST_CREDENTIALS)
   --scope <scope>        scope to ask for in the OAuth flow
+  --port <n>             local port for the callback (default 41379; the registered client is bound to it)
   --no-open              print the authorization URL, do not open the browser
-  --timeout <ms>         how long to wait for the consent (default 300000)
+  --timeout <ms>         how long to wait for the consent (default 600000)
 
 After the consent the server is measured once with the new credentials, so you see that it works.
 The daily board uses the same file through its MCPCOST credentials table; see the README.`;
@@ -40,8 +41,11 @@ function openBrowser(url: string): void {
   }
 }
 
+/** The default callback port. Fixed, because the registered client's redirect URI carries it; a random port would need a new registration every time. */
+export const DEFAULT_CALLBACK_PORT = 41379;
+
 /** Waits for one GET /callback?code=…&state=… on a local port. */
-function callbackServer(expectedState: () => string | undefined, timeoutMs: number): Promise<{ redirectUrl: string; code: Promise<string>; close: () => void }> {
+function callbackServer(expectedState: () => string | undefined, timeoutMs: number, port: number): Promise<{ redirectUrl: string; code: Promise<string>; close: () => void }> {
   return new Promise((resolveServer, rejectServer) => {
     let resolveCode: (code: string) => void = () => undefined;
     let rejectCode: (err: Error) => void = () => undefined;
@@ -74,10 +78,12 @@ function callbackServer(expectedState: () => string | undefined, timeoutMs: numb
     });
     const timer = setTimeout(() => rejectCode(new Error(`no callback within ${Math.round(timeoutMs / 1000)} s`)), timeoutMs);
     timer.unref();
-    server.on('error', rejectServer);
-    server.listen(0, '127.0.0.1', () => {
-      const port = (server.address() as AddressInfo).port;
-      resolveServer({ redirectUrl: `http://127.0.0.1:${port}/callback`, code, close: () => { clearTimeout(timer); server.close(); } });
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      rejectServer(err.code === 'EADDRINUSE' ? new Error(`port ${port} is in use; pass --port <n> (the registered client is bound to the port)`) : err);
+    });
+    server.listen(port, '127.0.0.1', () => {
+      const bound = (server.address() as AddressInfo).port;
+      resolveServer({ redirectUrl: `http://127.0.0.1:${bound}/callback`, code, close: () => { clearTimeout(timer); server.close(); } });
     });
   });
 }
@@ -91,8 +97,9 @@ export async function authCommand(argv: string[]): Promise<number> {
       list: { type: 'boolean', default: false },
       remove: { type: 'boolean', default: false },
       scope: { type: 'string' },
+      port: { type: 'string' },
       'no-open': { type: 'boolean', default: false },
-      timeout: { type: 'string', default: '300000' },
+      timeout: { type: 'string', default: '600000' },
       help: { type: 'boolean', default: false }
     },
     allowPositionals: true
@@ -150,15 +157,15 @@ export async function authCommand(argv: string[]): Promise<number> {
   }
 
   // The OAuth flow: discovery, registration, the consent in the browser, the token.
-  const timeoutMs = Number(values.timeout) || 300_000;
-  const cb = await callbackServer(() => provider.lastState, timeoutMs);
+  const timeoutMs = Number(values.timeout) || 600_000;
+  const cb = await callbackServer(() => provider.lastState, timeoutMs, Number(values.port) || DEFAULT_CALLBACK_PORT);
   const provider = createProvider(store, key, {
     redirectUrl: cb.redirectUrl,
     scope: values.scope,
     onRedirect: (url) => {
       console.log(`\nOpen this URL and allow the access:\n  ${url}\n`);
       if (!values['no-open']) openBrowser(url.toString());
-      console.log('Waiting for the consent…');
+      console.log(`Waiting for the consent, up to ${Math.round(timeoutMs / 60_000)} minutes…`);
     }
   });
   try {

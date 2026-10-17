@@ -132,3 +132,20 @@ describe('the OAuth flow over the file provider', () => {
     await expect(auth(provider, { serverUrl: SERVER, fetchFn })).rejects.toThrow(/needs the consent step/);
   });
 });
+
+describe('a client registered for another callback port', () => {
+  it('is registered again when the consent is to run on a new port', () => {
+    const store = emptyStore();
+    store.servers[credentialKey(SERVER)] = { oauth: { clientInformation: { client_id: 'old', redirect_uris: ['http://127.0.0.1:50809/callback'] } } };
+    const provider = createProvider(store, SERVER, { redirectUrl: 'http://127.0.0.1:41379/callback', onRedirect: () => undefined });
+    expect(provider.clientInformation()).toBeUndefined();
+    expect(provider.changed).toBe(true);
+  });
+
+  it('is kept when it already has tokens, since no consent is needed', () => {
+    const store = emptyStore();
+    store.servers[credentialKey(SERVER)] = { oauth: { clientInformation: { client_id: 'old', redirect_uris: ['http://127.0.0.1:50809/callback'] }, tokens: { access_token: 'a', token_type: 'bearer', refresh_token: 'r' } } };
+    const provider = createProvider(store, SERVER, { redirectUrl: 'http://127.0.0.1:41379/callback', onRedirect: () => undefined });
+    expect(provider.clientInformation()).toMatchObject({ client_id: 'old' });
+  });
+});
