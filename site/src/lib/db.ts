@@ -138,6 +138,35 @@ export async function latestRun(): Promise<RunSummary | null> {
   return row ? (JSON.parse(row.summary) as RunSummary) : null;
 }
 
+/** Well-known servers for the front page, by their registry names. Order is the display order. */
+export const NOTABLE: Array<{ name: string; label: string }> = [
+  { name: 'io.github.github/github-mcp-server', label: 'GitHub' },
+  { name: 'app.linear/linear', label: 'Linear' },
+  { name: 'com.notion/mcp', label: 'Notion' },
+  { name: 'com.stripe/mcp', label: 'Stripe' },
+  { name: 'com.atlassian/atlassian-mcp-server', label: 'Atlassian' },
+  { name: 'com.figma.mcp/mcp', label: 'Figma' },
+  { name: 'io.github.getsentry/sentry-mcp', label: 'Sentry' },
+  { name: 'com.supabase/mcp', label: 'Supabase' },
+  { name: 'com.vercel/vercel-mcp', label: 'Vercel' },
+  { name: 'com.cloudflare.mcp/mcp', label: 'Cloudflare docs' },
+  { name: 'io.github.microsoft/playwright-mcp', label: 'Playwright' },
+  { name: 'io.github.upstash/context7', label: 'Context7' },
+  { name: 'co.huggingface/hf-mcp-server', label: 'Hugging Face' },
+  { name: 'ai.exa/exa', label: 'Exa' },
+  { name: 'io.github.firecrawl/firecrawl-mcp-server', label: 'Firecrawl' }
+];
+
+/** The rows for a list of names, in no particular order. One query, one row read per name. */
+export async function serversByNames(names: string[]): Promise<Array<Pick<ServerRecord, 'name' | 'title' | 'status' | 'tool_count' | 'claude_tokens' | 'tools_tokens' | 'host'>>> {
+  if (!names.length) return [];
+  const { results } = await db()
+    .prepare(`SELECT name, title, status, tool_count, claude_tokens, tools_tokens, host FROM servers WHERE name IN (${names.map(() => '?').join(',')})`)
+    .bind(...names)
+    .all<Pick<ServerRecord, 'name' | 'title' | 'status' | 'tool_count' | 'claude_tokens' | 'tools_tokens' | 'host'>>();
+  return results;
+}
+
 export async function getServer(name: string): Promise<ServerRecord | null> {
   return db().prepare('SELECT * FROM servers WHERE name = ?').bind(name).first<ServerRecord>();
 }

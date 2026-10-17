@@ -7,7 +7,10 @@ import { GATED_STATUSES } from '../../../packages/mcpcost/src/types.ts';
 
 const p = Astro.url.searchParams;
 const q = (p.get('q') ?? '').trim().slice(0, 80);
-const status = p.get('status') ?? '';
+// With no parameters at all the list opens on alive servers; ?status=all asks for every result.
+const defaultView = [...p.keys()].length === 0;
+const statusParam = p.get('status') ?? '';
+const status = statusParam === 'all' ? '' : defaultView ? 'ok' : statusParam;
 const host = p.get('host') ?? '';
 const protocol = p.get('protocol') ?? '';
 const transport = p.get('transport') ?? '';
@@ -50,7 +53,7 @@ const protocols = run ? Object.keys(run.protocols).filter((v) => v !== 'unknown'
 // The data changes once a day; three hours at the edge keeps repeat views off the database.
 Astro.response.headers.set('cache-control', 'public, max-age=120, s-maxage=10800');
 
-const filtered = Boolean(q || status || host || protocol || transport);
+const filtered = Boolean(q || statusParam || host || protocol || transport);
 
 /** Column headers: first click sorts the natural way (numbers high first, text A to Z), the second click flips. */
 const columns: Array<{ label: string; first: SortKey; second: SortKey; num?: boolean }> = [
@@ -86,7 +89,7 @@ const robots = filtered || page > 1 || sort !== DEFAULT_SORT ? 'noindex, follow'
     </label>
     <label>Result
       <select name="status">
-        <option value="">any</option>
+        <option value="all" selected={statusParam === 'all'}>any</option>
         <option value="ok" selected={status === 'ok'}>alive</option>
         <option value="auth" selected={status === 'auth'}>needs auth</option>
         <option value="payment" selected={status === 'payment'}>paid (402)</option>
@@ -130,6 +133,7 @@ const robots = filtered || page > 1 || sort !== DEFAULT_SORT ? 'noindex, follow'
     </div>
   </form>
 
+  {defaultView && <p class="muted small" style="margin:12px 0 0">Alive servers, heaviest first. <a href="/servers?status=all">Every result</a>, including servers that need auth or are down.</p>}
   <p class="pager-label small muted" style="margin:14px 0 6px">
     {total !== null ? `${num(total)} servers` : rows.length ? `${num(rows.length)}${hasNext ? '+' : ''} servers on this page` : 'no servers'}{host && <> on {host}</>}{protocol && <> · {protocol}</>}{transport && <> · {transport}</>}{pages !== null && <> · page {page} of {num(pages)}</>}
   </p>

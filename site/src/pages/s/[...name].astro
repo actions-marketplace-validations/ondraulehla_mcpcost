@@ -164,6 +164,25 @@ const jsonld = {
       <div class="stat"><b>{ms(server.tools_ms)}</b><span>to list tools</span></div>
     </div>
   )}
+  {ok && (
+    <div class="cta">
+      <div>
+        <p class="kicker" style="margin:0 0 8px">badge for the README</p>
+        <p style="margin:0 0 8px"><img src={`/badge/${name}.svg`} alt={`mcpcost: ${label(server.status)}`} height="20" /></p>
+        <pre style="margin:0">{badgeMd}</pre>
+      </div>
+      <div>
+        <p class="kicker" style="margin:0 0 8px">a mail when this server changes</p>
+        <form class="checkform" method="post" action="/watch">
+          <input type="hidden" name="server" value={name} />
+          <input type="email" name="email" placeholder="you@example.com" required autocomplete="email" aria-label="E-mail address" />
+          <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px" />
+          <button type="submit">Watch</button>
+        </form>
+        <p class="muted small" style="margin:8px 0 0">Stops answering, comes back, tool set or cost changes. One confirmation mail first, a stop link in every mail.</p>
+      </div>
+    </div>
+  )}
   {server.status !== 'ok' && server.error && <pre>{server.error}</pre>}
 
   <dl class="facts">
@@ -254,3 +273,22 @@ const jsonld = {
   <pre>{badgeHtml}</pre>
   <p class="muted small">An entry for every probe that changed the result, the tool count or the token cost: <a href={`/s/${name}.xml`}>Atom feed</a>. Add it to a feed reader or a Slack RSS app to hear when the server stops answering or its tool set grows.</p>
 </Layout>
+
+<style>
+  .cta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 16px 0 0;
+  }
+  .cta > div {
+    border: 1px solid var(--line);
+    padding: 14px 16px;
+    min-width: 0;
+  }
+  @media (width <= 760px) {
+    .cta {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

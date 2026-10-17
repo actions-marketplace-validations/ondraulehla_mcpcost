@@ -1,40 +1,80 @@
 ---
 import Layout from '../layouts/Layout.astro';
-import { latestRun, headline } from '../lib/db';
-import { num, pct, tokens, date, modelName } from '../lib/format';
+import { latestRun, headline, serversByNames, NOTABLE } from '../lib/db';
+import { bucket, label, num, pct, tokens, date, modelName, windowShare } from '../lib/format';
 
-const run = await latestRun();
+const [run, notableRows] = await Promise.all([latestRun(), serversByNames(NOTABLE.map((n) => n.name))]);
 const cost = run ? headline(run) : null;
 const inModel = cost?.exact ? ` in ${modelName(cost.model)}` : '';
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=3600');
 const up = run?.ok ?? 0;
 const gated = run ? (run.byStatus.auth ?? 0) + (run.byStatus.payment ?? 0) + (run.byStatus.newer_protocol ?? 0) : 0;
 const down = run ? run.probed - up - gated : 0;
+
+// The curated rows in the curated order, with the display name from the list.
+const byName = new Map(notableRows.map((r) => [r.name, r]));
+const notable = NOTABLE.map((n) => ({ ...n, row: byName.get(n.name) })).filter((n) => n.row);
+const costOf = (r: { claude_tokens: number | null; tools_tokens: number | null }) => r.claude_tokens ?? r.tools_tokens;
+/** One real number for the opening line: the heaviest alive server among the well-known ones, else the heaviest of the run. */
+const alive = notable.filter((n) => n.row!.status === 'ok' && costOf(n.row!) != null).sort((a, b) => costOf(b.row!)! - costOf(a.row!)!);
+const example = alive[0]
+  ? { name: alive[0].name, label: alive[0].label, tools: alive[0].row!.tool_count, cost: costOf(alive[0].row!)!, exact: alive[0].row!.claude_tokens != null }
+  : run?.heaviest[0]
+    ? { name: run.heaviest[0].name, label: run.heaviest[0].name, tools: run.heaviest[0].toolCount, cost: run.heaviest[0].claudeTokens ?? run.heaviest[0].toolsTokens, exact: run.heaviest[0].claudeTokens != null }
+    : null;
 ---
 
 <Layout title="mcpcost">
-  <h1 class="poster">Health and token cost of the MCP registry</h1>
-  <p class="lede">mcpcost probes every server in the official MCP registry each day: remote servers over HTTP, npm and PyPI packages in a container. It records if the server answers. It counts the tokens that the tool definitions take from the context window, as Claude counts them.</p>
+  <p class="kicker">every server in the MCP registry, probed each day</p>
+  <h1 class="poster">What does an MCP server cost before the first prompt?</h1>
+  <p class="lede">Every server you connect hands its tool definitions to the model at the start of a session. Those definitions are tokens, and you pay them in every turn. mcpcost tells you if a server is alive and how many tokens its tools take, as Claude counts them.</p>
+  {example && (
+    <p class="answer">
+      <a href={`/s/${example.name}`}>{example.label}</a> has {num(example.tools)} tools. They cost <b>{tokens(example.cost)} tokens</b>{example.exact ? '' : ' (estimate)'} of context in every session, <b>{windowShare(example.cost)}</b> of a 200k window, before you type a word.
+    </p>
+  )}
 
-  <section class="panel check-panel" aria-labelledby="check-h">
-    <h2 id="check-h" class="poster panel-title">Check a server</h2>
-    <form class="checkform" method="get" action="/check">
-      <input type="text" name="target" placeholder="https://mcp.example.com/mcp or io.github.you/server" required autocomplete="off" aria-label="Server URL or registry name" />
-      <button type="submit">Check</button>
-    </form>
-    <p class="muted small" style="margin:8px 0 0">Enter a server URL or a registry name. A registry server opens its page. Other servers are probed now. Example: <a href="/check?target=https://mcp.deepwiki.com/mcp">mcp.deepwiki.com/mcp</a></p>
-  </section>
+  <div class="actions-grid">
+    <section class="panel check-panel" aria-labelledby="check-h">
+      <h2 id="check-h" class="poster panel-title">Check a server</h2>
+      <form class="checkform" method="get" action="/check">
+        <input type="text" name="target" placeholder="https://mcp.example.com/mcp or io.github.you/server" required autocomplete="off" aria-label="Server URL or registry name" />
+        <button type="submit">Check</button>
+      </form>
+      <p class="muted small" style="margin:8px 0 0">A registry name opens its page. Any other URL is probed now, with the same steps as the daily run.</p>
+    </section>
+    <section class="panel" aria-labelledby="own-h">
+      <h2 id="own-h" class="poster panel-title">Measure your own config</h2>
+      <pre style="margin:0">npx mcpcost</pre>
+      <p class="muted small" style="margin:8px 0 0">Reads the configs of Claude Code, Claude Desktop, Cursor, VS Code, Windsurf and Gemini CLI, starts each server and prints the cost per server. <code>--budget</code> makes it a CI check. <a href="https://www.npmjs.com/package/mcpcost" rel="noopener">npm</a> · <a href="https://github.com/ondraulehla/mcpcost#in-ci-as-a-github-action" rel="noopener">GitHub Action</a></p>
+    </section>
+  </div>
 
-  <nav class="links" aria-label="Sections">
-    <a href="/tokens">Tokens<span>what a server costs</span></a>
-    <a href="/servers">Servers<span>search, filter, sort</span></a>
-    <a href="/statistics">Statistics<span>results, costs, protocols, publishers</span></a>
-    <a href="/changes">Changes<span>new, gone, down, back, heavier</span></a>
-    <a href="/methodology">Method<span>how we measure</span></a>
-  </nav>
+  {notable.length > 0 && (
+    <>
+      <h2>Well-known servers</h2>
+      <div class="frame">
+        <table class="notable">
+          <thead><tr><th>Server</th><th>Result</th><th class="num">Tools</th><th class="num">Tokens{inModel}</th></tr></thead>
+          <tbody>
+            {notable.map((n) => (
+              <tr>
+                <td><a href={`/s/${n.name}`}>{n.label}</a> <span class="sub mono">{n.name}</span></td>
+                <td><span class={`tag ${bucket(n.row!.status)}`}>{label(n.row!.status)}</span></td>
+                <td class="num">{n.row!.status === 'ok' ? num(n.row!.tool_count) : ''}</td>
+                <td class="num">{n.row!.status === 'ok' ? (n.row!.claude_tokens != null ? tokens(n.row!.claude_tokens) : n.row!.tools_tokens != null ? <span class="faint">~{tokens(n.row!.tools_tokens)}</span> : '') : ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class="muted small">A server that needs auth answers the handshake but not the tool list, so the probe has no count for it. <a href="/servers">All {run ? num(run.probed) : ''} servers</a>.</p>
+    </>
+  )}
 
   {run && (
     <>
+      <h2>The registry today</h2>
       <div class="stats">
         <div class="stat"><b>{pct(up, run.probed)}</b><span>alive</span></div>
         <div class="stat"><b>{pct(gated, run.probed)}</b><span>need auth, payment, env or args</span></div>
@@ -43,12 +83,36 @@ const down = run ? run.probed - up - gated : 0;
         <div class="stat"><b>{tokens(cost!.stats.p90)}</b><span>90th percentile</span></div>
         <div class="stat"><b>{tokens(cost!.stats.max)}</b><span>heaviest server</span></div>
       </div>
-      <p class="muted small" style="margin:10px 0 0">{num(run.probed)} servers · probed {date(run.probedAt)} · <a href="/statistics">statistics</a></p>
+      <p class="muted small" style="margin:10px 0 0">{num(run.probed)} servers · probed {date(run.probedAt)} · <a href="/statistics">statistics</a> · <a href="/changes">what changed</a></p>
     </>
   )}
 
-  <h2>Your own config</h2>
-  <pre>npx mcpcost</pre>
-  <p class="muted small">The command reads the configs of Claude Code, Claude Desktop, Cursor, VS Code and Windsurf. It starts each server. It shows the token cost of each server. Use <code>--budget</code> in CI.</p>
-
+  <nav class="links" aria-label="Sections" style="margin-top:40px">
+    <a href="/tokens">Tokens<span>what a server costs</span></a>
+    <a href="/servers">Servers<span>search, filter, sort</span></a>
+    <a href="/statistics">Statistics<span>results, costs, protocols, publishers</span></a>
+    <a href="/changes">Changes<span>new, gone, down, back, heavier</span></a>
+    <a href="/methodology">Method<span>how we measure</span></a>
+  </nav>
+  <p class="muted small" style="margin-top:18px">Remote servers are probed over HTTP, npm and PyPI packages in a container with the network off. Exact counts come from the Anthropic count_tokens endpoint. Every server has a page, a badge, an Atom feed and e-mail alerts. <a href="/methodology">How we measure</a>.</p>
 </Layout>
+
+<style>
+  .actions-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 22px;
+  }
+  .actions-grid .panel {
+    margin: 0;
+  }
+  .notable {
+    min-width: 0;
+  }
+  @media (width <= 760px) {
+    .actions-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

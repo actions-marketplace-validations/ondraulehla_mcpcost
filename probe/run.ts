@@ -41,7 +41,7 @@ const started = Date.now();
 
 const sampleSize = Number(args.sample);
 const perHost = Number(args['per-host']);
-const concurrency = Number(args.concurrency);
+let concurrency = Number(args.concurrency);
 const timeoutMs = Number(args.timeout);
 
 interface Target {
@@ -213,7 +213,22 @@ if (entries.length > registryEntries.length) {
 }
 const targets = pickTargets(entries);
 console.error(`${entries.length} registry entries, ${targets.length} targets, concurrency ${concurrency}, timeout ${timeoutMs}ms`);
-const rows = await runAll(targets);
+let rows = await runAll(targets);
+// A transient fault on the runner's side shows up as a wave of timeouts on servers that answered yesterday.
+// Those get a second, slower attempt; a server that fails twice keeps its timeout.
+const previousStatus = new Map<string, string>();
+if (args['claude-cache'] && existsSync(args['claude-cache'])) {
+  for (const p of JSON.parse(await readFile(args['claude-cache'], 'utf8')) as Array<{ name: string; status: string }>) previousStatus.set(p.name, p.status);
+}
+const LIVE_BEFORE = new Set(['ok', 'auth', 'payment', 'newer_protocol', 'rate_limited']);
+const retry = rows.filter((r) => r.result.status === 'timeout' && LIVE_BEFORE.has(previousStatus.get(r.name) ?? '')).map(({ result: _r, payloadHash: _h, ...t }) => t);
+if (retry.length) {
+  console.error(`${retry.length} servers timed out but answered last time: second attempt`);
+  concurrency = Math.min(concurrency, 4);
+  const again = new Map((await runAll(retry)).map((r) => [r.name, r]));
+  rows = rows.map((r) => again.get(r.name) ?? r);
+  console.error(`  ${[...again.values()].filter((r) => r.result.status !== 'timeout').length} answered on the second attempt`);
+}
 const summary = summarize(rows);
 if (claude.enabled) { const c = claude.stats(); console.error(`Claude counts: ${c.counted} servers counted now, ${c.reused} reused from the previous run, ${c.skipped} left for the next run (deadline)`); }
 else console.error('ANTHROPIC_API_KEY is not set: no exact Claude counts in this run.');
