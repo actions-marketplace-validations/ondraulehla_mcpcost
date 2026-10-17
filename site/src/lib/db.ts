@@ -169,6 +169,18 @@ export async function getHistory(name: string, limit = 60): Promise<ProbeRecord[
   return results;
 }
 
+/** SQL list of the statuses in which the server answered: alive, or alive behind auth, payment or a missing input. */
+const ANSWERED_STATUSES_SQL = `('ok', ${[...GATED_STATUSES].map((s) => `'${s}'`).join(', ')})`;
+
+/** Whether any probe of the server ever got an answer. One index row for a server that did; a server page is noindex until then. */
+export async function serverEverAnswered(name: string): Promise<boolean> {
+  const row = await db()
+    .prepare(`SELECT 1 AS answered FROM probes WHERE name = ? AND status IN ${ANSWERED_STATUSES_SQL} LIMIT 1`)
+    .bind(name)
+    .first<{ answered: number }>();
+  return row !== null;
+}
+
 export async function getSiblings(hash: string, except: string, limit = 12): Promise<Array<Pick<ServerRecord, 'name' | 'host' | 'status'>>> {
   const { results } = await db()
     .prepare('SELECT name, host, status FROM servers WHERE toolset_hash = ? AND name <> ? ORDER BY name LIMIT ?')
@@ -406,10 +418,19 @@ export async function serverSitemapChunks(size: number): Promise<Array<{ chunk: 
   return results;
 }
 
-/** The servers of one sitemap chunk: a rowid range, so the read touches only its own rows. */
+/**
+ * The servers of one sitemap chunk: a rowid range, so the read touches only its own rows.
+ * A server that never answered a probe stays out: its page says only "timeout" or "error", and
+ * Google reads such a page as a soft 404. The EXISTS runs for the servers that are down now only.
+ */
 export async function serversInSitemapChunk(chunk: number, size: number): Promise<Array<{ name: string; probed_at: string }>> {
   const { results } = await db()
-    .prepare('SELECT name, probed_at FROM servers WHERE rowid >= ? AND rowid < ? ORDER BY rowid')
+    .prepare(
+      `SELECT name, probed_at FROM servers WHERE rowid >= ? AND rowid < ?
+         AND (status IN ${ANSWERED_STATUSES_SQL}
+           OR EXISTS (SELECT 1 FROM probes WHERE probes.name = servers.name AND probes.status IN ${ANSWERED_STATUSES_SQL}))
+         ORDER BY rowid`
+    )
     .bind(chunk * size, (chunk + 1) * size)
     .all<{ name: string; probed_at: string }>();
   return results;

@@ -22,7 +22,8 @@ const {
   robots,
   feed
 } = Astro.props;
-const path = Astro.url.pathname;
+// A prerendered page has the file name in the URL (/methodology.html); the canonical form is the bare path.
+const path = Astro.url.pathname.replace(/\/index\.html$/, '/').replace(/\.html$/, '');
 const nav: Array<[string, string]> = [
   ['/', 'Overview'],
   ['/check', 'Check'],
@@ -32,7 +33,10 @@ const nav: Array<[string, string]> = [
   ['/methodology', 'Method']
 ];
 const year = new Date().getFullYear();
-const canonical = new URL(path + Astro.url.search, Astro.site ?? Astro.url).toString();
+// The canonical page is the path alone: /s/<name>?x=1 is /s/<name>. A noindex variant (a sorted or later list page)
+// stays its own canonical; noindex plus a canonical that points elsewhere are two signals that contradict each other.
+const noindex = /\bnoindex\b/.test(robots ?? '');
+const canonical = new URL(noindex ? path + Astro.url.search : path, Astro.site ?? Astro.url).toString();
 // Cloudflare Web Analytics: page views without cookies. The token is the CF_BEACON_TOKEN var in wrangler.jsonc; no token, no script.
 const beaconToken = import.meta.env.DEV ? '' : ((env as unknown as { CF_BEACON_TOKEN?: string }).CF_BEACON_TOKEN ?? '').trim();
 ---

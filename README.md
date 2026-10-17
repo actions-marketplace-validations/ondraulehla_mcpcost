@@ -161,6 +161,19 @@ The alert mails need a sending domain: either Cloudflare Email Sending (Workers 
 
 Deploying needs a Cloudflare account with a D1 database named `mcpcost` (`wrangler d1 create mcpcost`, then put the id in `site/wrangler.jsonc`). The workflows expect the repository secrets `CLOUDFLARE_API_TOKEN` (Workers Scripts: Edit, D1: Edit) and `CLOUDFLARE_ACCOUNT_ID`.
 
+### The old host
+
+The site was mcp-pulse.ulehla.dev until 2026-10-15. The old host stays a route of the Worker, and the middleware in `site/src/middleware.ts` answers every request on it with a 301 to mcpcost.ulehla.dev.
+
+Static assets are served before the Worker, and the Astro adapter serves prerendered pages before the middleware too, so a file in `site/public/` or a prerendered page answers 200 on the old host. `run_worker_first` in `wrangler.jsonc` does not change that. So robots.txt, llms.txt and the methodology page are routes, and every page a crawler reads goes through the middleware. Only the favicon, the fonts under `/_astro/` and the search engine verification file remain static.
+
+To redirect those as well, with no Worker invocation at all, add a Redirect Rule to the ulehla.dev zone in the Cloudflare dashboard (Rules, Redirect Rules, Create rule):
+
+- When incoming requests match: Hostname equals `mcp-pulse.ulehla.dev`
+- Then: Dynamic redirect, expression `concat("https://mcpcost.ulehla.dev", http.request.uri.path)`, status code 301, preserve query string on
+
+Redirect Rules run before the Worker and before static assets, so the rule covers every path. The middleware stays as the fallback for the workers.dev host, which the zone rule does not see.
+
 ## Licence
 
 MIT

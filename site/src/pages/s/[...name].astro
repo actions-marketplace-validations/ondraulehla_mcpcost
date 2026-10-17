@@ -1,6 +1,6 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { getHistory, getServer, getSiblings, latestRun } from '../../lib/db';
+import { getHistory, getServer, getSiblings, latestRun, serverEverAnswered } from '../../lib/db';
 import { bucket, label, ms, num, tokens, date, windowShare, modelName } from '../../lib/format';
 
 const name = Astro.params.name ?? '';
@@ -21,6 +21,10 @@ const site = Astro.site?.toString().replace(/\/$/, '') ?? '';
 const badgeMd = `[![mcpcost](${site}/badge/${name}.svg)](${site}/s/${name})`;
 const badgeHtml = `<a href="${site}/s/${name}"><img src="${site}/badge/${name}.svg" alt="mcpcost" height="20"></a>`;
 const reachable = history.filter((h) => h.status === 'ok' || h.status === 'auth' || h.status === 'payment').length;
+// A server that never answered has a page that says only "timeout" or "error". Google reads that as a soft 404,
+// so the page is noindex (links still followed) until one probe gets an answer. The sitemap applies the same rule.
+const answered = bucket(server.status) !== 'down' || history.some((h) => bucket(h.status) !== 'down') || (await serverEverAnswered(name));
+const robots = answered ? undefined : 'noindex, follow';
 const heading = server.title ?? server.server_name ?? name;
 const ok = server.status === 'ok';
 const exact = ok && server.claude_tokens != null;
@@ -140,7 +144,7 @@ const jsonld = {
 };
 ---
 
-<Layout title={pageTitle} description={answer} jsonld={jsonld} feed={{ href: `/s/${name}.xml`, title: `${name} on mcpcost` }}>
+<Layout title={pageTitle} description={answer} jsonld={jsonld} robots={robots} feed={{ href: `/s/${name}.xml`, title: `${name} on mcpcost` }}>
   <p class="kicker mono">{name}</p>
   <h1 class="poster">{heading}</h1>
   {server.description && <p class="lede">{server.description}</p>}

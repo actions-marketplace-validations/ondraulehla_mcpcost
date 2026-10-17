@@ -1,6 +1,8 @@
 ---
 import Layout from '../layouts/Layout.astro';
-export const prerender = true;
+// Rendered by the Worker, not prerendered: a static file is served before the middleware, so the old host
+// mcp-pulse.ulehla.dev would answer 200 instead of the 301. The page reads no data; the cache keeps it a day.
+Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=86400');
 ---
 
 <Layout title="Methodology">

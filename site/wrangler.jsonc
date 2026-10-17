@@ -21,7 +21,9 @@
   },
   "routes": [
     { "pattern": "mcpcost.ulehla.dev", "custom_domain": true },
-    // The old name stays as an alias; the middleware answers 301 to the new one.
+    // The old name stays as an alias; the middleware answers 301 to the new one. Static assets are served before
+    // the Worker and prerendered pages before the middleware, so the pages crawlers read are routes, not files;
+    // run_worker_first would not help here. README, "The old host", has a zone Redirect Rule that covers the rest.
     { "pattern": "mcp-pulse.ulehla.dev", "custom_domain": true }
   ],
   "d1_databases": [
