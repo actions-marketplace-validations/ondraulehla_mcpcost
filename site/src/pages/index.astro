@@ -1,7 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import { latestRun, headline, serversByNames, NOTABLE } from '../lib/db';
-import { bucket, label, num, pct, tokens, date, modelName, windowShare } from '../lib/format';
+import { num, pct, tokens, date, modelName, windowShare } from '../lib/format';
 
 const [run, notableRows] = await Promise.all([latestRun(), serversByNames(NOTABLE.map((n) => n.name))]);
 const cost = run ? headline(run) : null;
@@ -50,28 +50,6 @@ const example = alive[0]
     </section>
   </div>
 
-  {notable.length > 0 && (
-    <>
-      <h2>Well-known servers</h2>
-      <div class="frame">
-        <table class="notable">
-          <thead><tr><th>Server</th><th>Result</th><th class="num">Tools</th><th class="num">Tokens{inModel}</th></tr></thead>
-          <tbody>
-            {notable.map((n) => (
-              <tr>
-                <td><a href={`/s/${n.name}`}>{n.label}</a> <span class="sub mono">{n.name}</span></td>
-                <td><span class={`tag ${bucket(n.row!.status)}`}>{label(n.row!.status)}</span></td>
-                <td class="num">{n.row!.status === 'ok' ? num(n.row!.tool_count) : ''}</td>
-                <td class="num">{n.row!.status === 'ok' ? (n.row!.claude_tokens != null ? tokens(n.row!.claude_tokens) : n.row!.tools_tokens != null ? <span class="faint">~{tokens(n.row!.tools_tokens)}</span> : '') : ''}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p class="muted small">A server that needs auth answers the handshake but not the tool list, so the probe has no count for it. <a href="/servers">All {run ? num(run.probed) : ''} servers</a>.</p>
-    </>
-  )}
-
   {run && (
     <>
       <h2>The registry today</h2>
@@ -106,9 +84,6 @@ const example = alive[0]
   }
   .actions-grid .panel {
     margin: 0;
-  }
-  .notable {
-    min-width: 0;
   }
   @media (width <= 760px) {
     .actions-grid {
