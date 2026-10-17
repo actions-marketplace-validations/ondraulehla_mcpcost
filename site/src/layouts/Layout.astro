@@ -3,6 +3,7 @@ import '@fontsource/anton/latin.css';
 import antonWoff2 from '@fontsource/anton/files/anton-latin-400-normal.woff2?url';
 import Emblem from '../components/Emblem.astro';
 import CostMark from '../components/CostMark.astro';
+import { env } from 'cloudflare:workers';
 
 interface Props {
   title: string;
@@ -32,6 +33,8 @@ const nav: Array<[string, string]> = [
 ];
 const year = new Date().getFullYear();
 const canonical = new URL(path + Astro.url.search, Astro.site ?? Astro.url).toString();
+// Cloudflare Web Analytics: page views without cookies. The token is the CF_BEACON_TOKEN var in wrangler.jsonc; no token, no script.
+const beaconToken = import.meta.env.DEV ? '' : ((env as unknown as { CF_BEACON_TOKEN?: string }).CF_BEACON_TOKEN ?? '').trim();
 ---
 
 <!doctype html>
@@ -57,6 +60,7 @@ const canonical = new URL(path + Astro.url.search, Astro.site ?? Astro.url).toSt
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
     <meta name="theme-color" content="#f6f3ec" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#1c1a17" media="(prefers-color-scheme: dark)" />
     <meta name="msvalidate.01" content="4F4EE13471EED503A00DC72F10CE2BB9" />
@@ -113,6 +117,7 @@ const canonical = new URL(path + Astro.url.search, Astro.site ?? Astro.url).toSt
         <a href="https://ulehla.dev" rel="me noopener" class="cell cell-flood">ulehla.dev</a>
       </nav>
     </footer>
+    {beaconToken && <script is:inline type="module" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon={JSON.stringify({ token: beaconToken })}></script>}
   </body>
 </html>
 

@@ -39,9 +39,21 @@ It starts every configured server the way your client does, lists the tools and 
 
 The job summary gets a table with every server, its result and its cost, plus the most expensive tools. A pull request that adds a 40 000-token server fails the check. Set `claude: true` and put `ANTHROPIC_API_KEY` in `env` for exact counts from the free count_tokens endpoint; the default is the o200k_base estimate. Outputs: `tokens`, `servers`, `over-budget`.
 
+### In Claude Code, as a plugin
+
+In a Claude Code session:
+
+```
+/plugin install mcpcost --marketplace ondraulehla/mcpcost
+```
+
+Or from the shell: `claude plugin marketplace add ondraulehla/mcpcost`, then `claude plugin install mcpcost@mcpcost`.
+
+The plugin adds one skill, `/mcpcost:measure`, which runs `npx mcpcost` on your configs and reads the result, and the board's MCP server, so Claude can look up or probe a server before it goes into a config. What the plugin itself costs: one skill description in the context, and four tools that Claude Code defers behind tool search.
+
 ## The board
 
-[mcpcost.ulehla.dev](https://mcpcost.ulehla.dev) is rendered on the edge from a D1 database, ships no JavaScript, and refreshes every night.
+[mcpcost.ulehla.dev](https://mcpcost.ulehla.dev) is rendered on the edge from a D1 database and refreshes every night. The only scripts it loads are a theme switch and the Cloudflare Web Analytics beacon, which counts page views without cookies.
 
 - **Overview**: the share of servers that answer, token cost percentiles, and a form to check any server
 - **Check**: probes one URL live, with the same steps as the daily run; the exact token count runs in the browser
@@ -109,7 +121,7 @@ registry ──▶ probe/run.ts ──▶ data/raw/probe-run.json
 
 - `packages/mcpcost/` the library and the CLI `mcpcost`: registry client, remote and stdio probe, config discovery, token counting
 - `probe/` the batch runner and the data pipeline
-- `site/` the board: Astro 7 with the Cloudflare adapter on Workers, rendered from D1 with FTS5 search, SVG badges, no client JavaScript
+- `site/` the board: Astro 7 with the Cloudflare adapter on Workers, rendered from D1 with FTS5 search, SVG badges, no client JavaScript beyond the theme switch and the analytics beacon
 - `.github/workflows/probe.yml` runs the whole pipeline daily and commits `summary.json` and `hosts.json`
 - `.github/workflows/deploy.yml` deploys the site when `site/` changes
 

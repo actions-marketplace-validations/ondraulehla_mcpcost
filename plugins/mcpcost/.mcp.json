@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mcpcost": {
+      "type": "http",
+      "url": "https://mcpcost.ulehla.dev/mcp"
+    }
+  }
+}

@@ -385,16 +385,25 @@ export async function listServers(query: ListQuery): Promise<ListResult> {
   };
 }
 
-export async function maxServerRowid(): Promise<number> {
-  const row = await db().prepare('SELECT max(rowid) AS m FROM servers').first<{ m: number | null }>();
-  return row?.m ?? 0;
+/**
+ * The sitemap chunks that have servers in them. Chunk n holds the rowids in [n * size, (n + 1) * size).
+ * The import writes with INSERT OR REPLACE, so a changed server gets a new rowid and old chunks empty out
+ * over time; the index lists only the chunks that still have rows. One scan of the table, cached for a day.
+ * D1 binds a JS number as a float, so the division is cast back to an integer.
+ */
+export async function serverSitemapChunks(size: number): Promise<Array<{ chunk: number; count: number; lastmod: string }>> {
+  const { results } = await db()
+    .prepare('SELECT CAST(rowid / ? AS INTEGER) AS chunk, count(*) AS count, max(probed_at) AS lastmod FROM servers GROUP BY chunk ORDER BY chunk')
+    .bind(size)
+    .all<{ chunk: number; count: number; lastmod: string }>();
+  return results;
 }
 
-/** Servers in one rowid window, for a sitemap chunk. */
-export async function serversInRowidWindow(from: number, to: number): Promise<Array<{ name: string; probed_at: string }>> {
+/** The servers of one sitemap chunk: a rowid range, so the read touches only its own rows. */
+export async function serversInSitemapChunk(chunk: number, size: number): Promise<Array<{ name: string; probed_at: string }>> {
   const { results } = await db()
-    .prepare('SELECT name, probed_at FROM servers WHERE rowid > ? AND rowid <= ? ORDER BY rowid')
-    .bind(from, to)
+    .prepare('SELECT name, probed_at FROM servers WHERE rowid >= ? AND rowid < ? ORDER BY rowid')
+    .bind(chunk * size, (chunk + 1) * size)
     .all<{ name: string; probed_at: string }>();
   return results;
 }

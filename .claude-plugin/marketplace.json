@@ -1,0 +1,16 @@
+{
+  "name": "mcpcost",
+  "description": "mcpcost: the token cost and health of MCP servers, in Claude Code",
+  "owner": {
+    "name": "Ondřej Úlehla",
+    "url": "https://mcpcost.ulehla.dev"
+  },
+  "plugins": [
+    {
+      "name": "mcpcost",
+      "source": "./plugins/mcpcost",
+      "description": "What do your MCP servers cost in context tokens? Measure the servers in your configs, look up any server in the MCP registry.",
+      "version": "0.1.0"
+    }
+  ]
+}

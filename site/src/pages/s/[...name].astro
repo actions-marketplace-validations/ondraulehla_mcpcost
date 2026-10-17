@@ -1,6 +1,6 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { getHistory, getServer, getSiblings } from '../../lib/db';
+import { getHistory, getServer, getSiblings, latestRun } from '../../lib/db';
 import { bucket, label, ms, num, tokens, date, windowShare, modelName } from '../../lib/format';
 
 const name = Astro.params.name ?? '';
@@ -8,9 +8,10 @@ const server = await getServer(name);
 if (!server) {
   return new Response('Not found', { status: 404 });
 }
-const [history, siblings] = await Promise.all([
+const [history, siblings, run] = await Promise.all([
   getHistory(name, 60),
-  server.toolset_hash ? getSiblings(server.toolset_hash, name) : Promise.resolve([])
+  server.toolset_hash ? getSiblings(server.toolset_hash, name) : Promise.resolve([]),
+  latestRun()
 ]);
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=10800');
 
@@ -18,6 +19,7 @@ const capabilities = server.capabilities ? (JSON.parse(server.capabilities) as s
 const topTools = server.top_tools ? (JSON.parse(server.top_tools) as Array<{ name: string; tokens: number }>) : [];
 const site = Astro.site?.toString().replace(/\/$/, '') ?? '';
 const badgeMd = `[![mcpcost](${site}/badge/${name}.svg)](${site}/s/${name})`;
+const badgeHtml = `<a href="${site}/s/${name}"><img src="${site}/badge/${name}.svg" alt="mcpcost" height="20"></a>`;
 const reachable = history.filter((h) => h.status === 'ok' || h.status === 'auth' || h.status === 'payment').length;
 const heading = server.title ?? server.server_name ?? name;
 const ok = server.status === 'ok';
@@ -26,6 +28,80 @@ const model = modelName(server.claude_model);
 /** The number the page leads with: the exact Claude count, else the estimate. */
 const cost = exact ? server.claude_tokens : server.tools_tokens;
 const share = ok && cost ? ((cost / 200_000) * 100).toFixed(1) : null;
+// The run's percentiles on the same basis as the page's number: the exact count when both have it, else the estimate.
+const runStats = run ? (exact && run.claudeTokens ? run.claudeTokens : run.toolsTokens) : null;
+const multiple = ok && cost && runStats?.median ? cost / runStats.median : null;
+const multipleText = multiple == null ? null : multiple >= 10 ? `${Math.round(multiple)}×` : `${multiple.toFixed(1)}×`;
+const heavy = ok && cost != null && runStats?.p90 != null && cost > runStats.p90;
+const topShare = topTools.length && server.tools_tokens ? Math.round((topTools.reduce((a, t) => a + t.tokens, 0) / server.tools_tokens) * 100) : 0;
+const probeNow = server.transport !== 'stdio' ? `/check?target=${encodeURIComponent(server.url)}` : null;
+
+/** What the publisher can do about the result. One or two sentences per cause. */
+const hints: string[] = [];
+switch (server.status) {
+  case 'ok':
+    if (heavy) {
+      // Name the top tools only when they explain a good part of the cost; on a server with 70 even tools they do not.
+      const top = topShare >= 30 ? ` Its ${topTools.length} most expensive tools are ${topShare} % of the cost.` : '';
+      hints.push(`This server is in the heaviest 10 % of the registry.${top} Shorter descriptions, fewer optional parameters and fewer tools cut the cost. The command npx mcpcost --url <endpoint> --tools 50 lists every tool with its cost.`);
+    }
+    if (server.claude_error) hints.push(`The Anthropic count_tokens endpoint refused the tool schemas (${server.claude_error}). A client that validates schemas can refuse them too.`);
+    if (!hints.length) hints.push('The server answers initialize and tools/list. Nothing to fix.');
+    break;
+  case 'auth':
+    hints.push(`The server answers HTTP ${server.http_status ?? 401} to an unauthenticated initialize, so the probe cannot list its tools. That is correct for a private server. Some public servers answer initialize and tools/list without credentials and ask for auth on tool calls only; those get a token count here.`);
+    break;
+  case 'payment':
+    hints.push('The server answers HTTP 402 to initialize. The probe records it as paid and does not list its tools.');
+    break;
+  case 'not_found':
+    hints.push(`The endpoint answers HTTP ${server.http_status ?? 404}. The registry entry points to a URL that is not an MCP endpoint any more. Publish a new version of the registry entry with the current URL.`);
+    break;
+  case 'protocol_error':
+    hints.push('The endpoint answers HTTP 200, but not with a valid MCP initialize result. Common causes: the URL is a web page or a REST API and not the MCP endpoint, the server answers a JSON-RPC error on initialize, or the response is HTML.');
+    break;
+  case 'newer_protocol':
+    hints.push(`The server negotiates protocol ${server.protocol_version ?? ''}, which the current TypeScript SDK refuses. Clients built on the SDK cannot connect until the server accepts the version the client offers.`);
+    break;
+  case 'dns':
+    hints.push('The host name does not resolve. The domain has lapsed or the DNS record is gone.');
+    break;
+  case 'tls':
+    hints.push('The TLS handshake fails: an expired or mismatched certificate, or an unsupported protocol version.');
+    break;
+  case 'timeout':
+    hints.push('No answer within 15 seconds. The server is up but slow, or the request hangs. Some servers stall tools/list while a GET stream is open; the probe opens none.');
+    break;
+  case 'refused':
+    hints.push('The connection is refused. Nothing listens on that host and port.');
+    break;
+  case 'server_error':
+    hints.push(`The server answers HTTP ${server.http_status ?? '5xx'} on initialize. The error output, if any, is above.`);
+    break;
+  case 'rate_limited':
+    hints.push('The server answers HTTP 429. The probe sends one request at a time per host and one probe a day per server, so the limit is very low or shared with other users.');
+    break;
+  case 'install_failed':
+    hints.push('npx or uvx could not install the package. The package name in the registry entry is wrong, the package is not published, or the install needs a build step.');
+    break;
+  case 'no_bin':
+    hints.push('The package installs, but it has no executable to run. Add a bin entry (npm) or a console script entry point (PyPI).');
+    break;
+  case 'needs_env':
+    hints.push('The server exits because an environment variable is missing. The probe starts the package without secrets. A server that starts without secrets and asks for them on the first tool call is measured.');
+    break;
+  case 'needs_args':
+    hints.push('The server needs command line arguments that the registry entry does not list. Add them to the package arguments in the registry entry.');
+    break;
+  case 'needs_network':
+    hints.push('The server tries to reach the network on start. The probe runs in a container with the network off, so a server that connects lazily, on the first tool call, is measured.');
+    break;
+  case 'crashed':
+    hints.push('The process exited on start before it answered initialize. The error output is above.');
+    break;
+  default:
+    hints.push('The probe could not complete the handshake. The error output is above.');
+}
 const pageTitle = ok
   ? `${name}: ${num(cost)} tokens of context${exact ? ` in ${model}` : ''}, ${num(server.tool_count)} tools, alive`
   : `${name}: ${label(server.status)}`;
@@ -80,6 +156,7 @@ const jsonld = {
       {exact && <div class="stat"><b>{tokens(server.claude_tokens)}</b><span>tokens in {model}</span></div>}
       {exact && <div class="stat"><b>{tokens(server.claude_tokens_cc ?? server.claude_tokens)}</b><span>tokens in Claude Code</span></div>}
       <div class="stat"><b>{windowShare(cost)}</b><span>of a 200k context window</span></div>
+      {multipleText && <div class="stat"><b>{multipleText}</b><span>the median server</span></div>}
       <div class="stat"><b>{tokens(server.tools_tokens)}</b><span>{exact ? 'o200k_base estimate' : 'tokens, o200k_base estimate'}</span></div>
       <div class="stat"><b>{ms(server.init_ms)}</b><span>to initialize</span></div>
       <div class="stat"><b>{ms(server.tools_ms)}</b><span>to list tools</span></div>
@@ -148,8 +225,17 @@ const jsonld = {
     </>
   )}
 
+  <h2>For the publisher</h2>
+  <ul>
+    {hints.map((h) => <li>{h}</li>)}
+  </ul>
+  {probeNow && <p class="muted small">Fixed something? <a href={probeNow}>Probe it now</a>, with the same steps as the daily run. This page updates with the next daily run.</p>}
+
   <h2>Badge and feed</h2>
   <p><img src={`/badge/${name}.svg`} alt={`mcpcost: ${label(server.status)}`} height="20" /></p>
+  <p class="muted small">The badge shows the result of the latest probe, the tool count and the token cost. Markdown for a README:</p>
   <pre>{badgeMd}</pre>
+  <p class="muted small">HTML:</p>
+  <pre>{badgeHtml}</pre>
   <p class="muted small">An entry for every probe that changed the result, the tool count or the token cost: <a href={`/s/${name}.xml`}>Atom feed</a>. Add it to a feed reader or a Slack RSS app to hear when the server stops answering or its tool set grows.</p>
 </Layout>
