@@ -167,7 +167,7 @@ const robots = filtered || page > 1 || sort !== DEFAULT_SORT ? 'noindex, follow'
               {(r.toolset_siblings ?? 0) > 0 && <span class="sub">same tools as {num(r.toolset_siblings)} other{r.toolset_siblings === 1 ? '' : 's'}</span>}
             </td>
             <td class="num">{num(r.tool_count)}</td>
-            <td class="num" title={r.claude_tokens != null ? `exact for Claude${r.claude_tokens_cc != null ? `, ${num(r.claude_tokens_cc)} in Claude Code` : ''}` : r.tools_tokens != null ? 'o200k_base estimate, no exact count yet' : undefined}>{r.claude_tokens != null ? tokens(r.claude_tokens) : r.tools_tokens != null ? <span class="faint">~{tokens(r.tools_tokens)}</span> : ''}</td>
+            <td class="num" title={r.claude_tokens != null ? `exact for Claude${r.claude_tokens_cc != null ? `, ${num(r.claude_tokens_cc)} in Claude Code` : ''}` : r.tools_tokens != null ? 'o200k_base estimate, no exact count yet' : undefined}>{r.claude_tokens != null ? tokens(r.claude_tokens) : r.tools_tokens != null ? <span class="faint">~{tokens(r.tools_tokens)}</span> : r.derived_status === 'ok' && (r.derived_claude_tokens ?? r.derived_tools_tokens) != null ? <span class="faint" title={`from the publisher's package ${r.derived_package}`}>pkg {tokens(r.derived_claude_tokens ?? r.derived_tools_tokens)}</span> : ''}</td>
             <td class="num">{ms(r.init_ms)}</td>
             <td class="mono faint">{r.protocol_version ?? ''}</td>
             <td class="mono break"><a class="plain muted" href={`/servers?host=${encodeURIComponent(r.host)}`}>{r.host}</a></td>

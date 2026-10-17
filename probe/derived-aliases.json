@@ -1,0 +1,5 @@
+{
+  "_comment": "Remote servers whose registry entry names no usable repository, with the publisher's open-source package. Verified on npm or PyPI by probe/derive-packages.ts before use.",
+  "com.notion/mcp": { "registry": "npm", "name": "@notionhq/notion-mcp-server" },
+  "com.stripe/mcp": { "registry": "npm", "name": "@stripe/mcp" }
+}

@@ -43,6 +43,15 @@ export interface ServerRecord {
   gemini_error: string | null;
   /** 1 when the daily probe used stored credentials for this server. */
   measured_with_credentials: number | null;
+  /** For a server that needs auth: the publisher's open-source package and its tool set, measured in a container. */
+  derived_package: string | null;
+  derived_registry: string | null;
+  derived_status: string | null;
+  derived_probed_at: string | null;
+  derived_tool_count: number | null;
+  derived_tools_tokens: number | null;
+  derived_claude_tokens: number | null;
+  derived_error: string | null;
 }
 
 export interface HostRecord {
@@ -331,11 +340,11 @@ export interface ListQuery {
 }
 
 export const LIST_COLUMNS =
-  'name, title, host, transport, status, http_status, auth_scheme, protocol_version, init_ms, tool_count, tools_tokens, claude_tokens, claude_tokens_cc, toolset_siblings, registry_updated_at';
+  'name, title, host, transport, status, http_status, auth_scheme, protocol_version, init_ms, tool_count, tools_tokens, claude_tokens, claude_tokens_cc, toolset_siblings, registry_updated_at, derived_package, derived_status, derived_tools_tokens, derived_claude_tokens';
 export type ListRow = Pick<
   ServerRecord,
   | 'name' | 'title' | 'host' | 'transport' | 'status' | 'http_status' | 'auth_scheme' | 'protocol_version'
-  | 'init_ms' | 'tool_count' | 'tools_tokens' | 'claude_tokens' | 'claude_tokens_cc' | 'toolset_siblings' | 'registry_updated_at'
+  | 'init_ms' | 'tool_count' | 'tools_tokens' | 'claude_tokens' | 'claude_tokens_cc' | 'toolset_siblings' | 'registry_updated_at' | 'derived_package' | 'derived_status' | 'derived_tools_tokens' | 'derived_claude_tokens'
 >;
 
 export interface ListResult {

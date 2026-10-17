@@ -44,6 +44,8 @@ interface RawRow {
 
 interface StdioRow {
   name: string;
+  /** Set when the package stands in for a gated remote server: its tool set goes on that server's row. */
+  derivedFor?: string;
   kind: 'npm' | 'pypi';
   identifier: string;
   version?: string;
@@ -95,6 +97,19 @@ export interface ServerRow {
   geminiError?: string;
   /** Measured with stored credentials (a header or an OAuth token), so the count is what an authorized user gets. */
   measuredWithCredentials?: boolean;
+  /** For a gated remote server: the tool set of the publisher's open-source package, measured in a container. */
+  derivedPackage?: {
+    registry: 'npm' | 'pypi';
+    name: string;
+    status: string;
+    probedAt: string;
+    toolCount?: number;
+    toolsTokens?: number;
+    claudeTokens?: number;
+    claudeModel?: string;
+    geminiTokens?: number;
+    error?: string;
+  };
   instructionsChars?: number;
   /** Hash of the sorted tool names and schema sizes. Equal hashes mean the same tool set. */
   toolsetHash?: string;
@@ -115,7 +130,10 @@ const registryMeta = new Map(registryRaw.map((r) => [r.server.name, r._meta['io.
  * from the previous run while the registry still lists them.
  */
 const stdioFile = args.stdio && existsSync(args.stdio) ? (JSON.parse(await readFile(args.stdio, 'utf8')) as { probedAt: string; rows: StdioRow[] }) : null;
-const stdioRows: RawRow[] = (stdioFile?.rows ?? []).map((r) => {
+/** Packages that stand in for gated remote servers, by the remote server's name. Not rows of their own. */
+const derivedByName = new Map<string, StdioRow>();
+for (const r of stdioFile?.rows ?? []) if (r.derivedFor) derivedByName.set(r.derivedFor, r);
+const stdioRows: RawRow[] = (stdioFile?.rows ?? []).filter((r) => !r.derivedFor).map((r) => {
   const kind = r.kind ?? 'npm';
   const host = kind === 'npm' ? 'npmjs.com' : 'pypi.org';
   const url = kind === 'npm' ? `npm:${r.identifier}${r.version ? `@${r.version}` : ''}` : `pypi:${r.identifier}${r.version ? `==${r.version}` : ''}`;
@@ -179,6 +197,27 @@ const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
 });
 
 rows.push(...carried);
+
+// The derived tool set of a gated remote server: today's container result, else what the previous run had.
+const previousDerived = new Map(previousForCarry.filter((r) => r.derivedPackage).map((r) => [r.name, r.derivedPackage!]));
+for (const r of rows) {
+  if (r.transport === 'stdio' || (r.status !== 'auth' && r.status !== 'payment')) continue;
+  const d = derivedByName.get(r.name);
+  if (d) {
+    r.derivedPackage = {
+      registry: d.kind,
+      name: d.identifier,
+      status: d.status,
+      probedAt: stdioFile?.probedAt ?? run.probedAt,
+      toolCount: d.result?.toolCount,
+      toolsTokens: d.result?.toolsTokens,
+      claudeTokens: d.result?.claude?.tokens,
+      claudeModel: d.result?.claude?.model,
+      geminiTokens: d.result?.gemini?.tokens,
+      error: d.status === 'ok' ? undefined : (d.error ?? d.result?.error)?.slice(0, 160)
+    };
+  } else if (previousDerived.has(r.name)) r.derivedPackage = previousDerived.get(r.name);
+}
 
 /**
  * A broken runner looks like a mass outage: on 2026-10-14 a run saw 15 049

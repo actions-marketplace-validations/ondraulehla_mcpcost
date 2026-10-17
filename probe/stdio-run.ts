@@ -5,6 +5,7 @@
  * Needs the image: docker build -t mcpcost-stdio probe/stdio
  */
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -27,6 +28,8 @@ const { values: args } = parseArgs({
     part: { type: 'string', default: '' },
     /** A file with one registry name per line; overrides sample. */
     names: { type: 'string', default: '' },
+    /** The cache of probe/derive-packages.ts: packages of remote servers that need auth. Probed every run, split by --part. */
+    derived: { type: 'string', default: '' },
     concurrency: { type: 'string', default: '4' },
     seed: { type: 'string', default: '7' },
     image: { type: 'string', default: 'mcpcost-stdio' },
@@ -38,10 +41,12 @@ const { values: args } = parseArgs({
 });
 
 type StdioStatus = ProbeResult['status'] | 'install_failed' | 'no_bin' | 'needs_env' | 'needs_args' | 'needs_network' | 'crashed';
-interface Target { name: string; pkg: RegistryPackage; updatedAt: string }
+interface Target { name: string; pkg: RegistryPackage; updatedAt: string; derivedFor?: string }
 type Kind = 'npm' | 'pypi';
 interface Row {
   name: string;
+  /** The remote server this package stands in for: the row is its tool set, not a server of its own. */
+  derivedFor?: string;
   kind: Kind;
   identifier: string;
   version?: string;
@@ -74,14 +79,26 @@ async function loadTargets(): Promise<Target[]> {
   }
   if (args.shard !== '') all = all.filter((t) => shardOf(t.name) === Number(args.shard));
   all.sort((a, b) => a.name.localeCompare(b.name));
+  // Packages derived for gated remote servers: a few hundred, probed every run, so no shard.
+  let derived: Target[] = [];
+  if (args.derived && existsSync(args.derived)) {
+    const cache = JSON.parse(await readFile(args.derived, 'utf8')) as { derived?: Record<string, { registry: Kind; name: string }> };
+    derived = Object.entries(cache.derived ?? {})
+      .filter(([, d]) => kinds.has(d.registry))
+      .map(([forName, d]) => ({ name: forName, derivedFor: forName, pkg: { registryType: d.registry, identifier: d.name }, updatedAt: '' }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
   if (args.part) {
     const [k, n] = args.part.split('/').map(Number);
     all = all.filter((_, i) => i % n === k);
-    return args.sample ? all.slice(0, Number(args.sample)) : all;
+    derived = derived.filter((_, i) => i % n === k);
+    const list = [...all, ...derived];
+    return args.sample ? list.slice(0, Number(args.sample)) : list;
   }
   const rand = mulberry32(Number(args.seed));
   for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
-  return args.sample ? all.slice(0, Number(args.sample)) : all;
+  const list = args.sample ? all.slice(0, Number(args.sample)) : all;
+  return [...list, ...derived];
 }
 
 /** Which day of a seven-day cycle a server is probed on: a stable hash of its name. */
@@ -171,7 +188,7 @@ async function install(t: Target, dir: string): Promise<{ command: string[] } | 
 }
 
 async function probeOne(t: Target): Promise<Row> {
-  const row: Row = { name: t.name, kind: t.pkg.registryType as Kind, identifier: t.pkg.identifier, version: t.pkg.version, status: 'error' };
+  const row: Row = { name: t.name, derivedFor: t.derivedFor, kind: t.pkg.registryType as Kind, identifier: t.pkg.identifier, version: t.pkg.version, status: 'error' };
   const dir = await mkdtemp(join(tmpdir(), 'mcpcost-stdio-'));
   try {
     const { args: cliArgs, missing } = buildArgs(t.pkg);

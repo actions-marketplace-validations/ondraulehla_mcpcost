@@ -32,6 +32,21 @@ const model = modelName(server.claude_model);
 /** The number the page leads with: the exact Claude count, else the estimate. */
 const cost = exact ? server.claude_tokens : server.tools_tokens;
 const share = ok && cost ? ((cost / 200_000) * 100).toFixed(1) : null;
+/** For a server that needs auth: the tool set of the publisher's open-source package, measured in a container without credentials. */
+const derived =
+  !ok && server.derived_status === 'ok' && (server.derived_claude_tokens ?? server.derived_tools_tokens) != null
+    ? {
+        name: server.derived_package!,
+        registry: server.derived_registry ?? 'npm',
+        tools: server.derived_tool_count,
+        cost: (server.derived_claude_tokens ?? server.derived_tools_tokens)!,
+        exact: server.derived_claude_tokens != null,
+        probedAt: server.derived_probed_at ?? server.probed_at
+      }
+    : null;
+const derivedShare = derived ? ((derived.cost / 200_000) * 100).toFixed(1) : null;
+/** The model of a derived exact count: the run's, since the row keeps no model for it. */
+const derivedModel = modelName(run?.claudeTokens?.model ?? server.claude_model);
 // The run's percentiles on the same basis as the page's number: the exact count when both have it, else the estimate.
 const runStats = run ? (exact && run.claudeTokens ? run.claudeTokens : run.toolsTokens) : null;
 const multiple = ok && cost && runStats?.median ? cost / runStats.median : null;
@@ -108,12 +123,16 @@ switch (server.status) {
 }
 const pageTitle = ok
   ? `${name}: ${num(cost)} tokens of context${exact ? ` in ${model}` : ''}, ${num(server.tool_count)} tools, alive`
-  : `${name}: ${label(server.status)}`;
+  : derived
+    ? `${name}: ${label(server.status)}, ${num(derived.cost)} tokens of context from the publisher's package, ${num(derived.tools)} tools`
+    : `${name}: ${label(server.status)}`;
 const answer = ok
   ? exact
     ? `${name} costs ${num(server.claude_tokens)} tokens of context per session in ${model}. In Claude Code it costs ${num(server.claude_tokens_cc ?? server.claude_tokens)} tokens. It has ${num(server.tool_count)} tool definitions. That is ${share} % of a 200k window. Measured ${date(server.claude_measured_at ?? server.probed_at)}.`
     : `${name} costs about ${num(server.tools_tokens)} tokens of context per session (o200k_base estimate${server.claude_error ? ', Claude refused the schema' : ''}). It has ${num(server.tool_count)} tool definitions. That is ${share} % of a 200k window. Measured ${date(server.probed_at)}.`
-  : `${name} did not answer the probe on ${date(server.probed_at)}. Result: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}.`;
+  : derived
+    ? `${name} needs auth, so the daily probe cannot list its tools. The publisher's package ${derived.name} has ${num(derived.tools)} tool definitions that cost ${num(derived.cost)} tokens of context per session${derived.exact ? ` in ${derivedModel}` : ' (o200k_base estimate)'}, ${derivedShare} % of a 200k window. The tool definitions were read from the open-source package in a container, not from the authenticated server. Measured ${date(derived.probedAt)}.`
+    : `${name} did not answer the probe on ${date(server.probed_at)}. Result: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}.`;
 const pageUrl = `${site}/s/${name}`;
 const jsonld = {
   '@context': 'https://schema.org',
@@ -183,6 +202,16 @@ const jsonld = {
       </div>
     </div>
   )}
+  {derived && (
+    <>
+      <div class="stats">
+        <div class="stat"><b>{num(derived.tools)}</b><span>tools, from the package {derived.name}</span></div>
+        <div class="stat"><b>{tokens(derived.cost)}</b><span>{derived.exact ? `tokens in ${derivedModel}` : 'tokens, o200k_base estimate'}</span></div>
+        <div class="stat"><b>{windowShare(derived.cost)}</b><span>of a 200k context window</span></div>
+      </div>
+      <p class="muted small" style="margin:10px 0 0">The server needs auth, so these tool definitions were read from the publisher's open-source package <span class="mono">{derived.registry}:{derived.name}</span>, started in a container with placeholder values and the network off, on {date(derived.probedAt)}. Tool definitions do not depend on the token, so this is what an authorized user loads, unless the server hides tools by plan or role.</p>
+    </>
+  )}
   {server.status !== 'ok' && server.error && <pre>{server.error}</pre>}
 
   <dl class="facts">
@@ -194,6 +223,7 @@ const jsonld = {
     {server.server_name && <><dt>Reports itself as</dt><dd>{server.server_name} {server.server_version}</dd></>}
     {capabilities.length > 0 && <><dt>Capabilities</dt><dd class="mono">{capabilities.join(', ')}</dd></>}
     {server.instructions_chars != null && server.status === 'ok' && <><dt>Instructions</dt><dd>{server.instructions_chars ? `${num(server.instructions_chars)} characters` : 'none'}</dd></>}
+    {!ok && server.derived_package && !derived && <><dt>Package</dt><dd>The publisher's package <span class="mono">{server.derived_registry}:{server.derived_package}</span> did not list its tools in the container: {label(server.derived_status ?? 'error')}{server.derived_error ? <>, <span class="mono">{server.derived_error}</span></> : null}.</dd></>}
     {ok && server.claude_error && <><dt>Claude count</dt><dd>The count_tokens endpoint refused the tool schemas: <span class="mono">{server.claude_error}</span>. The estimate stands in.</dd></>}
     {exact && <><dt>Count</dt><dd>{tokens(server.claude_tokens)} tokens in {model}, exact, measured {date(server.claude_measured_at)}.{server.measured_with_credentials ? ' Measured with credentials, so this is what an authorized user gets.' : ''} With the Claude Code prefix <span class="mono">mcp__…__</span> on each tool name: {tokens(server.claude_tokens_cc ?? server.claude_tokens)}. The o200k_base estimate is {tokens(server.tools_tokens)}. Counted again when the tool definitions change. <a href="/methodology#tokens">Method</a>.</dd></>}
     {ok && server.gemini_tokens != null && <><dt>Gemini</dt><dd>{tokens(server.gemini_tokens)} tokens in {server.gemini_model}, exact, from the Gemini countTokens endpoint, measured {date(server.gemini_measured_at)}.</dd></>}

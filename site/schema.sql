@@ -47,7 +47,16 @@ CREATE TABLE IF NOT EXISTS servers (
   gemini_measured_at TEXT,
   gemini_error TEXT,
   -- 1 when the probe used stored credentials (a header or an OAuth token). See migrations/004-credentials.sql.
-  measured_with_credentials INTEGER
+  measured_with_credentials INTEGER,
+  -- For a server that needs auth: the tool set of the publisher's open-source package, measured in a container. See migrations/005-derived.sql.
+  derived_package TEXT,
+  derived_registry TEXT,
+  derived_status TEXT,
+  derived_probed_at TEXT,
+  derived_tool_count INTEGER,
+  derived_tools_tokens INTEGER,
+  derived_claude_tokens INTEGER,
+  derived_error TEXT
 );
 
 -- The credentials file of the daily probe, one JSON document. Written by probe/credentials-sync.ts, never read by the site.

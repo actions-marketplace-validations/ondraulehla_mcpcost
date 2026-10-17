@@ -40,6 +40,8 @@ The OAuth flow follows the MCP authorization spec: discovery, dynamic client reg
 
 The board does the same: `npm run credentials:push` copies the file into the D1 table `credentials`; the daily run reads it before the probe, writes the refreshed tokens back after it, and marks the server "measured with credentials". A refresh token that a service revokes or lets expire needs the consent step again.
 
+Without credentials, the board still shows a tool set for many gated servers: tool definitions do not depend on the token, so when the publisher's repository holds a package on npm or PyPI, `probe/derive-packages.ts` finds it and the weekly container run measures it with placeholder values. The server page then says "from the publisher's package". `probe/derived-aliases.json` maps the few servers whose registry entry names no repository.
+
 ### In CI, as a GitHub Action
 
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-mcpcost-e8571f?logo=github)](https://github.com/marketplace/actions/mcpcost-token-budget-for-mcp-servers)
