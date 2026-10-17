@@ -41,6 +41,8 @@ export interface ServerRecord {
   gemini_model: string | null;
   gemini_measured_at: string | null;
   gemini_error: string | null;
+  /** 1 when the daily probe used stored credentials for this server. */
+  measured_with_credentials: number | null;
 }
 
 export interface HostRecord {

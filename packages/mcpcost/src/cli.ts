@@ -8,12 +8,14 @@ import { probeRemote, VERSION } from './probe.js';
 import { probeStdio } from './stdio.js';
 import { TOKENIZER } from './tokens.js';
 import type { ProbeResult } from './types.js';
+import { loadCredentials, saveCredentials, credentialsFor, defaultCredentialsPath, type CredentialStore, type FileProvider } from './credentials.js';
 
 const HELP = `mcpcost ${VERSION}: how many tokens do your MCP servers cost before the first prompt?
 
 Usage
   mcpcost [options]                 measure every server in the configs it can find
   mcpcost mcp                       serve the same measurements as an MCP server over stdio
+  mcpcost auth <url>                store credentials for a server that needs auth (see mcpcost auth --help)
   mcpcost --config <file>           measure one config file (repeatable)
   mcpcost --url <url>               measure one remote server (repeatable)
   mcpcost --stdio "<command args>"  measure one local server (repeatable)
@@ -28,6 +30,7 @@ Options
   --gemini-model <id>  model for --gemini (default gemini-3.8-flash)
   --timeout <ms>       per server (default 15000)
   --no-stdio           do not start local servers, only measure remote ones
+  --credentials <file> credentials for servers that need auth (default ~/.mcpcost/credentials.json)
   --json               machine-readable output
   --help, --version
 
@@ -46,6 +49,8 @@ interface Row {
   target: string;
   result?: ProbeResult;
   skipped?: string;
+  /** Measured with stored credentials: a header or an OAuth token from the credentials file. */
+  withCredentials?: boolean;
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -53,6 +58,10 @@ export async function main(argv: string[]): Promise<number> {
     const { serveStdio } = await import('./mcp.js');
     await serveStdio();
     return new Promise(() => undefined);
+  }
+  if (argv[0] === 'auth') {
+    const { authCommand } = await import('./auth-cli.js');
+    return authCommand(argv.slice(1));
   }
   const { values } = parseArgs({
     args: argv,
@@ -65,6 +74,7 @@ export async function main(argv: string[]): Promise<number> {
       tools: { type: 'string', default: '0' },
       timeout: { type: 'string', default: '15000' },
       'no-stdio': { type: 'boolean', default: false },
+      credentials: { type: 'string' },
       claude: { type: 'boolean', default: false },
       model: { type: 'string' },
       gemini: { type: 'boolean', default: false },
@@ -132,6 +142,17 @@ export async function main(argv: string[]): Promise<number> {
     }
   }
 
+  // Credentials for servers that need auth. The file is optional; a missing default file means none.
+  const credentialsFile = values.credentials ?? defaultCredentialsPath();
+  let store: CredentialStore | null = null;
+  try {
+    store = await loadCredentials(credentialsFile);
+  } catch (e) {
+    console.error(`cannot read ${credentialsFile}: ${e instanceof Error ? e.message : String(e)}`);
+    return 2;
+  }
+  const providers: FileProvider[] = [];
+
   const rows: Row[] = [];
   const running: Promise<void>[] = [];
   for (const s of servers) {
@@ -145,13 +166,27 @@ export async function main(argv: string[]): Promise<number> {
       row.skipped = 'local server, --no-stdio';
       continue;
     }
+    let headers = s.headers;
+    let authProvider: FileProvider | undefined;
+    if (s.kind === 'remote' && store) {
+      const creds = credentialsFor(store, s.url!);
+      if (creds) {
+        // Headers from the config win; the stored ones fill in what the config leaves out.
+        if (creds.headers) headers = { ...creds.headers, ...(s.headers ?? {}) };
+        authProvider = creds.authProvider;
+        if (authProvider) providers.push(authProvider);
+        row.withCredentials = true;
+      }
+    }
     const job =
       s.kind === 'remote'
-        ? probeRemote({ url: s.url!, type: s.type ?? 'streamable-http' }, { timeoutMs, headers: s.headers, claude: claudeFor(s.name), gemini })
+        ? probeRemote({ url: s.url!, type: s.type ?? 'streamable-http' }, { timeoutMs, headers, authProvider, claude: claudeFor(s.name), gemini })
         : probeStdio({ command: s.command!, args: s.args, env: s.env, cwd: s.cwd }, { timeoutMs, claude: claudeFor(s.name), gemini });
     running.push(job.then((r) => void (row.result = r)));
   }
   await Promise.all(running);
+  // A refreshed token goes back to the file.
+  if (store && providers.some((p) => p.changed)) await saveCredentials(store, credentialsFile).catch((e) => console.error(`cannot write ${credentialsFile}: ${e instanceof Error ? e.message : String(e)}`));
 
   const measured = rows.filter((r) => r.result?.status === 'ok');
   /** The number a row is ranked and budgeted by: the exact Claude count with --claude, else the Gemini count with --gemini, else the estimate. */
@@ -184,6 +219,7 @@ export async function main(argv: string[]): Promise<number> {
             kind: r.kind,
             target: r.target,
             skipped: r.skipped,
+            withCredentials: r.withCredentials || undefined,
             status: r.result?.status,
             error: r.result?.error,
             toolCount: r.result?.toolCount,
@@ -236,8 +272,8 @@ function statusText(r: Row): string {
   if (r.skipped) return `skipped: ${r.skipped}`;
   const s = r.result?.status;
   if (!s) return '';
-  if (s === 'ok') return 'alive';
-  if (s === 'auth') return `needs auth${r.result?.authScheme ? ` (${r.result.authScheme})` : ''}`;
+  if (s === 'ok') return r.withCredentials ? 'alive (credentials)' : 'alive';
+  if (s === 'auth') return `needs auth${r.result?.authScheme ? ` (${r.result.authScheme})` : ''}${r.withCredentials ? ', stored credentials refused' : ''}`;
   if (s === 'payment') return 'payment required';
   if (s === 'newer_protocol') return 'newer protocol than this SDK';
   if (s === 'not_found') return r.kind === 'stdio' ? 'command not found' : 'not found';

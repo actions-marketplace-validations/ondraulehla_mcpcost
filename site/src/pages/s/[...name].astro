@@ -151,7 +151,7 @@ const jsonld = {
 
   <p style="margin-top:22px">
     <span class={`tag big ${bucket(server.status)}`}>{label(server.status)}</span>
-    <span class="muted small"> probed {date(server.probed_at)}{server.http_status && <> · HTTP {server.http_status}</>}{server.auth_scheme && <> · {server.auth_scheme}</>}</span>
+    <span class="muted small"> probed {date(server.probed_at)}{server.http_status && <> · HTTP {server.http_status}</>}{server.auth_scheme && <> · {server.auth_scheme}</>}{server.measured_with_credentials ? <> · measured with credentials</> : null}</span>
   </p>
 
   {server.status === 'ok' && (
@@ -195,7 +195,7 @@ const jsonld = {
     {capabilities.length > 0 && <><dt>Capabilities</dt><dd class="mono">{capabilities.join(', ')}</dd></>}
     {server.instructions_chars != null && server.status === 'ok' && <><dt>Instructions</dt><dd>{server.instructions_chars ? `${num(server.instructions_chars)} characters` : 'none'}</dd></>}
     {ok && server.claude_error && <><dt>Claude count</dt><dd>The count_tokens endpoint refused the tool schemas: <span class="mono">{server.claude_error}</span>. The estimate stands in.</dd></>}
-    {exact && <><dt>Count</dt><dd>{tokens(server.claude_tokens)} tokens in {model}, exact, measured {date(server.claude_measured_at)}. With the Claude Code prefix <span class="mono">mcp__…__</span> on each tool name: {tokens(server.claude_tokens_cc ?? server.claude_tokens)}. The o200k_base estimate is {tokens(server.tools_tokens)}. Counted again when the tool definitions change. <a href="/methodology#tokens">Method</a>.</dd></>}
+    {exact && <><dt>Count</dt><dd>{tokens(server.claude_tokens)} tokens in {model}, exact, measured {date(server.claude_measured_at)}.{server.measured_with_credentials ? ' Measured with credentials, so this is what an authorized user gets.' : ''} With the Claude Code prefix <span class="mono">mcp__…__</span> on each tool name: {tokens(server.claude_tokens_cc ?? server.claude_tokens)}. The o200k_base estimate is {tokens(server.tools_tokens)}. Counted again when the tool definitions change. <a href="/methodology#tokens">Method</a>.</dd></>}
     {ok && server.gemini_tokens != null && <><dt>Gemini</dt><dd>{tokens(server.gemini_tokens)} tokens in {server.gemini_model}, exact, from the Gemini countTokens endpoint, measured {date(server.gemini_measured_at)}.</dd></>}
     {ok && server.gemini_tokens == null && server.gemini_error && <><dt>Gemini</dt><dd>The countTokens endpoint refused the tool schemas: <span class="mono">{server.gemini_error}</span>.</dd></>}
     {server.repo && <><dt>Repository</dt><dd><a href={server.repo} rel="noopener" class="break">{server.repo}</a></dd></>}

@@ -9,7 +9,8 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "probe": "node --import tsx probe/run.ts"
+    "probe": "node --import tsx probe/run.ts",
+    "credentials:push": "node --import tsx probe/credentials-sync.ts push --in \"${MCPCOST_CREDENTIALS:-$HOME/.mcpcost/credentials.json}\""
   },
   "engines": {
     "node": ">=22"

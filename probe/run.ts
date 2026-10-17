@@ -12,6 +12,7 @@ import { probeRemoteRaw } from '../packages/mcpcost/src/core.js';
 import { priceTools } from '../packages/mcpcost/src/probe.js';
 import { createClaudeCounter, payloadHash } from './claude-cache.js';
 import { createGeminiCounter } from './gemini-cache.js';
+import { loadCredentials, saveCredentials, credentialsFor, type CredentialStore, type FileProvider } from '../packages/mcpcost/src/credentials.js';
 import type { ProbeResult, RegistryEntry } from '../packages/mcpcost/src/index.js';
 
 const { values: args } = parseArgs({
@@ -33,6 +34,8 @@ const { values: args } = parseArgs({
     'claude-deadline-min': { type: 'string', default: '270' },
     /** Servers tracked on request, outside the registry. Empty string: none. */
     tracked: { type: 'string', default: 'https://mcpcost.ulehla.dev/api/tracked.json' },
+    /** Credentials for servers that need auth, see packages/mcpcost/src/credentials.ts. A missing file means none. */
+    credentials: { type: 'string' },
     'gemini-model': { type: 'string', default: 'gemini-3.8-flash' },
     'gemini-rpm': { type: 'string', default: '60' }
   }
@@ -52,6 +55,10 @@ interface Target {
   updatedAt: string;
   status: string;
 }
+
+const credentials: CredentialStore | null = args.credentials && existsSync(args.credentials) ? await loadCredentials(args.credentials) : null;
+const providers: FileProvider[] = [];
+if (credentials) console.error(`${Object.keys(credentials.servers).length} servers have credentials (${args.credentials})`);
 
 const claude = await createClaudeCounter({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -134,8 +141,8 @@ function pickTargets(entries: RegistryEntry[]): Target[] {
 }
 
 /** Runs probes with a global concurrency limit and at most one in flight per host. */
-async function runAll(targets: Target[]): Promise<Array<Target & { result: ProbeResult; payloadHash?: string }>> {
-  const out: Array<Target & { result: ProbeResult; payloadHash?: string }> = [];
+async function runAll(targets: Target[]): Promise<Array<Target & { result: ProbeResult; payloadHash?: string; withCredentials?: boolean }>> {
+  const out: Array<Target & { result: ProbeResult; payloadHash?: string; withCredentials?: boolean }> = [];
   const busyHosts = new Set<string>();
   const queue = [...targets];
   let done = 0;
@@ -150,7 +157,9 @@ async function runAll(targets: Target[]): Promise<Array<Target & { result: Probe
       const [target] = queue.splice(idx, 1);
       busyHosts.add(target.host);
       try {
-        const { result, tools } = await probeRemoteRaw({ url: target.url, type: target.type }, { timeoutMs });
+        const creds = credentials ? credentialsFor(credentials, target.url) : undefined;
+        if (creds?.authProvider) providers.push(creds.authProvider);
+        const { result, tools } = await probeRemoteRaw({ url: target.url, type: target.type }, { timeoutMs, headers: creds?.headers, authProvider: creds?.authProvider });
         priceTools(result, tools);
         let hash: string | undefined;
         if (result.status === 'ok' && tools.length) {
@@ -159,7 +168,7 @@ async function runAll(targets: Target[]): Promise<Array<Target & { result: Probe
           result.claude = await claude.count(target.name, tools, hash);
           result.gemini = await gemini.count(target.name, tools, hash);
         }
-        out.push({ ...target, result, payloadHash: hash });
+        out.push({ ...target, result, payloadHash: hash, withCredentials: creds ? true : undefined });
       } finally {
         busyHosts.delete(target.host);
         done++;
@@ -221,7 +230,7 @@ if (args['claude-cache'] && existsSync(args['claude-cache'])) {
   for (const p of JSON.parse(await readFile(args['claude-cache'], 'utf8')) as Array<{ name: string; status: string }>) previousStatus.set(p.name, p.status);
 }
 const LIVE_BEFORE = new Set(['ok', 'auth', 'payment', 'newer_protocol', 'rate_limited']);
-const retry = rows.filter((r) => r.result.status === 'timeout' && LIVE_BEFORE.has(previousStatus.get(r.name) ?? '')).map(({ result: _r, payloadHash: _h, ...t }) => t);
+const retry = rows.filter((r) => r.result.status === 'timeout' && LIVE_BEFORE.has(previousStatus.get(r.name) ?? '')).map(({ result: _r, payloadHash: _h, withCredentials: _c, ...t }) => t);
 if (retry.length) {
   console.error(`${retry.length} servers timed out but answered last time: second attempt`);
   concurrency = Math.min(concurrency, 4);
@@ -230,6 +239,10 @@ if (retry.length) {
   console.error(`  ${[...again.values()].filter((r) => r.result.status !== 'timeout').length} answered on the second attempt`);
 }
 const summary = summarize(rows);
+if (credentials && args.credentials && providers.some((p) => p.changed)) {
+  await saveCredentials(credentials, args.credentials);
+  console.error('credentials: refreshed tokens written back');
+}
 if (claude.enabled) { const c = claude.stats(); console.error(`Claude counts: ${c.counted} servers counted now, ${c.reused} reused from the previous run, ${c.skipped} left for the next run (deadline)`); }
 else console.error('ANTHROPIC_API_KEY is not set: no exact Claude counts in this run.');
 if (gemini.enabled) { const g = gemini.stats(); console.error(`Gemini counts: ${g.counted} servers counted now, ${g.reused} reused from the previous run, ${g.skipped} left for the next run (deadline)`); }

@@ -26,6 +26,20 @@ npx mcpcost mcp                 # the same measurements as an MCP server over st
 
 It starts every configured server the way your client does, lists the tools and prints the token cost per server and in total. See [packages/mcpcost](packages/mcpcost/README.md).
 
+### Servers that need auth
+
+A server that answers 401 is reachable but not measured until it gets credentials. Store them once; every later measurement of that URL uses them.
+
+```bash
+npx mcpcost auth https://mcp.linear.app/mcp                                   # OAuth: register, consent in the browser, store the tokens
+npx mcpcost auth https://api.githubcopilot.com/mcp/ --header "Authorization: Bearer ghp_…"   # an API key instead
+npx mcpcost auth --list                                                       # what is stored, without the secrets
+```
+
+The OAuth flow follows the MCP authorization spec: discovery, dynamic client registration, PKCE, a callback on 127.0.0.1. The consent screen is the one step that needs a person. After it, the tokens live in `~/.mcpcost/credentials.json` (mode 0600, or `$MCPCOST_CREDENTIALS`), `npx mcpcost` sends them for that URL, and a refreshed token goes back to the file.
+
+The board does the same: `npm run credentials:push` copies the file into the D1 table `credentials`; the daily run reads it before the probe, writes the refreshed tokens back after it, and marks the server "measured with credentials". A refresh token that a service revokes or lets expire needs the consent step again.
+
 ### In CI, as a GitHub Action
 
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-mcpcost-e8571f?logo=github)](https://github.com/marketplace/actions/mcpcost-token-budget-for-mcp-servers)

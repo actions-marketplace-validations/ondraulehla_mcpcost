@@ -56,13 +56,20 @@ jobs:
             if gh run download "$id" --name "stdio-$id" --dir data/stdio 2>/dev/null; then echo "stdio run $id"; break; fi
           done
           s=$(find data/stdio -name stdio-run.json | head -1); test -n "$s" && { [ "$s" = data/stdio/stdio-run.json ] || cp "$s" data/stdio/stdio-run.json; } || echo "::notice::No stdio run found."
+      - name: Load the credentials for servers that need auth
+        # Stored in the D1 table "credentials" by probe/credentials-sync.ts; see the README, "Servers that need auth".
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
+        run: node --import tsx probe/credentials-sync.ts pull --out data/cache/credentials.json
       - name: Probe the registry
         run: |
           if [ -n "${{ inputs.sample }}" ]; then
-            npm run probe --silent -- --sample "${{ inputs.sample }}" --per-host 2 --out data/raw/probe-run.json --claude-cache data/cache/servers.json
+            npm run probe --silent -- --sample "${{ inputs.sample }}" --per-host 2 --out data/raw/probe-run.json --claude-cache data/cache/servers.json --credentials data/cache/credentials.json
           else
-            npm run probe --silent -- --all --concurrency 24 --out data/raw/probe-run.json --claude-cache data/cache/servers.json
+            npm run probe --silent -- --all --concurrency 24 --out data/raw/probe-run.json --claude-cache data/cache/servers.json --credentials data/cache/credentials.json
           fi
+      - name: Store the refreshed credentials
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' && hashFiles('data/cache/credentials.json') != '' }}
+        run: node --import tsx probe/credentials-sync.ts push --in data/cache/credentials.json
       - name: Count the tools of the stdio run
         if: ${{ hashFiles('data/stdio/stdio-run.json') != '' }}
         run: node --import tsx probe/count-tools.ts --in data/stdio/stdio-run.json --cache data/cache/servers.json --deadline-min 40
@@ -95,6 +102,7 @@ jobs:
           npx wrangler d1 execute mcp-pulse --remote --file=schema.sql
           has() { npx wrangler d1 execute mcp-pulse --remote --json --command "SELECT count(*) AS n FROM pragma_table_info('servers') WHERE name='$1'" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].results[0].n))'; }
           if [ "$(has gemini_tokens)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/003-gemini.sql; echo "migration 003 applied"; fi
+          if [ "$(has measured_with_credentials)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/004-credentials.sql; echo "migration 004 applied"; fi
       - name: Import into D1
         if: ${{ inputs.sample == '' && env.CLOUDFLARE_API_TOKEN != '' }}
         working-directory: site

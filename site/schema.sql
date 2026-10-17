@@ -45,7 +45,16 @@ CREATE TABLE IF NOT EXISTS servers (
   gemini_model TEXT,
   gemini_tokens INTEGER,
   gemini_measured_at TEXT,
-  gemini_error TEXT
+  gemini_error TEXT,
+  -- 1 when the probe used stored credentials (a header or an OAuth token). See migrations/004-credentials.sql.
+  measured_with_credentials INTEGER
+);
+
+-- The credentials file of the daily probe, one JSON document. Written by probe/credentials-sync.ts, never read by the site.
+CREATE TABLE IF NOT EXISTS credentials (
+  key TEXT PRIMARY KEY,
+  json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS servers_toolset ON servers (toolset_hash);
 

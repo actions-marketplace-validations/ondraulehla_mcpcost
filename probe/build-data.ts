@@ -38,6 +38,8 @@ interface RawRow {
   status: string;
   result: ProbeResult;
   payloadHash?: string;
+  /** Probed with stored credentials: the result is what an authorized user sees. */
+  withCredentials?: boolean;
 }
 
 interface StdioRow {
@@ -91,6 +93,8 @@ export interface ServerRow {
   geminiModel?: string;
   geminiMeasuredAt?: string;
   geminiError?: string;
+  /** Measured with stored credentials (a header or an OAuth token), so the count is what an authorized user gets. */
+  measuredWithCredentials?: boolean;
   instructionsChars?: number;
   /** Hash of the sorted tool names and schema sizes. Equal hashes mean the same tool set. */
   toolsetHash?: string;
@@ -166,6 +170,7 @@ const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
     geminiModel: res.gemini?.model,
     geminiMeasuredAt: res.gemini?.measuredAt,
     geminiError: res.gemini?.error,
+    measuredWithCredentials: r.withCredentials || undefined,
     instructionsChars: res.instructionsChars,
     toolsetHash,
     topTools: res.tools ? [...res.tools].sort((a, b) => b.tokens - a.tokens).slice(0, 5).map((t) => ({ name: t.name, tokens: t.tokens })) : undefined,

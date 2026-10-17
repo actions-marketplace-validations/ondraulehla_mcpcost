@@ -7,6 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { jsonSchemaValidator, JsonSchemaValidator, JsonSchemaValidatorResult } from '@modelcontextprotocol/sdk/validation/types.js';
 import type { ProbeResult, ProbeStatus, RemoteTransport } from './types.js';
 
@@ -24,6 +25,8 @@ export interface CoreOptions {
   timeoutMs?: number;
   /** Extra request headers, for example an Authorization header from your config. */
   headers?: Record<string, string>;
+  /** An OAuth client with stored tokens; the transport sends them and refreshes them. See credentials.ts. */
+  authProvider?: OAuthClientProvider;
   fetch?: typeof fetch;
 }
 
@@ -78,8 +81,8 @@ export async function probeRemoteRaw(remote: { url: string; type: RemoteTranspor
   const requestInit: RequestInit = { headers: options.headers };
   const transport =
     remote.type === 'sse'
-      ? new SSEClientTransport(url, { fetch: observingFetch, requestInit, redirectPolicy: 'follow' })
-      : new StreamableHTTPClientTransport(url, { fetch: observingFetch, requestInit, redirectPolicy: 'follow' });
+      ? new SSEClientTransport(url, { fetch: observingFetch, requestInit, redirectPolicy: 'follow', authProvider: options.authProvider })
+      : new StreamableHTTPClientTransport(url, { fetch: observingFetch, requestInit, redirectPolicy: 'follow', authProvider: options.authProvider });
 
   const tools = await measure(transport, result, timeoutMs);
 

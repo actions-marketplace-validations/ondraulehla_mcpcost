@@ -16,3 +16,5 @@ export type { GeminiCountOptions, GeminiCount } from './gemini.js';
 export type * from './types.js';
 export { GATED_STATUSES } from './types.js';
 export { buildServer } from './mcp.js';
+export { loadCredentials, saveCredentials, defaultCredentialsPath, credentialKey, credentialsFor, createProvider, entryFor, describeEntry } from './credentials.js';
+export type { CredentialStore, CredentialEntry, OAuthEntry, FileProvider, ProviderOptions } from './credentials.js';
