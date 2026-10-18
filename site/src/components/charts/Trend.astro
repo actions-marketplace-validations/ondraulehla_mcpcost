@@ -21,7 +21,7 @@ const { points, id, unit = '', zero = false } = Astro.props;
 const format = Astro.props.format ?? ((n: number) => n.toLocaleString('en-US').replace(/,/g, ' '));
 const W = 720;
 const H = 220;
-const pad = { l: 56, r: 72, t: 16, b: 30 };
+const pad = { l: 56, r: 72, t: 28, b: 30 };
 const xs = points.map((_, i) => pad.l + (points.length > 1 ? (i / (points.length - 1)) * (W - pad.l - pad.r) : (W - pad.l - pad.r) / 2));
 const values = points.map((p) => p.value);
 const lo = zero ? 0 : Math.min(...values);
@@ -46,12 +46,12 @@ const dateLabel = (d: string) => d.slice(5, 10);
     {points.length > 1 && [0, last].map((i) => <text class="axis" x={xs[i]} y={H - 8} text-anchor={i === 0 ? 'start' : 'end'}>{dateLabel(points[i].date)}</text>)}
     <path class="line" d={path} />
     {points.map((p, i) => (
-      <g class="pt" tabindex="0">
-        <title>{p.date.slice(0, 10)}: {format(p.value)}{unit}</title>
+      <g class="pt" tabindex="0" role="img" aria-label={`${p.date.slice(0, 10)}: ${format(p.value)}${unit}`}>
         <rect class="hit" x={xs[i] - 12} y={pad.t - 8} width="24" height={H - pad.t - pad.b + 16} />
         <circle class="ring" cx={xs[i]} cy={ys[i]} r="6" />
         <circle class="dot" cx={xs[i]} cy={ys[i]} r="4" />
-        <text class="tip" x={xs[i]} y={ys[i] - 12} text-anchor="middle">{dateLabel(p.date)} · {format(p.value)}{unit}</text>
+        {/* the label sits above the point, below it near the top edge, and stays inside the drawing at both ends */}
+        <text class="tip" x={Math.min(Math.max(xs[i], 70), W - 70)} y={ys[i] < pad.t + 20 ? ys[i] + 22 : ys[i] - 12} text-anchor="middle">{dateLabel(p.date)} · {format(p.value)}{unit}</text>
       </g>
     ))}
     {points.length > 0 && <text class="end" x={xs[last] + 10} y={ys[last] + 4}>{format(values[last])}{unit}</text>}

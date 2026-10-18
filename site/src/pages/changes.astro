@@ -18,8 +18,8 @@ const sign = (n: number) => (n > 0 ? `+${num(n)}` : num(n));
   {runs.map((run) => {
     const c = run.changes!;
     return (
-      <section class="run">
-        <h2 id={date(run.probedAt)}>{date(run.probedAt)} <span class="muted small">since {c.since.slice(0, 16).replace('T', ' ')} UTC</span></h2>
+      <section class="panel run">
+        <h2 id={date(run.probedAt)} class="panel-title">{date(run.probedAt)} <small>since {c.since.slice(0, 16).replace('T', ' ')} UTC</small></h2>
         <div class="stats">
           <div class="stat"><b>{num(c.counts.added)}</b><span>new in the registry</span></div>
           <div class="stat"><b>{num(c.counts.removed)}</b><span>removed</span></div>
@@ -37,7 +37,7 @@ const sign = (n: number) => (n > 0 ? `+${num(n)}` : num(n));
                 <tbody>
                   {c.tokenChanges.slice(0, 25).map((t) => (
                     <tr>
-                      <td class="break"><a href={`/s/${t.name}`}>{t.name}</a>{!t.exact && <span class="sub">o200k estimate</span>}</td>
+                      <td class="break"><a href={`/s/${t.name}`}>{t.name}</a>{!t.exact && <span class="sub">estimate</span>}</td>
                       <td class="num">{num(t.before)}</td>
                       <td class="num">{num(t.after)}</td>
                       <td class={`num ${t.after > t.before ? 'worse' : 'better'}`}>{sign(t.after - t.before)}</td>
@@ -94,9 +94,7 @@ const sign = (n: number) => (n > 0 ? `+${num(n)}` : num(n));
 </Layout>
 
 <style is:global>
-  .run { margin-top: 44px; }
-  .run h2 { margin-bottom: 0; }
-  .run h3 { margin: 26px 0 8px; font-size: 1rem; }
+  .run h3 { margin: 1.5rem 0 0.5rem; font-size: 1rem; }
   ul.cols { columns: 2; column-gap: 32px; margin: 0; padding-left: 1.1em; font-size: 0.92rem; }
   ul.cols li { break-inside: avoid; margin: 0 0 4px; overflow-wrap: anywhere; }
   td.worse { color: var(--accent); }

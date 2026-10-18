@@ -31,27 +31,32 @@ const heavyMax = Math.max(1, ...topHeavy.map((h) => h.claudeTokens ?? h.toolsTok
   {!run && <p class="frame pad">No run imported yet.</p>}
   {run && (
     <>
-      <div class="stats">
-        <div class="stat"><b>{num(run.registryEntries)}</b><span>registry entries, latest versions</span></div>
-        <div class="stat"><b>{num(run.probed)}</b><span>probed: {num(run.probed - (run.stdioProbed ?? 0))} remote, {num(run.stdioProbed ?? 0)} npm and PyPI packages</span></div>
-        <div class="stat"><b>{num(run.hosts)}</b><span>hosts</span></div>
-        <div class="stat"><b>{num(run.uniqueToolsets)}</b><span>distinct tool sets among alive servers</span></div>
-        <div class="stat"><b>{num(run.duplicateServers)}</b><span>alive servers that copy another tool set</span></div>
-        <div class="stat"><b>{ms(run.initMs.median)}</b><span>median time to initialize</span></div>
-      </div>
+      <section class="panel" aria-labelledby="run-h">
+        <h2 id="run-h" class="panel-title">Probed today</h2>
+        <div class="stats">
+          <div class="stat"><b>{num(run.registryEntries)}</b><span>registry entries, latest versions</span></div>
+          <div class="stat"><b>{num(run.probed)}</b><span>probed: {num(run.probed - (run.stdioProbed ?? 0))} remote, {num(run.stdioProbed ?? 0)} npm and PyPI packages</span></div>
+          <div class="stat"><b>{num(run.hosts)}</b><span>hosts</span></div>
+          <div class="stat"><b>{num(run.uniqueToolsets)}</b><span>distinct tool sets among alive servers</span></div>
+          <div class="stat"><b>{num(run.duplicateServers)}</b><span>alive servers that copy another tool set</span></div>
+          <div class="stat"><b>{ms(run.initMs.median)}</b><span>median time to initialize</span></div>
+        </div>
+      </section>
 
-      <h2>Results</h2>
-      <p class="muted small">What every probed server answered. Hover a segment or a bar for the count, or open the table.</p>
-      <Stack id="results-stack" segments={[
-        { label: 'alive', value: run.ok, tone: 'up', href: '/servers?status=ok' },
-        { label: 'needs auth, payment, env or args', value: gated, tone: 'gated', href: '/servers?status=auth' },
-        { label: 'down or broken', value: down, tone: 'down', href: '/servers?status=down' }
-      ]} />
-      <Bars id="results-bars" items={statusItems} columns={['Result', 'Servers']} />
+      <section class="panel" aria-labelledby="results-h">
+        <h2 id="results-h" class="panel-title">Results</h2>
+        <p class="muted small">What every probed server answered. Hover a segment or a bar for the count, or open the table.</p>
+        <Stack id="results-stack" segments={[
+          { label: 'alive', value: run.ok, tone: 'up', href: '/servers?status=ok' },
+          { label: 'needs auth, payment, env or args', value: gated, tone: 'gated', href: '/servers?status=auth' },
+          { label: 'down or broken', value: down, tone: 'down', href: '/servers?status=down' }
+        ]} />
+        <Bars id="results-bars" items={statusItems} columns={['Result', 'Servers']} />
+      </section>
 
       {run.claudeTokens && (
-        <>
-          <h2>Token cost in {modelName(run.claudeTokens.model)}, alive servers</h2>
+        <section class="panel" aria-labelledby="cost-h">
+          <h2 id="cost-h" class="panel-title">Token cost in {modelName(run.claudeTokens.model)}, alive servers</h2>
           <p class="muted small">Exact counts from the Anthropic count_tokens endpoint. {num(run.claudeTokens.counted)} servers counted, {num(run.claudeTokens.refused)} have a schema the API refuses.</p>
           <div class="stats">
             <div class="stat"><b>{num(run.claudeTokens.median)}</b><span>median</span></div>
@@ -67,19 +72,21 @@ const heavyMax = Math.max(1, ...topHeavy.map((h) => h.claudeTokens ?? h.toolsTok
               <Histogram id="cost-histogram" edges={run.claudeTokens.histogram.edges} bins={run.claudeTokens.histogram.bins} />
             </>
           )}
-        </>
+        </section>
       )}
 
-      <h2>Heaviest tool sets</h2>
-      <Bars id="heaviest" max={heavyMax} items={topHeavy.map((h) => ({
-        label: h.name, sub: `${num(h.toolCount)} tools · ${h.host}`, href: `/s/${h.name}`,
-        value: h.claudeTokens ?? h.toolsTokens, note: h.claudeTokens != null ? `${((h.claudeTokens / 200_000) * 100).toFixed(0)} % of a 200k window` : 'o200k estimate'
-      }))} columns={['Server', 'Tokens']} />
-      <p><a href="/servers?sort=claude">All servers by token cost →</a></p>
+      <section class="panel" aria-labelledby="heavy-h">
+        <h2 id="heavy-h" class="panel-title">Heaviest tool sets</h2>
+        <Bars id="heaviest" max={heavyMax} items={topHeavy.map((h) => ({
+          label: h.name, sub: `${num(h.toolCount)} tools · ${h.host}`, href: `/s/${h.name}`,
+          value: h.claudeTokens ?? h.toolsTokens, note: h.claudeTokens != null ? `${((h.claudeTokens / 200_000) * 100).toFixed(0)} % of Claude's 200k window` : 'estimate'
+        }))} columns={['Server', 'Tokens']} />
+        <p class="panel-note"><a href="/servers?sort=claude">All servers by token cost →</a></p>
+      </section>
 
       {series.length > 1 && (
-        <>
-          <h2>Run by run</h2>
+        <section class="panel" aria-labelledby="runs-h">
+          <h2 id="runs-h" class="panel-title">Run by run</h2>
           <p class="muted small">The last {series.length} daily runs. Hover a point for its value.</p>
           <h3>Servers that answer and list their tools</h3>
           <Trend id="trend-alive" points={trend((r) => Math.round((r.ok / r.probed) * 1000) / 10)} unit=" %" format={(n) => n.toFixed(1)} />
@@ -87,22 +94,30 @@ const heavyMax = Math.max(1, ...topHeavy.map((h) => h.claudeTokens ?? h.toolsTok
           <Trend id="trend-median" points={trend((r) => (run.claudeTokens ? r.claudeTokens?.median : r.toolsTokens.median))} />
           <h3>Remote servers in the registry</h3>
           <Trend id="trend-probed" points={trend((r) => r.probed)} />
-        </>
+        </section>
       )}
 
-      <h2>Protocol versions, alive servers</h2>
-      <Bars id="protocols" items={Object.entries(run.protocols).filter(([v]) => v !== 'unknown').sort((a, b) => b[1] - a[1]).map(([v, n]) => ({ label: v, value: n, href: `/servers?protocol=${v}`, note: pct(n, run.ok) }))} columns={['Negotiated version', 'Servers']} />
+      <section class="panel" aria-labelledby="protocols-h">
+        <h2 id="protocols-h" class="panel-title">Protocol versions, alive servers</h2>
+        <Bars id="protocols" items={Object.entries(run.protocols).filter(([v]) => v !== 'unknown').sort((a, b) => b[1] - a[1]).map(([v, n]) => ({ label: v, value: n, href: `/servers?protocol=${v}`, note: pct(n, run.ok) }))} columns={['Negotiated version', 'Servers']} />
+      </section>
 
-      <h2>Auth schemes, servers that need auth</h2>
-      <Bars id="auth" items={Object.entries(run.authSchemes).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([v, n]) => ({ label: v === 'none' ? 'no WWW-Authenticate header' : v, value: n }))} columns={['WWW-Authenticate', 'Servers']} />
+      <section class="panel" aria-labelledby="auth-h">
+        <h2 id="auth-h" class="panel-title">Auth schemes, servers that need auth</h2>
+        <Bars id="auth" items={Object.entries(run.authSchemes).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([v, n]) => ({ label: v === 'none' ? 'no WWW-Authenticate header' : v, value: n }))} columns={['WWW-Authenticate', 'Servers']} />
+      </section>
 
-      <h2>Transports</h2>
-      <Bars id="transports" items={Object.entries(run.transports).sort((a, b) => b[1] - a[1]).map(([v, n]) => ({ label: v, value: n, href: `/servers?transport=${v}`, note: pct(n, run.probed) }))} columns={['Transport', 'Servers']} />
+      <section class="panel" aria-labelledby="transports-h">
+        <h2 id="transports-h" class="panel-title">Transports</h2>
+        <Bars id="transports" items={Object.entries(run.transports).sort((a, b) => b[1] - a[1]).map(([v, n]) => ({ label: v, value: n, href: `/servers?transport=${v}`, note: pct(n, run.probed) }))} columns={['Transport', 'Servers']} />
+      </section>
 
-      <h2>Biggest publishers</h2>
-      <p class="muted small">Hosts by the number of registry entries they serve. The tooltip says how many are alive and how many distinct tool sets they have.</p>
-      <Bars id="hosts" items={hosts.map((h) => ({ label: h.host, value: h.servers, href: `/servers?host=${encodeURIComponent(h.host)}`, note: `${num(h.ok)} alive, ${num(h.unique_toolsets)} distinct tool sets` }))} columns={['Host', 'Servers']} />
-      <p><a href="/hosts">All hosts →</a></p>
+      <section class="panel" aria-labelledby="hosts-h">
+        <h2 id="hosts-h" class="panel-title">Biggest publishers</h2>
+        <p class="muted small">Hosts by the number of registry entries they serve. The tooltip says how many are alive and how many distinct tool sets they have.</p>
+        <Bars id="hosts" items={hosts.map((h) => ({ label: h.host, value: h.servers, href: `/servers?host=${encodeURIComponent(h.host)}`, note: `${num(h.ok)} alive, ${num(h.unique_toolsets)} distinct tool sets` }))} columns={['Host', 'Servers']} />
+        <p class="panel-note"><a href="/hosts">All hosts →</a></p>
+      </section>
     </>
   )}
 </Layout>

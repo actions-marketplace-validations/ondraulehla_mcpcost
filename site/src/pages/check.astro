@@ -66,53 +66,54 @@ const site = Astro.site?.toString().replace(/\/$/, '') ?? '';
 <Layout title="Check a server" description="Probe one MCP server live: does it answer, what protocol, how many tools, how many tokens.">
   <p class="kicker">live check</p>
   <h1 class="poster">Check a server</h1>
-  <form class="checkform" method="get" action="/check" style="margin-top:18px">
-    <input type="text" name="target" value={raw} placeholder="https://mcp.example.com/mcp or io.github.you/server" required autocomplete="off" aria-label="Server URL or registry name" />
+  <form class="checkform" method="get" action="/check" style="margin-top:1.5rem">
+    <input type="text" name="target" value={raw} placeholder="URL or registry name" required autocomplete="off" aria-label="Server URL or registry name" />
     <button type="submit">Check</button>
   </form>
-  <p class="muted small">A registry server opens its page. Other servers are probed now: initialize, tools/list, no credentials. Claude counts the tool definitions through the free count_tokens endpoint. We keep a result for ten minutes.</p>
 
   {view.kind === 'not-found' && <p class="frame pad">The registry has no server named <code>{view.name}</code>. Enter the server URL to probe it now.</p>}
   {view.kind === 'invalid' && <p class="frame pad">{view.reason}</p>}
   {view.kind === 'busy' && <p class="frame pad">Too many checks run now. Try again in one minute, or run <code>npx mcpcost --url …</code>.</p>}
 
   {view.kind === 'probed' && (
-    <section id="result" data-tokens-known="false">
-      <p style="margin-top:28px">
+    <section id="result" class="panel" data-tokens-known="false" aria-labelledby="result-h">
+      <h2 id="result-h" class="panel-title">Result <small class="mono">{view.url}</small></h2>
+      <p style="margin:0">
         <span class={`tag big ${bucket(view.result.status)}`}>{label(view.result.status)}</span>
-        <span class="muted small"> {view.result.httpStatus && <>HTTP {view.result.httpStatus} · </>}{view.result.authScheme && <>{view.result.authScheme} · </>}<span class="mono">{view.url}</span></span>
+        <span class="muted small"> {view.result.httpStatus && <>HTTP {view.result.httpStatus}</>}{view.result.authScheme && <> · {view.result.authScheme}</>}</span>
       </p>
       {view.result.status === 'ok' && (
         <>
-          <div class="stats">
+          <div class="stats" style="margin-top:1rem">
             <div class="stat"><b>{num(view.result.toolCount)}</b><span>tools</span></div>
             {view.claude?.tokens != null && <div class="stat"><b>{num(view.claude.tokens)}</b><span>tokens in {modelName(view.claude.model)}</span></div>}
             {view.claude?.tokens != null && <div class="stat"><b>{num(view.claude.tokensClaudeCode)}</b><span>tokens in Claude Code</span></div>}
             {view.claude?.tokens != null
-              ? <div class="stat"><b>{((view.claude.tokens / 200_000) * 100).toFixed(1)} %</b><span>of a 200k window</span></div>
-              : <div class="stat"><b id="share">≈ {((view.estimate / 200_000) * 100).toFixed(1)} %</b><span>of a 200k window</span></div>}
-            <div class="stat"><b id="tok">≈ {num(view.estimate)}</b><span id="tok-label">o200k_base, estimated from size</span></div>
+              ? <div class="stat"><b>{((view.claude.tokens / 200_000) * 100).toFixed(1)} %</b><span>of Claude's 200k window</span></div>
+              : <>
+                  <div class="stat"><b id="tok">≈ {num(view.estimate)}</b><span>tokens, estimate</span></div>
+                  <div class="stat"><b id="share">≈ {((view.estimate / 200_000) * 100).toFixed(1)} %</b><span>of Claude's 200k window</span></div>
+                </>}
             <div class="stat"><b>{ms(view.result.latencyMs.initialize)}</b><span>to initialize</span></div>
             <div class="stat"><b>{ms(view.result.latencyMs.toolsList)}</b><span>to list tools</span></div>
           </div>
-          <dl class="facts">
+          <dl class="facts" style="margin-top:1rem">
             {view.result.protocolVersion && <><dt>Protocol</dt><dd class="mono">{view.result.protocolVersion}</dd></>}
             {view.result.serverInfo?.name && <><dt>Reports itself as</dt><dd>{view.result.serverInfo.name} {view.result.serverInfo.version}</dd></>}
             {view.result.capabilities?.length ? <><dt>Capabilities</dt><dd class="mono">{view.result.capabilities.join(', ')}</dd></> : null}
             <dt>Schema size</dt><dd>{num(view.bytes)} bytes of tool definitions</dd>
-            {view.claude?.error && <><dt>Claude count</dt><dd>Not available: <span class="mono">{view.claude.error}</span></dd></>}
+            <dt>Of a 1M window</dt><dd><span id="share-1m" data-estimate={view.claude?.tokens == null ? '' : undefined}>{view.claude?.tokens != null ? `${((view.claude.tokens / 1_000_000) * 100).toFixed(2)} %` : `≈ ${((view.estimate / 1_000_000) * 100).toFixed(2)} %`}</span> of a 1M context window{view.claude?.tokens == null ? ', estimate' : ''}</dd>
             {view.claude?.tokens != null && <><dt>Claude count</dt><dd>Exact, from the Anthropic count_tokens endpoint. Claude Code adds a prefix like <span class="mono">{claudeCodePrefix(new URL(view.url).hostname)}</span> to each tool name. <a href="/methodology#tokens">Method</a>.</dd></>}
           </dl>
           <div id="tools-table" hidden>
-            <h2>Most expensive tools</h2>
+            <h3>Most expensive tools</h3>
             <div class="frame"><table><thead><tr><th>Tool</th><th class="num">Tokens</th></tr></thead><tbody></tbody></table></div>
           </div>
-          <p class="muted small" id="exact-note">The o200k_base count needs the tokenizer. Your browser loads it (1 MB). Without it, we estimate {BYTES_PER_TOKEN} bytes per token, the registry median.</p>
           {view.embed && <script type="application/json" id="payloads" set:html={JSON.stringify(view.payloads)} />}
         </>
       )}
       {view.result.status !== 'ok' && view.result.error && <pre>{view.result.error}</pre>}
-      <dl class="facts">
+      <dl class="facts" style="margin-top:1rem">
             <dt>Not on the board</dt><dd>
               No registry entry lists this exact URL as a remote. The daily probe takes the remote URL from the registry entry, so a different path, scheme or host is a different server to it.
               {view.sameHost.length > 0
@@ -123,12 +124,13 @@ const site = Astro.site?.toString().replace(/\/$/, '') ?? '';
       {['ok', 'auth', 'payment', 'newer_protocol', 'rate_limited'].includes(view.result.status) && (
         <form class="checkform" method="post" action="/track" style="margin-top:14px">
           <input type="hidden" name="url" value={view.url} />
-          <span class="muted small" style="flex:1">Not in the registry? The daily probe can track this URL anyway: a page, a badge, a feed and alerts, under the name <span class="mono">url/{new URL(view.url).hostname}…</span></span>
+          <span class="muted small track-note">Not in the registry? The daily probe can track this URL too: a page, a badge, a feed and alerts.</span>
           <button type="submit">Track it on the board</button>
         </form>
       )}
 
-      <p class="muted small">The same measurement in a terminal: <code>npx mcpcost --url {view.url}</code></p>
+      <p class="muted small" style="margin-bottom:0">The same measurement in a terminal:</p>
+      <pre class="wrap">npx mcpcost --url {view.url}</pre>
     </section>
   )}
 
@@ -136,6 +138,10 @@ const site = Astro.site?.toString().replace(/\/$/, '') ?? '';
     <p class="muted small">Example: <a href="/check?target=https://mcp.deepwiki.com/mcp">https://mcp.deepwiki.com/mcp</a>. This server is not in the registry.</p>
   )}
 </Layout>
+
+<style>
+  .track-note { flex: 1; min-width: 0; display: block; padding: 0.8rem 1rem; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
 
 <script>
   // Exact token counts in the browser: the Worker does the network part, the
@@ -151,12 +157,10 @@ const site = Astro.site?.toString().replace(/\/$/, '') ?? '';
       const fmt = (n: number) => n.toLocaleString('en-US').replace(/,/g, ' ');
       const tok = document.getElementById('tok');
       const share = document.getElementById('share');
-      const lbl = document.getElementById('tok-label');
-      const note = document.getElementById('exact-note');
-      if (tok) tok.textContent = fmt(total);
-      if (share) share.textContent = `${((total / 200_000) * 100).toFixed(1)} %`;
-      if (lbl) lbl.textContent = 'o200k_base estimate';
-      if (note) note.textContent = 'Your browser counted the o200k_base estimate. The board shows the same estimate next to the exact Claude count.';
+      const share1m = document.getElementById('share-1m');
+      if (tok) tok.textContent = `≈ ${fmt(total)}`;
+      if (share) share.textContent = `≈ ${((total / 200_000) * 100).toFixed(1)} %`;
+      if (share1m && share1m.hasAttribute('data-estimate')) share1m.textContent = `≈ ${((total / 1_000_000) * 100).toFixed(2)} %`;
       const table = document.getElementById('tools-table');
       const body = table?.querySelector('tbody');
       if (table && body) {

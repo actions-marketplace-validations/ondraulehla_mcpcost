@@ -10,14 +10,17 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
   <h1 class="poster">How mcpcost measures</h1>
   <p class="lede">One open-source probe. The same steps for every server.</p>
 
-  <h2 style="margin-top:40px">What we probe</h2>
+  <section class="panel" aria-labelledby="what-we-probe-h">
+    <h2 id="what-we-probe-h" class="panel-title">What we probe</h2>
   <p>
     The probe reads the <a href="https://registry.modelcontextprotocol.io" rel="noopener">official MCP registry</a>. It uses the latest version of each server.
     It takes the first <code>streamable-http</code> remote. If the server has only an <code>sse</code> remote, it takes that one.
     Servers that ship only as a package on npm or PyPI are probed too: the package is installed in a container with the network on and no lifecycle scripts, then started with the network off and placeholder values for the environment variables the registry entry lists. “needs env”, “needs args” and “needs network” mean the server started but wants a real credential, an argument or a network. “crashed on start”, “install failed” and “no executable” are what they say. OCI and MCPB packages are not probed.
   </p>
+  </section>
 
-  <h2>How we probe a server</h2>
+  <section class="panel" aria-labelledby="how-we-probe-a-server-h">
+    <h2 id="how-we-probe-a-server-h" class="panel-title">How we probe a server</h2>
   <ol>
     <li>Connect with the official TypeScript SDK. The client name is <code>mcpcost</code>. We send no credentials.</li>
     <li>Send <code>initialize</code> and <code>notifications/initialized</code>. Record the time to the <code>initialize</code> result, the protocol version, the server name and version, the capabilities and the length of the instructions.</li>
@@ -26,8 +29,10 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
     <li>Close the session.</li>
   </ol>
   <p>Each request has a timeout of 15 seconds. We run one probe at a time against each host.</p>
+  </section>
 
-  <h2>Results</h2>
+  <section class="panel" aria-labelledby="results-h">
+    <h2 id="results-h" class="panel-title">Results</h2>
   <dl class="facts">
     <dt>alive</dt><dd><code>initialize</code> and <code>tools/list</code> were successful.</dd>
     <dt>needs auth</dt><dd>HTTP 401 or 403. We record the <code>WWW-Authenticate</code> scheme when the server sends one. The server is reachable, but it does not talk to clients without credentials.</dd>
@@ -37,8 +42,10 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
     <dt>not MCP</dt><dd>HTTP 200, but the response is not a valid MCP reply. Or the server returned a JSON-RPC error to <code>initialize</code>.</dd>
     <dt>timeout, no DNS, TLS error, refused, server error, rate limited</dt><dd>Transport failures. We name each one after its cause.</dd>
   </dl>
+  </section>
 
-  <h2 id="tokens">Token counts</h2>
+  <section class="panel" aria-labelledby="tokens-h" id="tokens">
+    <h2 id="tokens-h" class="panel-title">Token counts</h2>
   <p>
     Each server page shows up to three numbers for the tool definitions.
   </p>
@@ -54,31 +61,42 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
   <p>
     We count a server again only when its tool definitions change. The date next to the Claude count is the date of that count. About 5 % of alive servers publish a schema the endpoint refuses, for example a top-level <code>oneOf</code>. These servers show the estimate and the reason.
   </p>
+  </section>
 
-  <h2>Same tool set</h2>
+  <section class="panel" aria-labelledby="same-tool-set-h">
+    <h2 id="same-tool-set-h" class="panel-title">Same tool set</h2>
   <p>
     We hash the sorted tool names and their schema sizes. Servers with the same hash serve the same tools. This shows bulk publishers that register one server under many names.
   </p>
+  </section>
 
-  <h2>Live check</h2>
+  <section class="panel" aria-labelledby="live-check-h">
+    <h2 id="live-check-h" class="panel-title">Live check</h2>
   <p>
     <a href="/check">/check</a> probes one server on demand. It uses the same steps and a timeout of 10 seconds. The Worker does the network part and asks <code>count_tokens</code> for the exact Claude count. Your browser counts the o200k estimate, because the Worker has a small CPU budget. We keep a result for ten minutes. A URL that is already in the registry opens its page.
   </p>
+  </section>
 
-  <h2>Machine access</h2>
+  <section class="panel" aria-labelledby="machine-access-h">
+    <h2 id="machine-access-h" class="panel-title">Machine access</h2>
   <p>
     Each server has JSON at <code>/api/s/&lt;name&gt;.json</code>. The list is at <code>/api/servers.json</code>. The live probe is at <code>/api/check.json?url=…</code>. The run summary is at <code>/api/summary.json</code>.
     The board is also an MCP server: <code>https://mcpcost.ulehla.dev/mcp</code> over Streamable HTTP, no auth. Its tools are <code>lookup_server</code>, <code>search_servers</code>, <code>check_server</code> and <code>registry_summary</code>. <a href="/llms.txt">/llms.txt</a> lists all of this.
   </p>
+  </section>
 
-  <h2>Being a good guest</h2>
+  <section class="panel" aria-labelledby="being-a-good-guest-h">
+    <h2 id="being-a-good-guest-h" class="panel-title">Being a good guest</h2>
   <p>
     Each request carries the User-Agent <code>mcpcost/&lt;version&gt; (+https://github.com/ondraulehla/mcpcost)</code>. The probe runs one time each day. It sends no tool calls. It makes at most three requests to each server.
     To exclude a server, <a href="https://github.com/ondraulehla/mcpcost/issues" rel="noopener">open an issue</a> with its registry name.
   </p>
+  </section>
 
-  <h2>Run it yourself</h2>
+  <section class="panel" aria-labelledby="run-it-yourself-h">
+    <h2 id="run-it-yourself-h" class="panel-title">Run it yourself</h2>
   <pre>git clone https://github.com/ondraulehla/mcpcost
 cd mcpcost && npm install
 npm run probe -- --sample 200 --per-host 2</pre>
+  </section>
 </Layout>

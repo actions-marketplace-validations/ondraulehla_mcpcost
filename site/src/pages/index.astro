@@ -1,27 +1,15 @@
 ---
 import Layout from '../layouts/Layout.astro';
-import { latestRun, headline, serversByNames, NOTABLE } from '../lib/db';
-import { num, pct, tokens, date, modelName, windowShare } from '../lib/format';
+import { latestRun, headline } from '../lib/db';
+import { num, pct, tokens, date, modelName } from '../lib/format';
 
-const [run, notableRows] = await Promise.all([latestRun(), serversByNames(NOTABLE.map((n) => n.name))]);
+const run = await latestRun();
 const cost = run ? headline(run) : null;
 const inModel = cost?.exact ? ` in ${modelName(cost.model)}` : '';
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=3600');
 const up = run?.ok ?? 0;
 const gated = run ? (run.byStatus.auth ?? 0) + (run.byStatus.payment ?? 0) + (run.byStatus.newer_protocol ?? 0) : 0;
 const down = run ? run.probed - up - gated : 0;
-
-// The curated rows in the curated order, with the display name from the list.
-const byName = new Map(notableRows.map((r) => [r.name, r]));
-const notable = NOTABLE.map((n) => ({ ...n, row: byName.get(n.name) })).filter((n) => n.row);
-const costOf = (r: { claude_tokens: number | null; tools_tokens: number | null }) => r.claude_tokens ?? r.tools_tokens;
-/** One real number for the opening line: the heaviest alive server among the well-known ones, else the heaviest of the run. */
-const alive = notable.filter((n) => n.row!.status === 'ok' && costOf(n.row!) != null).sort((a, b) => costOf(b.row!)! - costOf(a.row!)!);
-const example = alive[0]
-  ? { name: alive[0].name, label: alive[0].label, tools: alive[0].row!.tool_count, cost: costOf(alive[0].row!)!, exact: alive[0].row!.claude_tokens != null }
-  : run?.heaviest[0]
-    ? { name: run.heaviest[0].name, label: run.heaviest[0].name, tools: run.heaviest[0].toolCount, cost: run.heaviest[0].claudeTokens ?? run.heaviest[0].toolsTokens, exact: run.heaviest[0].claudeTokens != null }
-    : null;
 
 // The product and the website, named "mcpcost", so search engines read the one-word query as a brand query.
 const description =
@@ -55,33 +43,38 @@ const jsonld = {
 
 <Layout title="mcpcost" description={description} jsonld={jsonld}>
   <p class="kicker">every server in the MCP registry, probed each day</p>
-  <h1 class="poster">mcpcost measures what MCP servers cost before the first prompt</h1>
-  <p class="lede">Every server you connect hands its tool definitions to the model at the start of a session. Those definitions are tokens, and you pay them in every turn. mcpcost tells you if a server is alive and how many tokens its tools take, as Claude counts them.</p>
-  {example && (
-    <p class="answer">
-      <a href={`/s/${example.name}`}>{example.label}</a> has {num(example.tools)} tools. They cost <b>{tokens(example.cost)} tokens</b>{example.exact ? '' : ' (estimate)'} of context in every session, <b>{windowShare(example.cost)}</b> of a 200k window, before you type a word.
-    </p>
-  )}
+  <h1 class="poster hero hero-rise">mcpcost measures what MCP servers cost <span class="accent">before the first prompt</span></h1>
 
   <div class="actions-grid">
-    <section class="panel check-panel" aria-labelledby="check-h">
-      <h2 id="check-h" class="poster panel-title">Check a server</h2>
+    <section class="panel" aria-labelledby="check-h">
+      <h2 id="check-h" class="panel-title">Check a server</h2>
       <form class="checkform" method="get" action="/check">
-        <input type="text" name="target" placeholder="https://mcp.example.com/mcp or io.github.you/server" required autocomplete="off" aria-label="Server URL or registry name" />
+        <input type="text" name="target" placeholder="URL or registry name" required autocomplete="off" aria-label="Server URL or registry name" />
         <button type="submit">Check</button>
       </form>
-      <p class="muted small" style="margin:8px 0 0">A registry name opens its page. Any other URL is probed now, with the same steps as the daily run.</p>
+      <p class="muted small">A registry name opens its page. Any other URL is probed now, with the same steps as the daily run.</p>
     </section>
     <section class="panel" aria-labelledby="own-h">
-      <h2 id="own-h" class="poster panel-title">Measure your own config</h2>
-      <pre style="margin:0">npx mcpcost</pre>
-      <p class="muted small" style="margin:8px 0 0">Reads the configs of Claude Code, Claude Desktop, Cursor, VS Code, Windsurf and Gemini CLI, starts each server and prints the cost per server. <code>--budget</code> makes it a CI check. <a href="https://www.npmjs.com/package/mcpcost" rel="noopener">npm</a> · <a href="https://github.com/ondraulehla/mcpcost#in-ci-as-a-github-action" rel="noopener">GitHub Action</a></p>
+      <h2 id="own-h" class="panel-title">Measure your own config</h2>
+      <div class="copy-row">
+        <pre>npx mcpcost</pre>
+        <button type="button" class="copy" data-copy="npx mcpcost" aria-label="Copy the command">Copy</button>
+      </div>
+      <p class="muted small">Reads the configs of Claude Code, Claude Desktop, Cursor, VS Code, Windsurf and Gemini CLI, starts each server and prints the cost per server. <code>--budget</code> makes it a CI check. <a href="https://www.npmjs.com/package/mcpcost" rel="noopener">npm</a> · <a href="https://github.com/ondraulehla/mcpcost#in-ci-as-a-github-action" rel="noopener">GitHub Action</a></p>
     </section>
   </div>
 
+  <nav class="links" aria-label="Sections">
+    <a href="/servers">Servers<span>search, filter, sort</span></a>
+    <a href="/tokens">Tokens<span>what a server costs</span></a>
+    <a href="/statistics">Statistics<span>results, costs, protocols, publishers</span></a>
+    <a href="/changes">Changes<span>new, gone, down, back, heavier</span></a>
+    <a href="/methodology">Method<span>how we measure</span></a>
+  </nav>
+
   {run && (
-    <>
-      <h2>The registry today</h2>
+    <section class="panel today" aria-labelledby="today-h">
+      <h2 id="today-h" class="panel-title">The registry today</h2>
       <div class="stats">
         <div class="stat"><b>{pct(up, run.probed)}</b><span>alive</span></div>
         <div class="stat"><b>{pct(gated, run.probed)}</b><span>need auth, payment, env or args</span></div>
@@ -90,33 +83,27 @@ const jsonld = {
         <div class="stat"><b>{tokens(cost!.stats.p90)}</b><span>90th percentile</span></div>
         <div class="stat"><b>{tokens(cost!.stats.max)}</b><span>heaviest server</span></div>
       </div>
-      <p class="muted small" style="margin:10px 0 0">{num(run.probed)} servers · probed {date(run.probedAt)} · <a href="/statistics">statistics</a> · <a href="/changes">what changed</a></p>
-    </>
+      <p class="muted small">{num(run.probed)} servers · probed {date(run.probedAt)} · <a href="/statistics">statistics</a> · <a href="/changes">what changed</a></p>
+    </section>
   )}
 
-  <nav class="links" aria-label="Sections" style="margin-top:40px">
-    <a href="/tokens">Tokens<span>what a server costs</span></a>
-    <a href="/servers">Servers<span>search, filter, sort</span></a>
-    <a href="/statistics">Statistics<span>results, costs, protocols, publishers</span></a>
-    <a href="/changes">Changes<span>new, gone, down, back, heavier</span></a>
-    <a href="/methodology">Method<span>how we measure</span></a>
-  </nav>
-  <p class="muted small" style="margin-top:18px">Remote servers are probed over HTTP, npm and PyPI packages in a container with the network off. Exact counts come from the Anthropic count_tokens endpoint. Every server has a page, a badge, an Atom feed and e-mail alerts. <a href="/methodology">How we measure</a>.</p>
+  <p class="why">Every server you connect hands its tool definitions to the model at the start of a session, and you pay those tokens in every turn. mcpcost tells you if a server is alive and how many tokens its tools take, as Claude counts them. <a href="/methodology">How we measure</a>.</p>
 </Layout>
 
 <style>
-  .actions-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    margin-top: 22px;
-  }
-  .actions-grid .panel {
-    margin: 0;
-  }
+  .actions-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 2.5rem; }
+  .actions-grid .panel { margin: 0; }
+  .panel p { margin: 0.75rem 0 0; }
+  .links { margin-top: 1.5rem; }
+  .today { margin-top: 1.5rem; }
+  .today .stats { margin-top: 0; }
+  .why { margin: 2.5rem 0 0; padding: 1rem 1.25rem; border: 1px solid var(--line); font-size: 0.95rem; line-height: 1.625; color: var(--ink-muted); }
+  /* the command with a copy cell, like the e-mail cell of ulehla.dev */
+  .copy-row { display: flex; align-items: stretch; border: 1px solid var(--line); background: var(--panel); }
+  .copy-row pre { flex: 1; min-width: 0; margin: 0; border: 0; background: transparent; }
+  .copy-row .copy { border: 0; border-left: 1px solid var(--line); padding: 0 1.25rem; background-color: transparent; color: var(--accent); font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.15em; text-transform: uppercase; font-weight: 600; cursor: pointer; background-image: linear-gradient(var(--ink), var(--ink)); background-position: bottom; background-repeat: no-repeat; background-size: 100% 0%; transition: background-size 0.28s var(--ease-out-quint), color 0.18s 60ms; }
+  .copy-row .copy:hover, .copy-row .copy:focus-visible { color: var(--surface); background-size: 100% 100%; }
   @media (width <= 760px) {
-    .actions-grid {
-      grid-template-columns: 1fr;
-    }
+    .actions-grid { grid-template-columns: 1fr; }
   }
 </style>
