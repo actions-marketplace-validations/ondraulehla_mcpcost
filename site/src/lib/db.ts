@@ -394,6 +394,9 @@ export async function listServers(query: ListQuery): Promise<ListResult> {
   }
   if (query.status === 'down') {
     where.push(`status NOT IN ('ok', ${[...GATED_STATUSES].map((s) => `'${s}'`).join(', ')})`);
+  } else if (query.status === 'gated') {
+    // Reachable, but the probe got no tool list: auth, payment, a newer protocol, or a package that needs env, args or the network.
+    where.push(`status IN (${[...GATED_STATUSES].map((s) => `'${s}'`).join(', ')})`);
   } else if (query.status) {
     where.push('status = ?');
     binds.push(query.status);
