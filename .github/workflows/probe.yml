@@ -78,6 +78,10 @@ jobs:
       - name: Count the tools of the stdio run
         if: ${{ hashFiles('data/stdio/stdio-run.json') != '' }}
         run: node --import tsx probe/count-tools.ts --in data/stdio/stdio-run.json --cache data/cache/servers.json --deadline-min 40
+      - name: Dump the board's statuses, so the import can repair rows that drifted
+        if: ${{ inputs.sample == '' && env.CLOUDFLARE_API_TOKEN != '' }}
+        working-directory: site
+        run: npx wrangler d1 execute mcp-pulse --remote --json --command "SELECT name, status FROM servers" > ../data/previous/d1-status.json || rm -f ../data/previous/d1-status.json
       - name: Build the site data and the D1 import
         run: |
           stdio=""; [ -f data/stdio/stdio-run.json ] && stdio="--stdio data/stdio/stdio-run.json"
@@ -86,10 +90,11 @@ jobs:
           else
             node --import tsx probe/build-data.ts --in data/raw/probe-run.json --out data/latest $stdio
           fi
+          d1=""; [ -s data/previous/d1-status.json ] && d1="--d1-status data/previous/d1-status.json"
           if [ -f data/previous/servers.json ]; then
-            node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql --previous data/previous/servers.json --previous-hosts data/previous/hosts.json
+            node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql --previous data/previous/servers.json --previous-hosts data/previous/hosts.json $d1
           else
-            node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql
+            node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql $d1
           fi
       - name: Find the open-source packages of servers that need auth
         # Reads the repositories the registry names, at most a few hundred an hour; the result feeds the stdio run.

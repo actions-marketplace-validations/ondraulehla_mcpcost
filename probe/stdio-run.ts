@@ -14,6 +14,7 @@ import { promisify } from 'node:util';
 import type { RegistryEntry, RegistryPackage, ProbeResult } from '../packages/mcpcost/src/index.js';
 import { priceTools } from '../packages/mcpcost/src/probe.js';
 import type { RawTool } from '../packages/mcpcost/src/core.js';
+import { envNamesFromError } from '../packages/mcpcost/src/env-hints.js';
 
 const run = promisify(execFile);
 const { values: args } = parseArgs({
@@ -200,27 +201,41 @@ async function probeOne(t: Target): Promise<Row> {
     const command = [...installed.command, ...cliArgs];
     row.command = command;
     const env = buildEnv(t.pkg);
-    row.env = Object.keys(env);
     // 3. run with the network off, read-only install, then list the tools
-    const envArgs = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
-    const { stdout } = await withTimeout(
-      run('docker', dockerArgs(['--network', 'none', '-v', `${dir}:/work:ro`, '--tmpfs', '/tmp', '-e', `PROBE_TIMEOUT_MS=${args['probe-timeout']}`, ...envArgs, args.image, 'node', '/app/probe.mjs', ...command]), { maxBuffer: 64e6 }),
-      Number(args['probe-timeout']) + 20_000, 'probe'
-    );
-    const parsed = JSON.parse(stdout.slice(stdout.indexOf('{'))) as { result: ProbeResult; tools: RawTool[] };
-    priceTools(parsed.result, parsed.tools);
-    row.result = parsed.result;
-    row.tools = parsed.tools;
-    row.status = parsed.result.status;
-    const text = `${parsed.result.error ?? ''}`;
-    if (row.status !== 'ok' && /api[_ -]?key|token|credential|unauthori[sz]ed|missing required|environment variable|must be set|must use|is required|not configured|is invalid|invalid url|not recognized|placeholder|please set|config/i.test(text)) row.status = 'needs_env';
-    if (row.status !== 'ok' && /^usage:|\busage:|unknown command|missing argument|expected a command|too few arguments/im.test(text)) row.status = 'needs_args';
-    // Closed before initialize with a stack trace or an import error: the server crashed on start.
-    if (row.status === 'error' && /Connection closed/.test(text)) row.status = 'crashed';
-    // A bridge to a remote server (mcp-remote and friends) cannot work with the network off; that is a remote server in disguise.
-    if (row.status !== 'ok' && /mcp-remote|ENOTFOUND|getaddrinfo|ECONNREFUSED|fetch failed|StreamableHTTPClientTransport|SSEClientTransport|Temporary failure in name resolution|Network is unreachable/.test(text)) row.status = 'needs_network';
-    if (row.status !== 'ok' && /ModuleNotFoundError|ImportError|Cannot find module|ERR_MODULE_NOT_FOUND|SyntaxError|TypeError|ReferenceError|Traceback/.test(text)) row.status = 'crashed';
-    if (row.status !== 'ok') row.error = text.slice(0, 300);
+    const probeWith = async (vars: Record<string, string>) => {
+      const envArgs = Object.entries(vars).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
+      const { stdout } = await withTimeout(
+        run('docker', dockerArgs(['--network', 'none', '-v', `${dir}:/work:ro`, '--tmpfs', '/tmp', '-e', `PROBE_TIMEOUT_MS=${args['probe-timeout']}`, ...envArgs, args.image, 'node', '/app/probe.mjs', ...command]), { maxBuffer: 64e6 }),
+        Number(args['probe-timeout']) + 20_000, 'probe'
+      );
+      const parsed = JSON.parse(stdout.slice(stdout.indexOf('{'))) as { result: ProbeResult; tools: RawTool[] };
+      priceTools(parsed.result, parsed.tools);
+      const text = `${parsed.result.error ?? ''}`;
+      let status: StdioStatus = parsed.result.status;
+      if (status !== 'ok' && /api[_ -]?key|token|credential|unauthori[sz]ed|missing required|environment variable|must be set|must use|is required|not configured|is invalid|invalid url|not recognized|placeholder|please set|config/i.test(text)) status = 'needs_env';
+      if (status !== 'ok' && /^usage:|\busage:|unknown command|missing argument|expected a command|too few arguments/im.test(text)) status = 'needs_args';
+      // Closed before initialize with a stack trace or an import error: the server crashed on start.
+      if (status === 'error' && /Connection closed/.test(text)) status = 'crashed';
+      // A bridge to a remote server (mcp-remote and friends) cannot work with the network off; that is a remote server in disguise.
+      if (status !== 'ok' && /mcp-remote|ENOTFOUND|getaddrinfo|ECONNREFUSED|fetch failed|StreamableHTTPClientTransport|SSEClientTransport|Temporary failure in name resolution|Network is unreachable/.test(text)) status = 'needs_network';
+      if (status !== 'ok' && /ModuleNotFoundError|ImportError|Cannot find module|ERR_MODULE_NOT_FOUND|SyntaxError|TypeError|ReferenceError|Traceback/.test(text)) status = 'crashed';
+      return { parsed, text, status };
+    };
+    let attempt = await probeWith(env);
+    // The server said which variables it wants (a derived package has no registry entry to list them): once more with those set.
+    if (attempt.status === 'needs_env' || attempt.status === 'crashed') {
+      const wanted = envNamesFromError(attempt.text).filter((n) => !(n in env));
+      if (wanted.length) {
+        for (const n of wanted) env[n] = 'mcpcost-placeholder';
+        const again = await probeWith(env);
+        if (again.status === 'ok' || again.status !== attempt.status) attempt = again;
+      }
+    }
+    row.env = Object.keys(env);
+    row.result = attempt.parsed.result;
+    row.tools = attempt.parsed.tools;
+    row.status = attempt.status;
+    if (row.status !== 'ok') row.error = attempt.text.slice(0, 300);
     return row;
   } catch (e) {
     row.status = /timed out/.test(String(e)) ? 'timeout' : 'error';
