@@ -115,7 +115,7 @@ const site = Astro.site?.toString().replace(/\/$/, '') ?? '';
       {view.result.status !== 'ok' && view.result.error && <pre>{view.result.error}</pre>}
       <dl class="facts" style="margin-top:1rem">
             <dt>Not on the board</dt><dd>
-              No registry entry lists this exact URL as a remote. The daily probe takes the remote URL from the registry entry, so a different path, scheme or host is a different server to it.
+              No entry in the official MCP registry lists this exact URL as a remote, so the daily probe does not know it. A different path, scheme or host is a different server to the probe.
               {view.sameHost.length > 0
                 ? <> Registry servers on this host: {view.sameHost.map((s, i) => <>{i > 0 && ', '}<a href={`/s/${s.name}`}>{s.name}</a> <span class="faint mono">{s.url.replace(/^https?:\/\/[^/]+/, '')}</span></>)}.</>
                 : <> <a href="https://registry.modelcontextprotocol.io" rel="noopener">Publish the server</a> with this remote URL and the daily probe tracks it.</>}
@@ -135,7 +135,7 @@ const site = Astro.site?.toString().replace(/\/$/, '') ?? '';
   )}
 
   {view.kind === 'empty' && (
-    <p class="muted small">Example: <a href="/check?target=https://mcp.deepwiki.com/mcp">https://mcp.deepwiki.com/mcp</a>. This server is not in the registry.</p>
+    <p class="muted small">Example: <a href="/check?target=https://mcp.deepwiki.com/mcp">https://mcp.deepwiki.com/mcp</a>. DeepWiki is not in the official MCP registry, so the daily probe does not list it; the check measures it live, and the button below the result tracks it on the board.</p>
   )}
 </Layout>
 

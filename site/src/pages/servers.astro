@@ -1,7 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import Pager from '../components/Pager.astro';
-import { latestRun, listServers, SORTS, DEFAULT_SORT, MAX_NUMBERED_PAGE, decodeCursor, encodeCursor, type SortKey } from '../lib/db';
+import { latestRun, listServers, SORTS, DEFAULT_SORT, MAX_NUMBERED_PAGE, decodeCursor, encodeCursor, ACCESS_STATUSES, SETUP_STATUSES, type SortKey } from '../lib/db';
 import { bucket, label, ms, num, tokens, STATUS_LABEL } from '../lib/format';
 import { GATED_STATUSES } from '../../../packages/mcpcost/src/types.ts';
 
@@ -39,17 +39,21 @@ function pageHref(n: number, c: { value: string | number | null; name: string } 
 const nextHref = hasNext ? pageHref(page + 1, nextCursor) : null;
 const prevHref = hasPrev ? pageHref(page - 1, prevCursor, 'prev') : null;
 
-/** The three result buckets and their counts, from the run summary: no query needed. */
-const gatedCount = run ? [...GATED_STATUSES].reduce((a, s) => a + (run.byStatus[s] ?? 0), 0) : 0;
-const counts = run ? { ok: run.ok, gated: gatedCount, down: run.probed - run.ok - gatedCount, all: run.probed } : null;
-type Bucket = 'ok' | 'gated' | 'down' | 'all';
-const activeBucket: Bucket = status === 'ok' ? 'ok' : status === '' ? 'all' : status === 'gated' || GATED_STATUSES.has(status) ? 'gated' : 'down';
+/** The result buckets and their counts, from the run summary: no query needed. */
+const sum = (set: ReadonlySet<string>) => (run ? [...set].reduce((a, s) => a + (run.byStatus[s] ?? 0), 0) : 0);
+const gatedCount = sum(GATED_STATUSES);
+const counts = run ? { ok: run.ok, access: sum(ACCESS_STATUSES), setup: sum(SETUP_STATUSES), down: run.probed - run.ok - gatedCount, all: run.probed } : null;
+type Bucket = 'ok' | 'access' | 'setup' | 'down' | 'all';
+const BUCKETS: Bucket[] = ['ok', 'access', 'setup', 'down', 'all'];
+const activeBucket: Bucket =
+  status === 'ok' ? 'ok' : status === '' || status === 'gated' ? 'all' : status === 'access' || ACCESS_STATUSES.has(status) ? 'access' : status === 'setup' || SETUP_STATUSES.has(status) ? 'setup' : 'down';
+const inBucket = (b: Bucket, k: string) => (b === 'access' ? ACCESS_STATUSES.has(k) : b === 'setup' ? SETUP_STATUSES.has(k) : b === 'down' ? k !== 'ok' && !GATED_STATUSES.has(k) : false);
 /** The causes of the active bucket, with counts, zero counts left out. */
 const causes: Array<{ key: string; label: string; count: number }> =
   activeBucket === 'ok' || activeBucket === 'all' || !run
     ? []
     : Object.entries(STATUS_LABEL)
-        .filter(([k]) => k !== 'ok' && (activeBucket === 'gated') === GATED_STATUSES.has(k))
+        .filter(([k]) => inBucket(activeBucket, k))
         .map(([k, v]) => ({ key: k, label: v, count: run.byStatus[k] ?? 0 }))
         .filter((c) => c.count > 0)
         .sort((a, b) => b.count - a.count);
@@ -62,8 +66,10 @@ const total =
       : status === 'down'
         ? counts!.down
         : status === 'gated'
-          ? counts!.gated
-          : (run.byStatus[status] ?? 0)
+          ? gatedCount
+          : status === 'access' || status === 'setup'
+            ? counts![status]
+            : (run.byStatus[status] ?? 0)
     : null;
 const pages = total !== null ? Math.max(1, Math.ceil(total / perPage)) : null;
 const protocols = run ? Object.keys(run.protocols).filter((v) => v !== 'unknown').sort().reverse() : [];
@@ -90,7 +96,7 @@ const bucketHref = (b: Bucket) => withParams({ status: b });
 const transportLabel: Record<string, string> = { 'streamable-http': 'streamable http', sse: 'sse', stdio: 'stdio (npm, PyPI)' };
 const active: Array<{ label: string; href: string }> = [];
 if (q) active.push({ label: `“${q}”`, href: withParams({ q: null }) });
-if (statusParam && statusParam !== 'ok') active.push({ label: statusParam === 'all' ? 'every result' : statusParam === 'gated' ? 'needs something' : statusParam === 'down' ? 'down or broken' : label(statusParam), href: withParams({ status: null }) });
+if (statusParam && statusParam !== 'ok') active.push({ label: statusParam === 'all' ? 'every result' : statusParam === 'gated' ? 'needs auth or setup' : statusParam === 'access' ? 'needs auth' : statusParam === 'setup' ? 'needs setup' : statusParam === 'down' ? 'down or broken' : label(statusParam), href: withParams({ status: null }) });
 if (host) active.push({ label: host, href: withParams({ host: null }) });
 if (protocol) active.push({ label: `protocol ${protocol}`, href: withParams({ protocol: null }) });
 if (transport) active.push({ label: transportLabel[transport] ?? transport, href: withParams({ transport: null }) });
@@ -114,8 +120,8 @@ function sortHref(key: SortKey): string {
 function arrow(key: SortKey): string {
   return /-asc$|^latency$|^name$|^status$|^host$|^protocol$/.test(key) ? '▲' : '▼';
 }
-const bucketTitle: Record<Bucket, string> = { ok: 'Alive servers', gated: 'Servers that need something', down: 'Down or broken servers', all: 'Every server' };
-const heading = host ? host : q ? `Servers matching “${q}”` : status === 'ok' || status === '' || status === 'gated' || status === 'down' ? bucketTitle[activeBucket] : `${label(status)} servers`;
+const bucketTitle: Record<Bucket, string> = { ok: 'Alive servers', access: 'Servers that need auth', setup: 'Servers that need setup', down: 'Down or broken servers', all: 'Every server' };
+const heading = host ? host : q ? `Servers matching “${q}”` : status === 'gated' ? 'Servers that need auth or setup' : ['ok', '', 'access', 'setup', 'down'].includes(status) ? bucketTitle[activeBucket] : `${label(status)} servers`;
 const title = host ? `Servers on ${host}` : heading;
 // Every sort, filter and page is its own database read, so crawlers index only the first page of the default view.
 const robots = filtered || page > 1 || sort !== DEFAULT_SORT ? 'noindex, follow' : undefined;
@@ -139,17 +145,17 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
   </form>
 
   <nav class="segments" aria-label="Result">
-    {(['ok', 'gated', 'down', 'all'] as Bucket[]).map((b) => (
+    {BUCKETS.map((b) => (
       <a class={`seg ${b}${activeBucket === b ? ' active' : ''}`} href={bucketHref(b)} rel="nofollow" aria-current={activeBucket === b ? 'true' : undefined}>
-        <span class="seg-label">{b === 'ok' ? 'Alive' : b === 'gated' ? 'Needs something' : b === 'down' ? 'Down' : 'All'}</span>
+        <span class="seg-label">{b === 'ok' ? 'Alive' : b === 'access' ? 'Needs auth' : b === 'setup' ? 'Needs setup' : b === 'down' ? 'Down' : 'All'}</span>
         {counts && <span class="seg-count">{num(counts[b])}</span>}
       </a>
     ))}
   </nav>
 
   {causes.length > 0 && (
-    <nav class="chips causes" aria-label={activeBucket === 'gated' ? 'What the server needs' : 'Why the server is down'}>
-      <span class="chips-label">{activeBucket === 'gated' ? 'needs' : 'cause'}</span>
+    <nav class="chips causes" aria-label={activeBucket === 'down' ? 'Why the server is down' : 'What the server needs'}>
+      <span class="chips-label">{activeBucket === 'down' ? 'cause' : 'needs'}</span>
       <a class={`chip${status === activeBucket ? ' active' : ''}`} href={bucketHref(activeBucket)} rel="nofollow">any</a>
       {causes.map((c) => (
         <a class={`chip${status === c.key ? ' active' : ''}`} href={withParams({ status: c.key })} rel="nofollow">{c.label} <b>{num(c.count)}</b></a>
@@ -260,7 +266,7 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
   .search input { padding: 0.8rem 1rem; font-size: 0.95rem; }
 
   /* The result as a segmented control: one row, counts under the labels. */
-  .segments { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-top: 12px; border: 1px solid var(--line); background: var(--line); }
+  .segments { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; margin-top: 12px; border: 1px solid var(--line); background: var(--line); }
   .seg { display: flex; flex-direction: column; gap: 4px; padding: 0.7rem 0.9rem; background: var(--surface); color: var(--ink-muted); text-decoration: none; min-width: 0; }
   .seg-label { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .seg-count { font-family: var(--font-display); font-size: 1.15rem; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; color: var(--ink); }
@@ -268,8 +274,8 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
   .seg.active { box-shadow: inset 0 -3px 0 var(--ink-faint); }
   .seg.ok.active { box-shadow: inset 0 -3px 0 var(--up); background: var(--up-soft); }
   .seg.ok.active .seg-count { color: var(--up); }
-  .seg.gated.active { box-shadow: inset 0 -3px 0 var(--gated); background: var(--gated-soft); }
-  .seg.gated.active .seg-count { color: var(--gated); }
+  .seg.access.active, .seg.setup.active { box-shadow: inset 0 -3px 0 var(--gated); background: var(--gated-soft); }
+  .seg.access.active .seg-count, .seg.setup.active .seg-count { color: var(--gated); }
   .seg.down.active { box-shadow: inset 0 -3px 0 var(--accent); background: var(--accent-soft); }
   .seg.down.active .seg-count { color: var(--accent-strong); }
   .seg.all.active { background: var(--panel); }
@@ -312,6 +318,8 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
 
   @media (width <= 760px) {
     .segments { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .seg.all { grid-column: 1 / -1; flex-direction: row; justify-content: space-between; align-items: baseline; }
+    .seg-label { white-space: normal; }
     .seg { padding: 0.6rem 0.75rem; }
     .more-form { grid-template-columns: 1fr; }
     .sort-mobile { display: flex; }

@@ -32,10 +32,15 @@ const { values: args } = parseArgs({
      * failed or bad import stays in the database for good: on 2026-10-14 one left 14 000 rows on "timeout".
      */
     'd1-status': { type: 'string' },
-    /** How many drifted rows to repair in one run: each full row costs about twelve index writes of the daily budget. */
-    'repair-limit': { type: 'string', default: '2000' },
-    /** How many stale rows to delete in one run. */
-    'delete-limit': { type: 'string', default: '600' },
+    /**
+     * The daily write budget the import may use. D1's free tier allows 100 000 rows written a day,
+     * and every index entry counts as a row; the rest is for the watches and the credentials.
+     */
+    'write-budget': { type: 'string', default: '85000' },
+    /** At most this many drifted rows repaired in one run, whatever the budget leaves. */
+    'repair-limit': { type: 'string', default: '6000' },
+    /** At most this many stale rows deleted in one run. */
+    'delete-limit': { type: 'string', default: '1000' },
     'rows-per-insert': { type: 'string', default: '40' }
   }
 });
@@ -179,8 +184,16 @@ const rank = (s: ServerRow) => (s.status === 'ok' ? 0 : GATED_STATUSES.has(s.sta
 const drifted = d1Status.size
   ? allServers.filter((s) => !written.has(s.name) && d1Status.has(s.name) && d1Status.get(s.name) !== s.status).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
   : [];
-const repaired = drifted.slice(0, Number(args['repair-limit']));
-const stale = d1Status.size ? [...d1Status.keys()].filter((n) => !currentNames.has(n) && !removed.includes(n)).slice(0, Number(args['delete-limit'])) : [];
+/**
+ * Writes per row, counted the way D1 counts them (the row plus one entry per index touched,
+ * plus the FTS triggers): a new or whole row about 15, a narrow update about 8, a delete about 13,
+ * a history row 2, a host row 3. The repair takes what the ordinary import leaves of the budget.
+ */
+const ordinaryWrites = newServers.length * 15 + changedServers.length * 8 + probeRows.length * 2 + hostRows.length * 3 + removed.length * 13 + 2;
+const left = Math.max(0, Number(args['write-budget']) - ordinaryWrites);
+const staleAll = d1Status.size ? [...d1Status.keys()].filter((n) => !currentNames.has(n) && !removed.includes(n)) : [];
+const stale = staleAll.slice(0, Math.min(Number(args['delete-limit']), Math.floor(left / 13 / 4)));
+const repaired = drifted.slice(0, Math.min(Number(args['repair-limit']), Math.floor((left - stale.length * 13) / 15)));
 const repairStatements = [
   ...multiInsert('servers', serverColumns, repaired.map(serverValues), 'INSERT', upsertSuffix('name', serverColumns)),
   ...multiInsert('probes', ['name', 'probed_at', 'status', 'init_ms', 'tool_count', 'tools_tokens', 'claude_tokens'], repaired.map((s) => [s.name, s.probedAt, s.status, s.initMs, s.toolCount, s.toolsTokens, s.claudeTokens]), 'INSERT OR IGNORE'),
@@ -199,7 +212,7 @@ const statements = [
   // Last, so the ordinary import is complete even when the write budget runs out here.
   ...repairStatements
 ];
-if (d1Status.size) console.error(`drift against the database: ${drifted.length} rows differ in status, ${repaired.length} repaired in this run, ${stale.length} stale rows deleted (${[...d1Status.keys()].filter((n) => !currentNames.has(n)).length} stale in all)`);
+if (d1Status.size) console.error(`drift against the database: ${drifted.length} rows differ in status, ${repaired.length} repaired in this run, ${stale.length} of ${staleAll.length} stale rows deleted; about ${ordinaryWrites} writes for the ordinary import, ${repaired.length * 15 + stale.length * 13} for the repair, budget ${args['write-budget']}`);
 await writeFile(args.out, statements.join('\n') + '\n');
 await writeFile(`${args.in}/changed.json`, JSON.stringify({ changed: servers.map((s) => s.name), removed }));
 console.error(

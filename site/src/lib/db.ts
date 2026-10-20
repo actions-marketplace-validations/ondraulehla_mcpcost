@@ -320,8 +320,19 @@ function cursorCondition(sort: SortSpec, cursor: Cursor, back: boolean): { sql: 
   };
 }
 
-/** Page numbers go this far by OFFSET (at most 1 000 rows read); beyond it the list moves by cursor. */
-export const MAX_NUMBERED_PAGE = 20;
+/** The gated statuses split in two: the server wants a key or a payment, or it wants setup (env, args, network, a newer protocol). */
+export const ACCESS_STATUSES: ReadonlySet<string> = new Set(['auth', 'payment']);
+export const SETUP_STATUSES: ReadonlySet<string> = new Set([...GATED_STATUSES].filter((s) => !ACCESS_STATUSES.has(s)));
+
+/**
+ * Page numbers go this far by OFFSET, which reads every row it skips: at most
+ * 50 000 rows for one request, one percent of the daily read budget. Every list
+ * on the board has fewer pages than this, so every page has a number; the cursor
+ * path below stays for a list that would grow past it. Crawlers do not walk the
+ * numbers: the links carry rel=nofollow, robots.txt keeps them off /servers?, and
+ * the scrapers that ignore both are blocked before the Worker.
+ */
+export const MAX_NUMBERED_PAGE = 1000;
 
 export interface ListQuery {
   q?: string;
@@ -397,6 +408,10 @@ export async function listServers(query: ListQuery): Promise<ListResult> {
   } else if (query.status === 'gated') {
     // Reachable, but the probe got no tool list: auth, payment, a newer protocol, or a package that needs env, args or the network.
     where.push(`status IN (${[...GATED_STATUSES].map((s) => `'${s}'`).join(', ')})`);
+  } else if (query.status === 'access') {
+    where.push(`status IN (${[...ACCESS_STATUSES].map((s) => `'${s}'`).join(', ')})`);
+  } else if (query.status === 'setup') {
+    where.push(`status IN (${[...SETUP_STATUSES].map((s) => `'${s}'`).join(', ')})`);
   } else if (query.status) {
     where.push('status = ?');
     binds.push(query.status);
