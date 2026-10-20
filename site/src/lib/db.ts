@@ -395,7 +395,8 @@ export function ftsQuery(q: string): string | null {
  * reads every row it skips, so they stop at MAX_NUMBERED_PAGE; from there the
  * list continues by cursor and a page costs its own rows only.
  */
-export async function listServers(query: ListQuery): Promise<ListResult> {
+/** The filter part of a list query, shared by the page and its count. */
+function listWhere(query: ListQuery): { where: string[]; binds: unknown[] } {
   const where: string[] = [];
   const binds: unknown[] = [];
   const match = query.q ? ftsQuery(query.q) : null;
@@ -430,6 +431,24 @@ export async function listServers(query: ListQuery): Promise<ListResult> {
   }
   const sort = SORTS[query.sort ?? DEFAULT_SORT] ?? SORTS[DEFAULT_SORT];
   if (sort.where) where.push(sort.where);
+  return { where, binds };
+}
+
+/**
+ * How many servers a filtered list has. It reads every matching row (a text search
+ * reads only the matches through the FTS index), so the page asks for it only when
+ * the run summary cannot answer, and the edge keeps the page for hours.
+ */
+export async function countServers(query: ListQuery): Promise<number> {
+  const { where, binds } = listWhere(query);
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const row = await db().prepare(`SELECT count(*) AS n FROM servers ${whereSql}`).bind(...binds).first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+export async function listServers(query: ListQuery): Promise<ListResult> {
+  const { where, binds } = listWhere(query);
+  const sort = SORTS[query.sort ?? DEFAULT_SORT] ?? SORTS[DEFAULT_SORT];
   const perPage = Math.min(200, Math.max(10, query.perPage ?? 50));
   const cursor = query.cursor ?? null;
   const back = Boolean(cursor && query.back);
