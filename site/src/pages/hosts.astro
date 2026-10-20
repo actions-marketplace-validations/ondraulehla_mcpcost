@@ -3,7 +3,8 @@ import Layout from '../layouts/Layout.astro';
 import { latestRun, listHosts } from '../lib/db';
 import { num, pct, tokens } from '../lib/format';
 
-const [hosts, run] = await Promise.all([listHosts(500), latestRun()]);
+const run = await latestRun();
+const hosts = await listHosts(500, run);
 const total = run?.probed ?? hosts.reduce((a, h) => a + h.servers, 0);
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=3600');
 ---

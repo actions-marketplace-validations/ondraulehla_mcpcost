@@ -1,7 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import Pager from '../components/Pager.astro';
-import { latestRun, listServers, countServers, SORTS, DEFAULT_SORT, MAX_NUMBERED_PAGE, decodeCursor, encodeCursor, ACCESS_STATUSES, SETUP_STATUSES, type SortKey } from '../lib/db';
+import { latestRun, listServers, countServers, tokenBand, SORTS, DEFAULT_SORT, MAX_NUMBERED_PAGE, decodeCursor, encodeCursor, ACCESS_STATUSES, SETUP_STATUSES, type SortKey } from '../lib/db';
 import { bucket, label, ms, num, tokens, STATUS_LABEL } from '../lib/format';
 import { GATED_STATUSES } from '../../../packages/mcpcost/src/types.ts';
 
@@ -14,6 +14,14 @@ const status = statusParam === 'all' ? '' : defaultView ? 'ok' : statusParam;
 const host = p.get('host') ?? '';
 const protocol = p.get('protocol') ?? '';
 const transport = p.get('transport') ?? '';
+/** Bands of the shown token count; the histogram edges 1 000, 5 000 and 20 000 give their counts. */
+const BANDS = [
+  { key: '-1000', label: 'under 1k', edges: [0, 1000] },
+  { key: '1000-5000', label: '1k to 5k', edges: [1000, 5000] },
+  { key: '5000-20000', label: '5k to 20k', edges: [5000, 20000] },
+  { key: '20000-', label: '20k and more', edges: [20000, Infinity] }
+];
+const tokensParam = BANDS.some((b) => b.key === p.get('tokens')) ? p.get('tokens')! : '';
 const sort = (Object.keys(SORTS).includes(p.get('sort') ?? '') ? p.get('sort') : DEFAULT_SORT) as SortKey;
 // Pages 1 to MAX_NUMBERED_PAGE come by number; beyond that `c` is a cursor, `d=prev` goes back, `p` is the page label.
 const cursor = decodeCursor(p.get('c'));
@@ -21,11 +29,11 @@ const back = p.get('d') === 'prev';
 const requestedPage = cursor ? Math.max(1, Number(p.get('p') ?? '1') || 1) : Math.min(MAX_NUMBERED_PAGE, Math.max(1, Number(p.get('page') ?? '1') || 1));
 
 // A filtered list has no count in the run summary; one COUNT over the same condition gives it, so the pager knows its last page.
-const needsCount = Boolean(q || host || protocol || transport || SORTS[sort].where);
+const needsCount = Boolean(q || host || protocol || transport || tokensParam || SORTS[sort].where);
 const [{ rows, hasNext, hasPrev, perPage, page, nextCursor, prevCursor }, run, counted] = await Promise.all([
-  listServers({ q, status, host, protocol, transport, sort, page: requestedPage, cursor, back }),
+  listServers({ q, status, host, protocol, transport, tokens: tokensParam, sort, page: requestedPage, cursor, back }),
   latestRun(),
-  needsCount ? countServers({ q, status, host, protocol, transport, sort }) : Promise.resolve(null)
+  needsCount ? countServers({ q, status, host, protocol, transport, tokens: tokensParam, sort }) : Promise.resolve(null)
 ]);
 function pageHref(n: number, c: { value: string | number | null; name: string } | null, direction?: 'prev'): string {
   const u = new URL(Astro.url);
@@ -78,16 +86,27 @@ const total =
       : null;
 const pages = total !== null ? Math.max(1, Math.ceil(total / perPage)) : null;
 const protocols = run ? Object.keys(run.protocols).filter((v) => v !== 'unknown').sort().reverse() : [];
+/** How many alive servers each band holds, from the run summary: the sum of the histogram bins between its edges. */
+const bandCounts = run?.tokenBands ?? run?.claudeTokens?.histogram ?? null;
+const bandCount = (edges: number[]): number | null => {
+  if (!bandCounts) return null;
+  const { edges: e, bins } = bandCounts;
+  return bins.reduce((a, n, i) => ((i === 0 ? 0 : e[i - 1]) >= edges[0] && (i < e.length ? e[i] : Infinity) <= edges[1] ? a + n : a), 0);
+};
+const bandLabel = (key: string) => BANDS.find((b) => b.key === key)?.label ?? key;
+/** The hosts the host field offers: the biggest ones of the run. */
+const hostOptions = (run?.topHosts ?? []).slice(0, 60).map((h) => h.host);
 
 // The data changes once a day; three hours at the edge keeps repeat views off the database.
 Astro.response.headers.set('cache-control', 'public, max-age=120, s-maxage=10800');
 
-const filtered = Boolean(q || statusParam || host || protocol || transport);
+const filtered = Boolean(q || statusParam || host || protocol || transport || tokensParam);
 
-/** The current URL with some parameters changed (null removes one), the page reset. */
+/** The current URL with some parameters changed (null removes one), the page reset. A filter added to the default view keeps it on alive servers. */
 function withParams(changes: Record<string, string | null>): string {
   const u = new URL(Astro.url);
   for (const k of ['page', 'c', 'd', 'p']) u.searchParams.delete(k);
+  if (defaultView && !('status' in changes)) u.searchParams.set('status', 'ok');
   for (const [k, v] of Object.entries(changes)) {
     if (v === null || v === '') u.searchParams.delete(k);
     else u.searchParams.set(k, v);
@@ -105,6 +124,7 @@ if (statusParam && statusParam !== 'ok') active.push({ label: statusParam === 'a
 if (host) active.push({ label: host, href: withParams({ host: null }) });
 if (protocol) active.push({ label: `protocol ${protocol}`, href: withParams({ protocol: null }) });
 if (transport) active.push({ label: transportLabel[transport] ?? transport, href: withParams({ transport: null }) });
+if (tokensParam) active.push({ label: `${bandLabel(tokensParam)} tokens`, href: withParams({ tokens: null }) });
 
 /** Column headers: first click sorts the natural way (numbers high first, text A to Z), the second click flips. */
 const columns: Array<{ label: string; first: SortKey; second: SortKey; num?: boolean }> = [
@@ -145,6 +165,7 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
     {host && <input type="hidden" name="host" value={host} />}
     {protocol && <input type="hidden" name="protocol" value={protocol} />}
     {transport && <input type="hidden" name="transport" value={transport} />}
+    {tokensParam && <input type="hidden" name="tokens" value={tokensParam} />}
     {sort !== DEFAULT_SORT && <input type="hidden" name="sort" value={sort} />}
     <button type="submit">Search</button>
   </form>
@@ -168,13 +189,29 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
     </nav>
   )}
 
-  <details class="more" open={Boolean(protocol || transport) || undefined}>
-    <summary>More filters{(protocol || transport) && <span class="muted"> · {[protocol && `protocol ${protocol}`, transport && transportLabel[transport]].filter(Boolean).join(' · ')}</span>}</summary>
+  {(activeBucket === 'ok' || activeBucket === 'all') && (
+    <nav class="chips bands" aria-label="Tokens the tool list costs">
+      <span class="chips-label">tokens</span>
+      <a class={`chip${tokensParam ? '' : ' active'}`} href={withParams({ tokens: null })} rel="nofollow">any</a>
+      {BANDS.map((b) => (
+        <a class={`chip${tokensParam === b.key ? ' active' : ''}`} href={withParams({ tokens: b.key })} rel="nofollow">{b.label}{bandCount(b.edges) !== null && <b>{num(bandCount(b.edges)!)}</b>}</a>
+      ))}
+    </nav>
+  )}
+
+  <details class="more" open={Boolean(host || protocol || transport) || undefined}>
+    <summary>More filters{(host || protocol || transport) && <span class="muted"> · {[host, protocol && `protocol ${protocol}`, transport && transportLabel[transport]].filter(Boolean).join(' · ')}</span>}</summary>
     <form class="more-form" method="get" action="/servers">
       {q && <input type="hidden" name="q" value={q} />}
-      {statusParam && <input type="hidden" name="status" value={statusParam} />}
-      {host && <input type="hidden" name="host" value={host} />}
+      {(statusParam || defaultView) && <input type="hidden" name="status" value={statusParam || 'ok'} />}
+      {tokensParam && <input type="hidden" name="tokens" value={tokensParam} />}
       {sort !== DEFAULT_SORT && <input type="hidden" name="sort" value={sort} />}
+      <label>Host
+        <input type="text" name="host" value={host} list="host-options" placeholder="any" autocomplete="off" spellcheck="false" />
+        <datalist id="host-options">
+          {hostOptions.map((h) => <option value={h} />)}
+        </datalist>
+      </label>
       <label>Protocol
         <select name="protocol">
           <option value="">any</option>
@@ -298,16 +335,16 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
   .chip.on:hover .x { color: var(--accent); }
   .chip.clear { border-style: dashed; color: var(--accent); }
 
-  /* Protocol and transport, folded away until needed. */
+  /* Host, protocol and transport, folded away until needed. */
   .more { margin-top: 10px; }
   .more summary { cursor: pointer; font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); list-style: none; display: inline-flex; align-items: center; gap: 8px; }
   .more summary::-webkit-details-marker { display: none; }
   .more summary::before { content: '+'; display: inline-block; width: 1em; color: var(--accent); }
   .more[open] summary::before { content: '−'; }
   .more summary .muted { text-transform: none; letter-spacing: 0.04em; }
-  .more-form { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) auto; gap: 1px; margin-top: 8px; border: 1px solid var(--line); background: var(--line); max-width: 640px; }
+  .more-form { display: grid; grid-template-columns: minmax(180px, 1.4fr) minmax(150px, 1fr) minmax(150px, 1fr) auto; gap: 1px; margin-top: 8px; border: 1px solid var(--line); background: var(--line); max-width: 820px; }
   .more-form label { display: flex; flex-direction: column; gap: 6px; padding: 0.625rem 0.75rem 0.75rem; background: var(--surface); font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-faint); }
-  .more-form select { width: 100%; min-width: 0; }
+  .more-form select, .more-form input { width: 100%; min-width: 0; }
   .more-form button { border: 0; padding: 0 1.1rem; background: var(--surface); color: var(--accent); font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.15em; text-transform: uppercase; cursor: pointer; }
   .more-form button:hover { background: var(--ink); color: var(--surface); }
 

@@ -22,8 +22,6 @@ const { values: args } = parseArgs({
     in: { type: 'string', default: 'data/latest' },
     out: { type: 'string', default: 'data/latest/import.sql' },
     previous: { type: 'string' },
-    /** hosts.json of the previous run. Only host rows that changed are written. */
-    'previous-hosts': { type: 'string' },
     /**
      * The board's own state: name and status of every row, from
      * `wrangler d1 execute mcp-pulse --remote --json --command "SELECT name, status FROM servers"`.
@@ -71,9 +69,6 @@ if (args['d1-status'] && existsSync(args['d1-status'])) {
   for (const r of rows) d1Status.set(r.name, r.status);
 }
 const summary = JSON.parse(await readFile(`${args.in}/summary.json`, 'utf8')) as { probedAt: string };
-const hosts = JSON.parse(await readFile(`${args.in}/hosts.json`, 'utf8')) as Array<{
-  host: string; servers: number; byStatus: Record<string, number>; uniqueToolsets: number; medianTokens: number;
-}>;
 
 type Value = string | number | boolean | null | undefined | string[] | object;
 function lit(v: Value): string {
@@ -162,17 +157,7 @@ const probeRows = servers
     return !p || p.status !== s.status || p.toolCount !== s.toolCount || p.toolsTokens !== s.toolsTokens || p.claudeTokens !== s.claudeTokens;
   })
   .map((s) => [s.name, s.probedAt, s.status, s.initMs, s.toolCount, s.toolsTokens, s.claudeTokens]);
-const dead = (b: Record<string, number>) => Object.entries(b).filter(([k]) => k !== 'ok' && !GATED_STATUSES.has(k)).reduce((a, [, n]) => a + n, 0);
-const changedHosts = new Set(servers.map((s) => s.host));
-// Hosts are compared without the run date, which would differ every day.
-const hostKey = (h: (typeof hosts)[number]) => JSON.stringify({ ...h, probedAt: undefined });
-const previousHosts = args['previous-hosts'] && existsSync(args['previous-hosts'])
-  ? new Map((JSON.parse(await readFile(args['previous-hosts'], 'utf8')) as typeof hosts).map((h) => [h.host, hostKey(h)]))
-  : null;
-const hostRows = hosts
-  .filter((h) => !previous || changedHosts.has(h.host))
-  .filter((h) => !previousHosts || previousHosts.get(h.host) !== hostKey(h))
-  .map((h) => [h.host, h.servers, h.byStatus.ok ?? 0, (h.byStatus.auth ?? 0) + (h.byStatus.payment ?? 0) + (h.byStatus.newer_protocol ?? 0), dead(h.byStatus), h.uniqueToolsets, h.medianTokens, summary.probedAt]);
+// The hosts table is not written any more: the hosts page reads the biggest hosts from the run summary.
 
 /**
  * Rows the database holds with another status than this run found, outside the
@@ -186,14 +171,14 @@ const drifted = d1Status.size
   : [];
 /**
  * Writes per row, counted the way D1 counts them (the row plus one entry per index touched,
- * plus the FTS triggers): a new or whole row about 15, a narrow update about 8, a delete about 13,
- * a history row 2, a host row 3. The repair takes what the ordinary import leaves of the budget.
+ * plus the FTS triggers): with the seven indexes left a new or whole row costs about 11, a narrow
+ * update about 6, a delete about 10, a history row 2. The repair takes what the ordinary import leaves.
  */
-const ordinaryWrites = newServers.length * 15 + changedServers.length * 8 + probeRows.length * 2 + hostRows.length * 3 + removed.length * 13 + 2;
+const ordinaryWrites = newServers.length * 11 + changedServers.length * 6 + probeRows.length * 2 + removed.length * 10 + 2;
 const left = Math.max(0, Number(args['write-budget']) - ordinaryWrites);
 const staleAll = d1Status.size ? [...d1Status.keys()].filter((n) => !currentNames.has(n) && !removed.includes(n)) : [];
-const stale = staleAll.slice(0, Math.min(Number(args['delete-limit']), Math.floor(left / 13 / 4)));
-const repaired = drifted.slice(0, Math.min(Number(args['repair-limit']), Math.floor((left - stale.length * 13) / 15)));
+const stale = staleAll.slice(0, Math.min(Number(args['delete-limit']), Math.floor(left / 10 / 4)));
+const repaired = drifted.slice(0, Math.min(Number(args['repair-limit']), Math.floor((left - stale.length * 10) / 11)));
 const repairStatements = [
   ...multiInsert('servers', serverColumns, repaired.map(serverValues), 'INSERT', upsertSuffix('name', serverColumns)),
   ...multiInsert('probes', ['name', 'probed_at', 'status', 'init_ms', 'tool_count', 'tools_tokens', 'claude_tokens'], repaired.map((s) => [s.name, s.probedAt, s.status, s.initMs, s.toolCount, s.toolsTokens, s.claudeTokens]), 'INSERT OR IGNORE'),
@@ -205,18 +190,16 @@ const statements = [
   ...serverStatements,
   ...multiInsert('probes', ['name', 'probed_at', 'status', 'init_ms', 'tool_count', 'tools_tokens', 'claude_tokens'], probeRows, 'INSERT OR IGNORE'),
   ...(removed.length ? [`DELETE FROM servers WHERE name IN (${removed.map(lit).join(',')});`] : []),
-  ...(previous ? [] : ['DELETE FROM hosts;']),
-  ...multiInsert('hosts', ['host', 'servers', 'ok', 'auth', 'dead', 'unique_toolsets', 'median_tokens', 'probed_at'], hostRows),
   // Keep 90 days of history so the free tier database stays small.
   `DELETE FROM probes WHERE probed_at < ${lit(new Date(Date.now() - 90 * 86_400_000).toISOString())};`,
   // Last, so the ordinary import is complete even when the write budget runs out here.
   ...repairStatements
 ];
-if (d1Status.size) console.error(`drift against the database: ${drifted.length} rows differ in status, ${repaired.length} repaired in this run, ${stale.length} of ${staleAll.length} stale rows deleted; about ${ordinaryWrites} writes for the ordinary import, ${repaired.length * 15 + stale.length * 13} for the repair, budget ${args['write-budget']}`);
+if (d1Status.size) console.error(`drift against the database: ${drifted.length} rows differ in status, ${repaired.length} repaired in this run, ${stale.length} of ${staleAll.length} stale rows deleted; about ${ordinaryWrites} writes for the ordinary import, ${repaired.length * 11 + stale.length * 10} for the repair, budget ${args['write-budget']}`);
 await writeFile(args.out, statements.join('\n') + '\n');
 await writeFile(`${args.in}/changed.json`, JSON.stringify({ changed: servers.map((s) => s.name), removed }));
 console.error(
   previous
-    ? `wrote ${statements.length} statements: ${newServers.length} new and ${changedServers.length} changed of ${allServers.length} servers, ${removed.length} removed, ${hostRows.length} hosts touched, to ${args.out}`
-    : `wrote ${statements.length} statements for ${servers.length} servers and ${hosts.length} hosts to ${args.out}`
+    ? `wrote ${statements.length} statements: ${newServers.length} new and ${changedServers.length} changed of ${allServers.length} servers, ${removed.length} removed, to ${args.out}`
+    : `wrote ${statements.length} statements for ${servers.length} servers to ${args.out}`
 );

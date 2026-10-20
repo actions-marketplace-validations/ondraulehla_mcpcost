@@ -107,11 +107,15 @@ export interface RunSummary {
     /** Alive servers per cost band: bins[i] holds counts below edges[i]; the last bin is the rest. */
     histogram?: { edges: number[]; bins: number[] };
   };
+  /** Alive servers per band of the number the board shows (the exact count, else the estimate); runs since 2026-10-21. */
+  tokenBands?: { edges: number[]; bins: number[] };
   /** Exact Gemini counts, present once a run had a Gemini key. */
   geminiTokens?: TokenStats & { model?: string; counted: number; refused: number };
   toolCount: { median: number; p90: number; max: number };
   initMs: { median: number; p90: number };
   hosts: number;
+  /** The 500 biggest hosts, from the run that wrote them (runs since 2026-10-21); older runs have the hosts table. */
+  topHosts?: Array<{ host: string; servers: number; ok: number; gated: number; dead: number; uniqueToolsets: number; medianTokens: number }>;
   heaviest: Array<{ name: string; toolCount: number; toolsTokens: number; claudeTokens?: number; claudeTokensCc?: number; host: string }>;
   /** Package (stdio) servers on the board, and how many of them this run probed. */
   stdioProbed?: number;
@@ -340,6 +344,8 @@ export interface ListQuery {
   host?: string;
   protocol?: string;
   transport?: string;
+  /** A band of the shown token count, `lo-hi` with either end empty: `-1000`, `1000-5000`, `20000-`. */
+  tokens?: string;
   sort?: SortKey;
   /** Page number, honoured up to MAX_NUMBERED_PAGE when there is no cursor. */
   page?: number;
@@ -395,6 +401,13 @@ export function ftsQuery(q: string): string | null {
  * reads every row it skips, so they stop at MAX_NUMBERED_PAGE; from there the
  * list continues by cursor and a page costs its own rows only.
  */
+/** A token band `lo-hi` (either end may be empty) as numbers, or null when the text is not one. */
+export function tokenBand(text: string | undefined | null): { lo: number; hi: number | null } | null {
+  const m = text?.match(/^(\d{0,7})-(\d{0,7})$/);
+  if (!m || (!m[1] && !m[2])) return null;
+  return { lo: Number(m[1] || 0), hi: m[2] ? Number(m[2]) : null };
+}
+
 /** The filter part of a list query, shared by the page and its count. */
 function listWhere(query: ListQuery): { where: string[]; binds: unknown[] } {
   const where: string[] = [];
@@ -428,6 +441,14 @@ function listWhere(query: ListQuery): { where: string[]; binds: unknown[] } {
   if (query.transport === 'sse' || query.transport === 'streamable-http' || query.transport === 'stdio') {
     where.push('transport = ?');
     binds.push(query.transport);
+  }
+  const band = tokenBand(query.tokens);
+  if (band) {
+    // The number the board shows: the exact count when there is one, else the estimate. Lower edge in, upper edge out.
+    const shown = 'coalesce(claude_tokens, tools_tokens)';
+    where.push(band.hi === null ? `${shown} >= ?` : `${shown} >= ? AND ${shown} < ?`);
+    binds.push(band.lo);
+    if (band.hi !== null) binds.push(band.hi);
   }
   const sort = SORTS[query.sort ?? DEFAULT_SORT] ?? SORTS[DEFAULT_SORT];
   if (sort.where) where.push(sort.where);
@@ -513,7 +534,12 @@ export async function serversInSitemapChunk(chunk: number, size: number): Promis
   return results;
 }
 
-export async function listHosts(limit = 300): Promise<HostRecord[]> {
+/** The biggest hosts: from the run summary when the run carries them, else from the hosts table of older runs. */
+export async function listHosts(limit = 300, run?: RunSummary | null): Promise<HostRecord[]> {
+  const r = run === undefined ? await latestRun() : run;
+  if (r?.topHosts) {
+    return r.topHosts.slice(0, limit).map((h) => ({ host: h.host, servers: h.servers, ok: h.ok, auth: h.gated, dead: h.dead, unique_toolsets: h.uniqueToolsets, median_tokens: h.medianTokens, probed_at: r.probedAt }));
+  }
   const { results } = await db().prepare('SELECT * FROM hosts ORDER BY servers DESC LIMIT ?').bind(limit).all<HostRecord>();
   return results;
 }
