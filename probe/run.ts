@@ -11,6 +11,8 @@ import { fetchRegistry, hostOf, primaryRemote, CLAUDE_MODEL } from '../packages/
 import { probeRemoteRaw } from '../packages/mcpcost/src/core.js';
 import { priceTools } from '../packages/mcpcost/src/probe.js';
 import { createClaudeCounter, payloadHash } from './claude-cache.js';
+import { createGeminiCounter } from './gemini-cache.js';
+import { loadCredentials, saveCredentials, credentialsFor, type CredentialStore, type FileProvider } from '../packages/mcpcost/src/credentials.js';
 import type { ProbeResult, RegistryEntry } from '../packages/mcpcost/src/index.js';
 
 const { values: args } = parseArgs({
@@ -29,14 +31,20 @@ const { values: args } = parseArgs({
     /** count_tokens requests a minute. Small organisations get 100. */
     'claude-rpm': { type: 'string', default: '90' },
     /** Minutes after start when counting stops. Servers left over are counted next run. */
-    'claude-deadline-min': { type: 'string', default: '270' }
+    'claude-deadline-min': { type: 'string', default: '270' },
+    /** Servers tracked on request, outside the registry. Empty string: none. */
+    tracked: { type: 'string', default: 'https://mcpcost.ulehla.dev/api/tracked.json' },
+    /** Credentials for servers that need auth, see packages/mcpcost/src/credentials.ts. A missing file means none. */
+    credentials: { type: 'string' },
+    'gemini-model': { type: 'string', default: 'gemini-3.8-flash' },
+    'gemini-rpm': { type: 'string', default: '60' }
   }
 });
 const started = Date.now();
 
 const sampleSize = Number(args.sample);
 const perHost = Number(args['per-host']);
-const concurrency = Number(args.concurrency);
+let concurrency = Number(args.concurrency);
 const timeoutMs = Number(args.timeout);
 
 interface Target {
@@ -48,11 +56,23 @@ interface Target {
   status: string;
 }
 
+const credentials: CredentialStore | null = args.credentials && existsSync(args.credentials) ? await loadCredentials(args.credentials) : null;
+const providers: FileProvider[] = [];
+if (credentials) console.error(`${Object.keys(credentials.servers).length} servers have credentials (${args.credentials})`);
+
 const claude = await createClaudeCounter({
   apiKey: process.env.ANTHROPIC_API_KEY,
   cachePath: args['claude-cache'],
   model: args['claude-model'],
   rpm: Number(args['claude-rpm']) || 90,
+  deadline: started + (Number(args['claude-deadline-min']) || 270) * 60_000
+});
+
+const gemini = await createGeminiCounter({
+  apiKey: process.env.GEMINI_API_KEY,
+  cachePath: args['claude-cache'],
+  model: args['gemini-model'],
+  rpm: Number(args['gemini-rpm']) || 60,
   deadline: started + (Number(args['claude-deadline-min']) || 270) * 60_000
 });
 
@@ -66,6 +86,23 @@ async function loadRegistry(): Promise<RegistryEntry[]> {
   await mkdir('data/raw', { recursive: true });
   await writeFile(args.cache, JSON.stringify(entries.map((e) => ({ server: e.server, _meta: { 'io.modelcontextprotocol.registry/official': e.meta } }))));
   return entries;
+}
+
+/** The servers tracked on request, as registry-shaped entries with the status "tracked". */
+async function loadTracked(): Promise<RegistryEntry[]> {
+  if (!args.tracked) return [];
+  try {
+    const res = await fetch(args.tracked, { signal: AbortSignal.timeout(15_000), headers: { 'user-agent': 'mcpcost-probe' } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { tracked } = (await res.json()) as { tracked: Array<{ name: string; url: string; transport: 'streamable-http' | 'sse'; submittedAt: string }> };
+    return tracked.map((t) => ({
+      server: { name: t.name, title: t.url.replace(/^https:\/\//, ''), description: 'Tracked on request. Not in the official MCP registry.', remotes: [{ type: t.transport, url: t.url }] },
+      meta: { status: 'tracked', publishedAt: t.submittedAt, updatedAt: t.submittedAt, isLatest: true }
+    }));
+  } catch (e) {
+    console.error(`tracked list not loaded: ${e instanceof Error ? e.message : String(e)}`);
+    return [];
+  }
 }
 
 function mulberry32(seed: number) {
@@ -104,8 +141,8 @@ function pickTargets(entries: RegistryEntry[]): Target[] {
 }
 
 /** Runs probes with a global concurrency limit and at most one in flight per host. */
-async function runAll(targets: Target[]): Promise<Array<Target & { result: ProbeResult; payloadHash?: string }>> {
-  const out: Array<Target & { result: ProbeResult; payloadHash?: string }> = [];
+async function runAll(targets: Target[]): Promise<Array<Target & { result: ProbeResult; payloadHash?: string; withCredentials?: boolean }>> {
+  const out: Array<Target & { result: ProbeResult; payloadHash?: string; withCredentials?: boolean }> = [];
   const busyHosts = new Set<string>();
   const queue = [...targets];
   let done = 0;
@@ -120,15 +157,18 @@ async function runAll(targets: Target[]): Promise<Array<Target & { result: Probe
       const [target] = queue.splice(idx, 1);
       busyHosts.add(target.host);
       try {
-        const { result, tools } = await probeRemoteRaw({ url: target.url, type: target.type }, { timeoutMs });
+        const creds = credentials ? credentialsFor(credentials, target.url) : undefined;
+        if (creds?.authProvider) providers.push(creds.authProvider);
+        const { result, tools } = await probeRemoteRaw({ url: target.url, type: target.type }, { timeoutMs, headers: creds?.headers, authProvider: creds?.authProvider });
         priceTools(result, tools);
         let hash: string | undefined;
         if (result.status === 'ok' && tools.length) {
           hash = payloadHash(tools);
           busyHosts.delete(target.host);
           result.claude = await claude.count(target.name, tools, hash);
+          result.gemini = await gemini.count(target.name, tools, hash);
         }
-        out.push({ ...target, result, payloadHash: hash });
+        out.push({ ...target, result, payloadHash: hash, withCredentials: creds ? true : undefined });
       } finally {
         busyHosts.delete(target.host);
         done++;
@@ -171,13 +211,42 @@ function summarize(rows: Array<Target & { result: ProbeResult }>) {
   };
 }
 
-const entries = await loadRegistry();
+const registryEntries = await loadRegistry();
+const tracked = await loadTracked();
+const known = new Set(registryEntries.map((e) => e.server.name));
+const entries = [...registryEntries, ...tracked.filter((t) => !known.has(t.server.name))];
+if (entries.length > registryEntries.length) {
+  // build-data reads the same file, so the tracked servers must be in it too.
+  await writeFile(args.cache, JSON.stringify(entries.map((e) => ({ server: e.server, _meta: { 'io.modelcontextprotocol.registry/official': e.meta } }))));
+  console.error(`${entries.length - registryEntries.length} tracked servers added to the targets`);
+}
 const targets = pickTargets(entries);
 console.error(`${entries.length} registry entries, ${targets.length} targets, concurrency ${concurrency}, timeout ${timeoutMs}ms`);
-const rows = await runAll(targets);
+let rows = await runAll(targets);
+// A transient fault on the runner's side shows up as a wave of timeouts on servers that answered yesterday.
+// Those get a second, slower attempt; a server that fails twice keeps its timeout.
+const previousStatus = new Map<string, string>();
+if (args['claude-cache'] && existsSync(args['claude-cache'])) {
+  for (const p of JSON.parse(await readFile(args['claude-cache'], 'utf8')) as Array<{ name: string; status: string }>) previousStatus.set(p.name, p.status);
+}
+const LIVE_BEFORE = new Set(['ok', 'auth', 'payment', 'newer_protocol', 'rate_limited']);
+const retry = rows.filter((r) => r.result.status === 'timeout' && LIVE_BEFORE.has(previousStatus.get(r.name) ?? '')).map(({ result: _r, payloadHash: _h, withCredentials: _c, ...t }) => t);
+if (retry.length) {
+  console.error(`${retry.length} servers timed out but answered last time: second attempt`);
+  concurrency = Math.min(concurrency, 4);
+  const again = new Map((await runAll(retry)).map((r) => [r.name, r]));
+  rows = rows.map((r) => again.get(r.name) ?? r);
+  console.error(`  ${[...again.values()].filter((r) => r.result.status !== 'timeout').length} answered on the second attempt`);
+}
 const summary = summarize(rows);
+if (credentials && args.credentials && providers.some((p) => p.changed)) {
+  await saveCredentials(credentials, args.credentials);
+  console.error('credentials: refreshed tokens written back');
+}
 if (claude.enabled) { const c = claude.stats(); console.error(`Claude counts: ${c.counted} servers counted now, ${c.reused} reused from the previous run, ${c.skipped} left for the next run (deadline)`); }
 else console.error('ANTHROPIC_API_KEY is not set: no exact Claude counts in this run.');
+if (gemini.enabled) { const g = gemini.stats(); console.error(`Gemini counts: ${g.counted} servers counted now, ${g.reused} reused from the previous run, ${g.skipped} left for the next run (deadline)`); }
+else console.error('GEMINI_API_KEY is not set: no exact Gemini counts in this run.');
 const stamp = new Date().toISOString().slice(0, 10);
 await mkdir('data/samples', { recursive: true });
 const file = args.out ?? `data/samples/probe-${stamp}${args.all ? '-all' : `-n${targets.length}`}.json`;

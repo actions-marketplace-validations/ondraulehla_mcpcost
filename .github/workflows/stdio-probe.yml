@@ -20,6 +20,8 @@ concurrency:
   cancel-in-progress: false
 permissions:
   contents: read
+  # gh run download of the derived-packages artifact
+  actions: read
 jobs:
   image:
     runs-on: ubuntu-latest
@@ -58,11 +60,20 @@ jobs:
       - run: docker load < image.tar.gz
       - name: Download the registry
         run: node --import tsx probe/fetch-registry.ts
+      - name: Fetch the packages derived for servers that need auth
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p data/cache
+          for id in $(gh run list --workflow "Daily probe" --limit 10 --json databaseId -q '.[].databaseId'); do
+            if gh run download "$id" --name "derived-$id" --dir data/cache 2>/dev/null; then echo "derived packages from run $id"; break; fi
+          done
+          d=$(find data/cache -name derived-packages.json | head -1); test -n "$d" && { [ "$d" = data/cache/derived-packages.json ] || cp "$d" data/cache/derived-packages.json; } || echo "::notice::No derived packages yet."
       - name: Probe this part of today's shard
         run: |
           shard="${{ inputs.shard }}"; [ -z "$shard" ] && shard=$(( $(date -u +%j) % 7 ))
           sample="${{ inputs.sample }}"
-          node --import tsx probe/stdio-run.ts --kind npm,pypi --shard "$shard" --part "${{ matrix.part }}/20" ${sample:+--sample "$sample"} --concurrency 2 --out "data/raw/stdio-part-${{ matrix.part }}.json"
+          node --import tsx probe/stdio-run.ts --kind npm,pypi --shard "$shard" --part "${{ matrix.part }}/20" ${sample:+--sample "$sample"} --derived data/cache/derived-packages.json --concurrency 2 --out "data/raw/stdio-part-${{ matrix.part }}.json"
       - uses: actions/upload-artifact@v4
         with:
           name: stdio-part-${{ matrix.part }}

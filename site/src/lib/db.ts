@@ -36,6 +36,22 @@ export interface ServerRecord {
   claude_model: string | null;
   claude_measured_at: string | null;
   claude_error: string | null;
+  /** Exact count from the Gemini countTokens endpoint. */
+  gemini_tokens: number | null;
+  gemini_model: string | null;
+  gemini_measured_at: string | null;
+  gemini_error: string | null;
+  /** 1 when the daily probe used stored credentials for this server. */
+  measured_with_credentials: number | null;
+  /** For a server that needs auth: the publisher's open-source package and its tool set, measured in a container. */
+  derived_package: string | null;
+  derived_registry: string | null;
+  derived_status: string | null;
+  derived_probed_at: string | null;
+  derived_tool_count: number | null;
+  derived_tools_tokens: number | null;
+  derived_claude_tokens: number | null;
+  derived_error: string | null;
 }
 
 export interface HostRecord {
@@ -91,6 +107,8 @@ export interface RunSummary {
     /** Alive servers per cost band: bins[i] holds counts below edges[i]; the last bin is the rest. */
     histogram?: { edges: number[]; bins: number[] };
   };
+  /** Exact Gemini counts, present once a run had a Gemini key. */
+  geminiTokens?: TokenStats & { model?: string; counted: number; refused: number };
   toolCount: { median: number; p90: number; max: number };
   initMs: { median: number; p90: number };
   hosts: number;
@@ -131,6 +149,35 @@ export async function latestRun(): Promise<RunSummary | null> {
   return row ? (JSON.parse(row.summary) as RunSummary) : null;
 }
 
+/** Well-known servers for the front page, by their registry names. Order is the display order. */
+export const NOTABLE: Array<{ name: string; label: string }> = [
+  { name: 'io.github.github/github-mcp-server', label: 'GitHub' },
+  { name: 'app.linear/linear', label: 'Linear' },
+  { name: 'com.notion/mcp', label: 'Notion' },
+  { name: 'com.stripe/mcp', label: 'Stripe' },
+  { name: 'com.atlassian/atlassian-mcp-server', label: 'Atlassian' },
+  { name: 'com.figma.mcp/mcp', label: 'Figma' },
+  { name: 'io.github.getsentry/sentry-mcp', label: 'Sentry' },
+  { name: 'com.supabase/mcp', label: 'Supabase' },
+  { name: 'com.vercel/vercel-mcp', label: 'Vercel' },
+  { name: 'com.cloudflare.mcp/mcp', label: 'Cloudflare docs' },
+  { name: 'io.github.microsoft/playwright-mcp', label: 'Playwright' },
+  { name: 'io.github.upstash/context7', label: 'Context7' },
+  { name: 'co.huggingface/hf-mcp-server', label: 'Hugging Face' },
+  { name: 'ai.exa/exa', label: 'Exa' },
+  { name: 'io.github.firecrawl/firecrawl-mcp-server', label: 'Firecrawl' }
+];
+
+/** The rows for a list of names, in no particular order. One query, one row read per name. */
+export async function serversByNames(names: string[]): Promise<Array<Pick<ServerRecord, 'name' | 'title' | 'status' | 'tool_count' | 'claude_tokens' | 'tools_tokens' | 'host'>>> {
+  if (!names.length) return [];
+  const { results } = await db()
+    .prepare(`SELECT name, title, status, tool_count, claude_tokens, tools_tokens, host FROM servers WHERE name IN (${names.map(() => '?').join(',')})`)
+    .bind(...names)
+    .all<Pick<ServerRecord, 'name' | 'title' | 'status' | 'tool_count' | 'claude_tokens' | 'tools_tokens' | 'host'>>();
+  return results;
+}
+
 export async function getServer(name: string): Promise<ServerRecord | null> {
   return db().prepare('SELECT * FROM servers WHERE name = ?').bind(name).first<ServerRecord>();
 }
@@ -160,6 +207,18 @@ export async function getHistory(name: string, limit = 60): Promise<ProbeRecord[
     .bind(name, limit)
     .all<ProbeRecord>();
   return results;
+}
+
+/** SQL list of the statuses in which the server answered: alive, or alive behind auth, payment or a missing input. */
+const ANSWERED_STATUSES_SQL = `('ok', ${[...GATED_STATUSES].map((s) => `'${s}'`).join(', ')})`;
+
+/** Whether any probe of the server ever got an answer. One index row for a server that did; a server page is noindex until then. */
+export async function serverEverAnswered(name: string): Promise<boolean> {
+  const row = await db()
+    .prepare(`SELECT 1 AS answered FROM probes WHERE name = ? AND status IN ${ANSWERED_STATUSES_SQL} LIMIT 1`)
+    .bind(name)
+    .first<{ answered: number }>();
+  return row !== null;
 }
 
 export async function getSiblings(hash: string, except: string, limit = 12): Promise<Array<Pick<ServerRecord, 'name' | 'host' | 'status'>>> {
@@ -281,11 +340,11 @@ export interface ListQuery {
 }
 
 export const LIST_COLUMNS =
-  'name, title, host, transport, status, http_status, auth_scheme, protocol_version, init_ms, tool_count, tools_tokens, claude_tokens, claude_tokens_cc, toolset_siblings, registry_updated_at';
+  'name, title, host, transport, status, http_status, auth_scheme, protocol_version, init_ms, tool_count, tools_tokens, claude_tokens, claude_tokens_cc, toolset_siblings, registry_updated_at, derived_package, derived_status, derived_tools_tokens, derived_claude_tokens';
 export type ListRow = Pick<
   ServerRecord,
   | 'name' | 'title' | 'host' | 'transport' | 'status' | 'http_status' | 'auth_scheme' | 'protocol_version'
-  | 'init_ms' | 'tool_count' | 'tools_tokens' | 'claude_tokens' | 'claude_tokens_cc' | 'toolset_siblings' | 'registry_updated_at'
+  | 'init_ms' | 'tool_count' | 'tools_tokens' | 'claude_tokens' | 'claude_tokens_cc' | 'toolset_siblings' | 'registry_updated_at' | 'derived_package' | 'derived_status' | 'derived_tools_tokens' | 'derived_claude_tokens'
 >;
 
 export interface ListResult {
@@ -335,6 +394,9 @@ export async function listServers(query: ListQuery): Promise<ListResult> {
   }
   if (query.status === 'down') {
     where.push(`status NOT IN ('ok', ${[...GATED_STATUSES].map((s) => `'${s}'`).join(', ')})`);
+  } else if (query.status === 'gated') {
+    // Reachable, but the probe got no tool list: auth, payment, a newer protocol, or a package that needs env, args or the network.
+    where.push(`status IN (${[...GATED_STATUSES].map((s) => `'${s}'`).join(', ')})`);
   } else if (query.status) {
     where.push('status = ?');
     binds.push(query.status);
@@ -385,16 +447,34 @@ export async function listServers(query: ListQuery): Promise<ListResult> {
   };
 }
 
-export async function maxServerRowid(): Promise<number> {
-  const row = await db().prepare('SELECT max(rowid) AS m FROM servers').first<{ m: number | null }>();
-  return row?.m ?? 0;
+/**
+ * The sitemap chunks that have servers in them. Chunk n holds the rowids in [n * size, (n + 1) * size).
+ * The import writes with INSERT OR REPLACE, so a changed server gets a new rowid and old chunks empty out
+ * over time; the index lists only the chunks that still have rows. One scan of the table, cached for a day.
+ * D1 binds a JS number as a float, so the division is cast back to an integer.
+ */
+export async function serverSitemapChunks(size: number): Promise<Array<{ chunk: number; count: number; lastmod: string }>> {
+  const { results } = await db()
+    .prepare('SELECT CAST(rowid / ? AS INTEGER) AS chunk, count(*) AS count, max(probed_at) AS lastmod FROM servers GROUP BY chunk ORDER BY chunk')
+    .bind(size)
+    .all<{ chunk: number; count: number; lastmod: string }>();
+  return results;
 }
 
-/** Servers in one rowid window, for a sitemap chunk. */
-export async function serversInRowidWindow(from: number, to: number): Promise<Array<{ name: string; probed_at: string }>> {
+/**
+ * The servers of one sitemap chunk: a rowid range, so the read touches only its own rows.
+ * A server that never answered a probe stays out: its page says only "timeout" or "error", and
+ * Google reads such a page as a soft 404. The EXISTS runs for the servers that are down now only.
+ */
+export async function serversInSitemapChunk(chunk: number, size: number): Promise<Array<{ name: string; probed_at: string }>> {
   const { results } = await db()
-    .prepare('SELECT name, probed_at FROM servers WHERE rowid > ? AND rowid <= ? ORDER BY rowid')
-    .bind(from, to)
+    .prepare(
+      `SELECT name, probed_at FROM servers WHERE rowid >= ? AND rowid < ?
+         AND (status IN ${ANSWERED_STATUSES_SQL}
+           OR EXISTS (SELECT 1 FROM probes WHERE probes.name = servers.name AND probes.status IN ${ANSWERED_STATUSES_SQL}))
+         ORDER BY rowid`
+    )
+    .bind(chunk * size, (chunk + 1) * size)
     .all<{ name: string; probed_at: string }>();
   return results;
 }

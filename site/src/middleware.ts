@@ -47,9 +47,20 @@ function limitResponse(url: URL, message: string): Response {
   return new Response(html, { status: 503, headers: { ...headers, 'content-type': 'text/html; charset=utf-8' } });
 }
 
+/**
+ * Crawlers that fetch every page and every list variant, ignore robots.txt and bring nothing:
+ * SEO scrapers and the like. They get a 403 before any database read. On 2026-10-18 one of
+ * them (ShapBot, from Google Cloud addresses) made 85 000 requests in a day and spent the
+ * Worker's free-plan request limit; a WAF rule on the zone stops them before the Worker.
+ */
+const BLOCKED_AGENTS = /ShapBot|SemrushBot|DataForSeoBot|AhrefsBot|MJ12bot|DotBot|PetalBot|Bytespider|BLEXBot|serpstatbot|ZoominfoBot|Barkrowler|ImagesiftBot/i;
+
 export const onRequest = defineMiddleware(async (context, next) => {
   const { request } = context;
   const url = new URL(request.url);
+  if (BLOCKED_AGENTS.test(request.headers.get('user-agent') ?? '')) {
+    return new Response('This crawler is not welcome here. See /robots.txt.', { status: 403, headers: { 'cache-control': 'no-store' } });
+  }
   // The workers.dev address and the old mcp-pulse.ulehla.dev name stay as aliases and send everyone to the real one.
   if (url.hostname.endsWith('.workers.dev') || (url.hostname.endsWith('.ulehla.dev') && url.hostname !== CANONICAL_HOST)) {
     url.hostname = CANONICAL_HOST;

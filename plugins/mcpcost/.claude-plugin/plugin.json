@@ -1,0 +1,13 @@
+{
+  "name": "mcpcost",
+  "description": "What do your MCP servers cost in context tokens? Measure the servers in your configs, look up any server in the MCP registry.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Ondřej Úlehla",
+    "url": "https://mcpcost.ulehla.dev"
+  },
+  "homepage": "https://mcpcost.ulehla.dev",
+  "repository": "https://github.com/ondraulehla/mcpcost",
+  "license": "MIT",
+  "keywords": ["mcp", "tokens", "context-window", "cost"]
+}

@@ -24,6 +24,18 @@ const { values: args } = parseArgs({
     previous: { type: 'string' },
     /** hosts.json of the previous run. Only host rows that changed are written. */
     'previous-hosts': { type: 'string' },
+    /**
+     * The board's own state: name and status of every row, from
+     * `wrangler d1 execute mcp-pulse --remote --json --command "SELECT name, status FROM servers"`.
+     * A row whose status in the database differs from this run is written whole, and a row the
+     * registry no longer has is deleted. Without it the diff trusts the previous artifact, and a
+     * failed or bad import stays in the database for good: on 2026-10-14 one left 14 000 rows on "timeout".
+     */
+    'd1-status': { type: 'string' },
+    /** How many drifted rows to repair in one run: each full row costs about twelve index writes of the daily budget. */
+    'repair-limit': { type: 'string', default: '3000' },
+    /** How many stale rows to delete in one run. */
+    'delete-limit': { type: 'string', default: '600' },
     'rows-per-insert': { type: 'string', default: '40' }
   }
 });
@@ -45,6 +57,14 @@ const previousByName = new Map((previous ?? []).map((s) => [s.name, fingerprint(
 const servers = previous ? allServers.filter((s) => previousByName.get(s.name) !== fingerprint(s)) : allServers;
 const currentNames = new Set(allServers.map((s) => s.name));
 const removed = previous ? [...previousByName.keys()].filter((name) => !currentNames.has(name)) : [];
+
+/** name → status as the database has it now, when a dump was given. */
+const d1Status = new Map<string, string>();
+if (args['d1-status'] && existsSync(args['d1-status'])) {
+  const raw = JSON.parse(await readFile(args['d1-status'], 'utf8')) as Array<{ results?: Array<{ name: string; status: string }> }> | Array<{ name: string; status: string }>;
+  const rows = Array.isArray(raw) && raw.length && 'results' in (raw[0] as object) ? (raw as Array<{ results?: Array<{ name: string; status: string }> }>).flatMap((r) => r.results ?? []) : (raw as Array<{ name: string; status: string }>);
+  for (const r of rows) d1Status.set(r.name, r.status);
+}
 const summary = JSON.parse(await readFile(`${args.in}/summary.json`, 'utf8')) as { probedAt: string };
 const hosts = JSON.parse(await readFile(`${args.in}/hosts.json`, 'utf8')) as Array<{
   host: string; servers: number; byStatus: Record<string, number>; uniqueToolsets: number; medianTokens: number;
@@ -77,14 +97,18 @@ const serverColumns = [
   'name', 'title', 'description', 'url', 'host', 'transport', 'repo', 'website', 'registry_status', 'registry_updated_at',
   'probed_at', 'status', 'http_status', 'auth_scheme', 'protocol_version', 'server_name', 'server_version', 'capabilities',
   'init_ms', 'tools_ms', 'tool_count', 'tools_tokens', 'instructions_chars', 'toolset_hash', 'toolset_siblings', 'top_tools', 'error',
-  'claude_model', 'claude_tokens', 'claude_tokens_cc', 'claude_measured_at', 'claude_error'
+  'claude_model', 'claude_tokens', 'claude_tokens_cc', 'claude_measured_at', 'claude_error',
+  'gemini_model', 'gemini_tokens', 'gemini_measured_at', 'gemini_error', 'measured_with_credentials',
+  'derived_package', 'derived_registry', 'derived_status', 'derived_probed_at', 'derived_tool_count', 'derived_tools_tokens', 'derived_claude_tokens', 'derived_error'
 ];
 function serverValues(s: ServerRow): Value[] {
   return [
     s.name, s.title, s.description, s.url, s.host, s.transport, s.repo, s.website, s.registryStatus, s.registryUpdatedAt,
     s.probedAt, s.status, s.httpStatus, s.authScheme, s.protocolVersion, s.serverName, s.serverVersion, s.capabilities ? JSON.stringify(s.capabilities) : null,
     s.initMs, s.toolsMs, s.toolCount, s.toolsTokens, s.instructionsChars, s.toolsetHash, s.toolsetSiblings, s.topTools ? JSON.stringify(s.topTools) : null, s.error,
-    s.claudeModel, s.claudeTokens, s.claudeTokensCc, s.claudeMeasuredAt, s.claudeError
+    s.claudeModel, s.claudeTokens, s.claudeTokensCc, s.claudeMeasuredAt, s.claudeError,
+    s.geminiModel, s.geminiTokens, s.geminiMeasuredAt, s.geminiError, s.measuredWithCredentials ? 1 : 0,
+    s.derivedPackage?.name, s.derivedPackage?.registry, s.derivedPackage?.status, s.derivedPackage?.probedAt, s.derivedPackage?.toolCount, s.derivedPackage?.toolsTokens, s.derivedPackage?.claudeTokens, s.derivedPackage?.error
   ];
 }
 const previousRows = new Map((previous ?? []).map((s) => [s.name, s]));
@@ -145,6 +169,24 @@ const hostRows = hosts
   .filter((h) => !previousHosts || previousHosts.get(h.host) !== hostKey(h))
   .map((h) => [h.host, h.servers, h.byStatus.ok ?? 0, (h.byStatus.auth ?? 0) + (h.byStatus.payment ?? 0) + (h.byStatus.newer_protocol ?? 0), dead(h.byStatus), h.uniqueToolsets, h.medianTokens, summary.probedAt]);
 
+/**
+ * Rows the database holds with another status than this run found, outside the
+ * ordinary diff: written whole, alive servers first, at most --repair-limit a run.
+ * Rows the database has and the registry no longer lists: deleted, at most --delete-limit.
+ */
+const written = new Set(servers.map((s) => s.name));
+const rank = (s: ServerRow) => (s.status === 'ok' ? 0 : GATED_STATUSES.has(s.status) ? 1 : 2);
+const drifted = d1Status.size
+  ? allServers.filter((s) => !written.has(s.name) && d1Status.has(s.name) && d1Status.get(s.name) !== s.status).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
+  : [];
+const repaired = drifted.slice(0, Number(args['repair-limit']));
+const stale = d1Status.size ? [...d1Status.keys()].filter((n) => !currentNames.has(n) && !removed.includes(n)).slice(0, Number(args['delete-limit'])) : [];
+const repairStatements = [
+  ...multiInsert('servers', serverColumns, repaired.map(serverValues), 'INSERT', upsertSuffix('name', serverColumns)),
+  ...multiInsert('probes', ['name', 'probed_at', 'status', 'init_ms', 'tool_count', 'tools_tokens', 'claude_tokens'], repaired.map((s) => [s.name, s.probedAt, s.status, s.initMs, s.toolCount, s.toolsTokens, s.claudeTokens]), 'INSERT OR IGNORE'),
+  ...(stale.length ? [`DELETE FROM servers WHERE name IN (${stale.map(lit).join(',')});`] : [])
+];
+
 const statements = [
   `INSERT OR REPLACE INTO runs (probed_at, summary) VALUES (${lit(summary.probedAt)}, ${lit(JSON.stringify(summary))});`,
   ...serverStatements,
@@ -153,8 +195,11 @@ const statements = [
   ...(previous ? [] : ['DELETE FROM hosts;']),
   ...multiInsert('hosts', ['host', 'servers', 'ok', 'auth', 'dead', 'unique_toolsets', 'median_tokens', 'probed_at'], hostRows),
   // Keep 90 days of history so the free tier database stays small.
-  `DELETE FROM probes WHERE probed_at < ${lit(new Date(Date.now() - 90 * 86_400_000).toISOString())};`
+  `DELETE FROM probes WHERE probed_at < ${lit(new Date(Date.now() - 90 * 86_400_000).toISOString())};`,
+  // Last, so the ordinary import is complete even when the write budget runs out here.
+  ...repairStatements
 ];
+if (d1Status.size) console.error(`drift against the database: ${drifted.length} rows differ in status, ${repaired.length} repaired in this run, ${stale.length} stale rows deleted (${[...d1Status.keys()].filter((n) => !currentNames.has(n)).length} stale in all)`);
 await writeFile(args.out, statements.join('\n') + '\n');
 await writeFile(`${args.in}/changed.json`, JSON.stringify({ changed: servers.map((s) => s.name), removed }));
 console.error(

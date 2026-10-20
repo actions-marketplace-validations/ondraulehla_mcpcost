@@ -7,7 +7,10 @@ import { GATED_STATUSES } from '../../../packages/mcpcost/src/types.ts';
 
 const p = Astro.url.searchParams;
 const q = (p.get('q') ?? '').trim().slice(0, 80);
-const status = p.get('status') ?? '';
+// With no parameters at all the list opens on alive servers; ?status=all asks for every result.
+const defaultView = [...p.keys()].length === 0;
+const statusParam = p.get('status') ?? '';
+const status = statusParam === 'all' ? '' : defaultView ? 'ok' : statusParam;
 const host = p.get('host') ?? '';
 const protocol = p.get('protocol') ?? '';
 const transport = p.get('transport') ?? '';
@@ -35,14 +38,32 @@ function pageHref(n: number, c: { value: string | number | null; name: string } 
 }
 const nextHref = hasNext ? pageHref(page + 1, nextCursor) : null;
 const prevHref = hasPrev ? pageHref(page - 1, prevCursor, 'prev') : null;
+
+/** The three result buckets and their counts, from the run summary: no query needed. */
+const gatedCount = run ? [...GATED_STATUSES].reduce((a, s) => a + (run.byStatus[s] ?? 0), 0) : 0;
+const counts = run ? { ok: run.ok, gated: gatedCount, down: run.probed - run.ok - gatedCount, all: run.probed } : null;
+type Bucket = 'ok' | 'gated' | 'down' | 'all';
+const activeBucket: Bucket = status === 'ok' ? 'ok' : status === '' ? 'all' : status === 'gated' || GATED_STATUSES.has(status) ? 'gated' : 'down';
+/** The causes of the active bucket, with counts, zero counts left out. */
+const causes: Array<{ key: string; label: string; count: number }> =
+  activeBucket === 'ok' || activeBucket === 'all' || !run
+    ? []
+    : Object.entries(STATUS_LABEL)
+        .filter(([k]) => k !== 'ok' && (activeBucket === 'gated') === GATED_STATUSES.has(k))
+        .map(([k, v]) => ({ key: k, label: v, count: run.byStatus[k] ?? 0 }))
+        .filter((c) => c.count > 0)
+        .sort((a, b) => b.count - a.count);
+
 // A total is cheap only when it is already in the run summary.
 const total =
   run && !q && !host && !protocol && !transport
     ? status === ''
       ? run.probed
       : status === 'down'
-        ? run.probed - run.ok - (run.byStatus.auth ?? 0) - (run.byStatus.payment ?? 0) - (run.byStatus.newer_protocol ?? 0)
-        : (run.byStatus[status] ?? 0)
+        ? counts!.down
+        : status === 'gated'
+          ? counts!.gated
+          : (run.byStatus[status] ?? 0)
     : null;
 const pages = total !== null ? Math.max(1, Math.ceil(total / perPage)) : null;
 const protocols = run ? Object.keys(run.protocols).filter((v) => v !== 'unknown').sort().reverse() : [];
@@ -50,15 +71,36 @@ const protocols = run ? Object.keys(run.protocols).filter((v) => v !== 'unknown'
 // The data changes once a day; three hours at the edge keeps repeat views off the database.
 Astro.response.headers.set('cache-control', 'public, max-age=120, s-maxage=10800');
 
-const filtered = Boolean(q || status || host || protocol || transport);
+const filtered = Boolean(q || statusParam || host || protocol || transport);
+
+/** The current URL with some parameters changed (null removes one), the page reset. */
+function withParams(changes: Record<string, string | null>): string {
+  const u = new URL(Astro.url);
+  for (const k of ['page', 'c', 'd', 'p']) u.searchParams.delete(k);
+  for (const [k, v] of Object.entries(changes)) {
+    if (v === null || v === '') u.searchParams.delete(k);
+    else u.searchParams.set(k, v);
+  }
+  // No parameters left means the default view, which is alive servers; say so in the URL only when something else is set.
+  return u.pathname + u.search;
+}
+const bucketHref = (b: Bucket) => withParams({ status: b });
+
+/** The filters that are on, as removable chips. The default view (alive, nothing else) shows none. */
+const transportLabel: Record<string, string> = { 'streamable-http': 'streamable http', sse: 'sse', stdio: 'stdio (npm, PyPI)' };
+const active: Array<{ label: string; href: string }> = [];
+if (q) active.push({ label: `“${q}”`, href: withParams({ q: null }) });
+if (statusParam && statusParam !== 'ok') active.push({ label: statusParam === 'all' ? 'every result' : statusParam === 'gated' ? 'needs something' : statusParam === 'down' ? 'down or broken' : label(statusParam), href: withParams({ status: null }) });
+if (host) active.push({ label: host, href: withParams({ host: null }) });
+if (protocol) active.push({ label: `protocol ${protocol}`, href: withParams({ protocol: null }) });
+if (transport) active.push({ label: transportLabel[transport] ?? transport, href: withParams({ transport: null }) });
 
 /** Column headers: first click sorts the natural way (numbers high first, text A to Z), the second click flips. */
 const columns: Array<{ label: string; first: SortKey; second: SortKey; num?: boolean }> = [
   { label: 'Server', first: 'name', second: 'name-desc' },
   { label: 'Result', first: 'status', second: 'status-desc' },
   { label: 'Tools', first: 'tools', second: 'tools-asc', num: true },
-  { label: 'Claude', first: 'claude', second: 'claude-asc', num: true },
-  { label: 'o200k', first: 'tokens', second: 'tokens-asc', num: true },
+  { label: 'Tokens', first: 'claude', second: 'claude-asc', num: true },
   { label: 'Init', first: 'latency', second: 'latency-desc', num: true },
   { label: 'Protocol', first: 'protocol-desc', second: 'protocol' },
   { label: 'Host', first: 'host', second: 'host-desc' }
@@ -72,80 +114,115 @@ function sortHref(key: SortKey): string {
 function arrow(key: SortKey): string {
   return /-asc$|^latency$|^name$|^status$|^host$|^protocol$/.test(key) ? '▲' : '▼';
 }
-const title = host ? `Servers on ${host}` : status ? `${label(status)} servers` : q ? `Servers matching “${q}”` : 'Servers';
+const bucketTitle: Record<Bucket, string> = { ok: 'Alive servers', gated: 'Servers that need something', down: 'Down or broken servers', all: 'Every server' };
+const heading = host ? host : q ? `Servers matching “${q}”` : status === 'ok' || status === '' || status === 'gated' || status === 'down' ? bucketTitle[activeBucket] : `${label(status)} servers`;
+const title = host ? `Servers on ${host}` : heading;
 // Every sort, filter and page is its own database read, so crawlers index only the first page of the default view.
 const robots = filtered || page > 1 || sort !== DEFAULT_SORT ? 'noindex, follow' : undefined;
+/** Everything but the sort, as hidden fields for the small sort form on narrow screens. */
+const hiddenForSort = [...p.entries()].filter(([k]) => !['sort', 'page', 'c', 'd', 'p'].includes(k));
+const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${num(rows.length)}${hasNext ? '+' : ''} servers on this page` : 'no servers';
 ---
 
 <Layout title={title} robots={robots}>
   <p class="kicker">{run ? `probed ${run.probedAt.slice(0, 10)}` : ''}</p>
-  <h1 class="poster">{host ? host : status ? `${label(status)} servers` : q ? `Servers matching “${q}”` : 'Every server'}</h1>
+  <h1 class="poster">{heading}</h1>
 
-  <form class="filters servers" method="get" action="/servers" role="search">
-    <label>Search
-      <input type="search" name="q" value={q} placeholder="name, title, description or host" autocomplete="off" />
-    </label>
-    <label>Result
-      <select name="status">
-        <option value="">any</option>
-        <option value="ok" selected={status === 'ok'}>alive</option>
-        <option value="auth" selected={status === 'auth'}>needs auth</option>
-        <option value="payment" selected={status === 'payment'}>paid (402)</option>
-        <option value="newer_protocol" selected={status === 'newer_protocol'}>newer protocol</option>
-        <optgroup label="package servers, needs something">
-          <option value="needs_env" selected={status === 'needs_env'}>needs env</option>
-          <option value="needs_args" selected={status === 'needs_args'}>needs args</option>
-          <option value="needs_network" selected={status === 'needs_network'}>needs network</option>
-        </optgroup>
-        <option value="down" selected={status === 'down'}>down or broken</option>
-        <optgroup label="down, by cause">
-          {Object.entries(STATUS_LABEL)
-            .filter(([k]) => k !== 'ok' && !GATED_STATUSES.has(k))
-            .map(([k, v]) => <option value={k} selected={status === k}>{v}</option>)}
-        </optgroup>
-      </select>
-    </label>
-    <label>Protocol
-      <select name="protocol">
-        <option value="">any</option>
-        {protocols.map((v) => <option value={v} selected={protocol === v}>{v}</option>)}
-      </select>
-    </label>
-    <label>Transport
-      <select name="transport">
-        <option value="">any</option>
-        <option value="streamable-http" selected={transport === 'streamable-http'}>streamable http</option>
-        <option value="sse" selected={transport === 'sse'}>sse</option>
-        <option value="stdio" selected={transport === 'stdio'}>stdio (npm, PyPI)</option>
-      </select>
-    </label>
-    <label>Sort
-      <select name="sort">
-        {(Object.keys(SORTS) as SortKey[]).map((k) => <option value={k} selected={sort === k}>{SORTS[k].label}</option>)}
-      </select>
-    </label>
+  <form class="checkform search" method="get" action="/servers" role="search">
+    <input type="search" name="q" value={q} placeholder="Search by name, title, description or host" autocomplete="off" aria-label="Search servers" />
+    {statusParam && <input type="hidden" name="status" value={statusParam} />}
     {host && <input type="hidden" name="host" value={host} />}
-    <div class="actions">
-      <button type="submit">Filter</button>
-      {filtered && <a class="clear" href="/servers">clear</a>}
-    </div>
+    {protocol && <input type="hidden" name="protocol" value={protocol} />}
+    {transport && <input type="hidden" name="transport" value={transport} />}
+    {sort !== DEFAULT_SORT && <input type="hidden" name="sort" value={sort} />}
+    <button type="submit">Search</button>
   </form>
 
-  <p class="pager-label small muted" style="margin:14px 0 6px">
-    {total !== null ? `${num(total)} servers` : rows.length ? `${num(rows.length)}${hasNext ? '+' : ''} servers on this page` : 'no servers'}{host && <> on {host}</>}{protocol && <> · {protocol}</>}{transport && <> · {transport}</>}{pages !== null && <> · page {page} of {num(pages)}</>}
-  </p>
-  <Pager page={page} pages={pages} hasNext={hasNext} hasPrev={hasPrev} nextHref={nextHref} prevHref={prevHref} maxNumbered={MAX_NUMBERED_PAGE} url={Astro.url} position="top" />
+  <nav class="segments" aria-label="Result">
+    {(['ok', 'gated', 'down', 'all'] as Bucket[]).map((b) => (
+      <a class={`seg ${b}${activeBucket === b ? ' active' : ''}`} href={bucketHref(b)} rel="nofollow" aria-current={activeBucket === b ? 'true' : undefined}>
+        <span class="seg-label">{b === 'ok' ? 'Alive' : b === 'gated' ? 'Needs something' : b === 'down' ? 'Down' : 'All'}</span>
+        {counts && <span class="seg-count">{num(counts[b])}</span>}
+      </a>
+    ))}
+  </nav>
+
+  {causes.length > 0 && (
+    <nav class="chips causes" aria-label={activeBucket === 'gated' ? 'What the server needs' : 'Why the server is down'}>
+      <span class="chips-label">{activeBucket === 'gated' ? 'needs' : 'cause'}</span>
+      <a class={`chip${status === activeBucket ? ' active' : ''}`} href={bucketHref(activeBucket)} rel="nofollow">any</a>
+      {causes.map((c) => (
+        <a class={`chip${status === c.key ? ' active' : ''}`} href={withParams({ status: c.key })} rel="nofollow">{c.label} <b>{num(c.count)}</b></a>
+      ))}
+    </nav>
+  )}
+
+  <details class="more" open={Boolean(protocol || transport) || undefined}>
+    <summary>More filters{(protocol || transport) && <span class="muted"> · {[protocol && `protocol ${protocol}`, transport && transportLabel[transport]].filter(Boolean).join(' · ')}</span>}</summary>
+    <form class="more-form" method="get" action="/servers">
+      {q && <input type="hidden" name="q" value={q} />}
+      {statusParam && <input type="hidden" name="status" value={statusParam} />}
+      {host && <input type="hidden" name="host" value={host} />}
+      {sort !== DEFAULT_SORT && <input type="hidden" name="sort" value={sort} />}
+      <label>Protocol
+        <select name="protocol">
+          <option value="">any</option>
+          {protocols.map((v) => <option value={v} selected={protocol === v}>{v}</option>)}
+        </select>
+      </label>
+      <label>Transport
+        <select name="transport">
+          <option value="">any</option>
+          <option value="streamable-http" selected={transport === 'streamable-http'}>streamable http</option>
+          <option value="sse" selected={transport === 'sse'}>sse</option>
+          <option value="stdio" selected={transport === 'stdio'}>stdio (npm, PyPI)</option>
+        </select>
+      </label>
+      <button type="submit">Apply</button>
+    </form>
+  </details>
+
+  {active.length > 0 && (
+    <div class="chips active-filters" aria-label="Active filters">
+      <span class="chips-label">showing</span>
+      {active.map((a) => (
+        <a class="chip on" href={a.href} rel="nofollow" title="Remove this filter">{a.label} <span class="x" aria-hidden="true">×</span></a>
+      ))}
+      <a class="chip clear" href="/servers" rel="nofollow">clear all</a>
+    </div>
+  )}
+
+  <div class="count-line">
+    <p class="small muted">
+      {countLine}{host && <> on {host}</>}{pages !== null && <> · page {page} of {num(pages)}</>}
+      {(hasPrev || hasNext) && (
+        <span class="brief-pager">
+          <a class={`pbtn${hasPrev && prevHref ? '' : ' disabled'}`} href={hasPrev && prevHref ? prevHref : undefined} rel="nofollow" aria-label="Previous page" aria-disabled={hasPrev && prevHref ? undefined : 'true'}>‹</a>
+          <a class={`pbtn${hasNext && nextHref ? '' : ' disabled'}`} href={hasNext && nextHref ? nextHref : undefined} rel="nofollow" aria-label="Next page" aria-disabled={hasNext && nextHref ? undefined : 'true'}>›</a>
+        </span>
+      )}
+    </p>
+    <form class="sort-mobile" method="get" action="/servers">
+      {hiddenForSort.map(([k, v]) => <input type="hidden" name={k} value={v} />)}
+      <label>Sort
+        <select name="sort">
+          {(Object.keys(SORTS) as SortKey[]).map((k) => <option value={k} selected={sort === k}>{SORTS[k].label}</option>)}
+        </select>
+      </label>
+      <button type="submit">Go</button>
+    </form>
+  </div>
 
   <div class="frame">
     <table>
       <thead>
         <tr>
           {columns.map((c) => {
-            const active = sort === c.first || sort === c.second;
+            const isActive = sort === c.first || sort === c.second;
             const next = sort === c.first ? c.second : c.first;
             return (
-              <th class={c.num ? 'num' : ''} aria-sort={active ? (arrow(sort) === '▲' ? 'ascending' : 'descending') : undefined}>
-                <a class={`sort${active ? ' active' : ''}`} href={sortHref(next)} rel="nofollow" title={`Sort by ${SORTS[next].label}`}>{c.label}{active && <span class="arrow">{arrow(sort)}</span>}</a>
+              <th class={c.num ? 'num' : ''} aria-sort={isActive ? (arrow(sort) === '▲' ? 'ascending' : 'descending') : undefined}>
+                <a class={`sort${isActive ? ' active' : ''}`} href={sortHref(next)} rel="nofollow" title={`Sort by ${SORTS[next].label}`}>{c.label}{isActive && <span class="arrow">{arrow(sort)}</span>}</a>
               </th>
             );
           })}
@@ -164,17 +241,79 @@ const robots = filtered || page > 1 || sort !== DEFAULT_SORT ? 'noindex, follow'
               {(r.toolset_siblings ?? 0) > 0 && <span class="sub">same tools as {num(r.toolset_siblings)} other{r.toolset_siblings === 1 ? '' : 's'}</span>}
             </td>
             <td class="num">{num(r.tool_count)}</td>
-            <td class="num" title={r.claude_tokens_cc != null ? `${num(r.claude_tokens_cc)} in Claude Code` : undefined}>{tokens(r.claude_tokens)}</td>
-            <td class="num faint">{tokens(r.tools_tokens)}</td>
+            <td class="num" title={r.claude_tokens != null ? `exact for Claude${r.claude_tokens_cc != null ? `, ${num(r.claude_tokens_cc)} in Claude Code` : ''}` : r.tools_tokens != null ? 'o200k_base estimate, no exact count yet' : undefined}>{r.claude_tokens != null ? tokens(r.claude_tokens) : r.tools_tokens != null ? <span class="faint">~{tokens(r.tools_tokens)}</span> : r.derived_status === 'ok' && (r.derived_claude_tokens ?? r.derived_tools_tokens) != null ? <span class="faint" title={`from the publisher's package ${r.derived_package}`}>pkg {tokens(r.derived_claude_tokens ?? r.derived_tools_tokens)}</span> : ''}</td>
             <td class="num">{ms(r.init_ms)}</td>
             <td class="mono faint">{r.protocol_version ?? ''}</td>
             <td class="mono break"><a class="plain muted" href={`/servers?host=${encodeURIComponent(r.host)}`}>{r.host}</a></td>
           </tr>
         ))}
-        {rows.length === 0 && <tr><td colspan="8" class="muted">Nothing matches.</td></tr>}
+        {rows.length === 0 && <tr><td colspan="7" class="muted">Nothing matches.</td></tr>}
       </tbody>
     </table>
   </div>
 
   <Pager page={page} pages={pages} hasNext={hasNext} hasPrev={hasPrev} nextHref={nextHref} prevHref={prevHref} maxNumbered={MAX_NUMBERED_PAGE} url={Astro.url} position="bottom" />
 </Layout>
+
+<style>
+  .search { margin-top: 1.25rem; }
+  .search input { padding: 0.8rem 1rem; font-size: 0.95rem; }
+
+  /* The result as a segmented control: one row, counts under the labels. */
+  .segments { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-top: 12px; border: 1px solid var(--line); background: var(--line); }
+  .seg { display: flex; flex-direction: column; gap: 4px; padding: 0.7rem 0.9rem; background: var(--surface); color: var(--ink-muted); text-decoration: none; min-width: 0; }
+  .seg-label { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .seg-count { font-family: var(--font-display); font-size: 1.15rem; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .seg:hover { background: var(--panel); }
+  .seg.active { box-shadow: inset 0 -3px 0 var(--ink-faint); }
+  .seg.ok.active { box-shadow: inset 0 -3px 0 var(--up); background: var(--up-soft); }
+  .seg.ok.active .seg-count { color: var(--up); }
+  .seg.gated.active { box-shadow: inset 0 -3px 0 var(--gated); background: var(--gated-soft); }
+  .seg.gated.active .seg-count { color: var(--gated); }
+  .seg.down.active { box-shadow: inset 0 -3px 0 var(--accent); background: var(--accent-soft); }
+  .seg.down.active .seg-count { color: var(--accent-strong); }
+  .seg.all.active { background: var(--panel); }
+
+  /* Chips: the causes of the active bucket, and the filters that are on. */
+  .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+  .chips-label { font-family: var(--font-mono); font-size: 0.66rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-faint); margin-right: 4px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 0.3rem 0.65rem; border: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.06em; color: var(--ink-muted); text-decoration: none; white-space: nowrap; }
+  .chip b { font-weight: 500; color: var(--ink-faint); }
+  .chip:hover { background: var(--panel); color: var(--ink); }
+  .chip.active { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+  .chip.active b { color: var(--surface); opacity: 0.7; }
+  .chip.on { background: var(--panel); color: var(--ink); }
+  .chip .x { color: var(--ink-faint); font-size: 0.9rem; line-height: 1; }
+  .chip.on:hover .x { color: var(--accent); }
+  .chip.clear { border-style: dashed; color: var(--accent); }
+
+  /* Protocol and transport, folded away until needed. */
+  .more { margin-top: 10px; }
+  .more summary { cursor: pointer; font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); list-style: none; display: inline-flex; align-items: center; gap: 8px; }
+  .more summary::-webkit-details-marker { display: none; }
+  .more summary::before { content: '+'; display: inline-block; width: 1em; color: var(--accent); }
+  .more[open] summary::before { content: '−'; }
+  .more summary .muted { text-transform: none; letter-spacing: 0.04em; }
+  .more-form { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) auto; gap: 1px; margin-top: 8px; border: 1px solid var(--line); background: var(--line); max-width: 640px; }
+  .more-form label { display: flex; flex-direction: column; gap: 6px; padding: 0.625rem 0.75rem 0.75rem; background: var(--surface); font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-faint); }
+  .more-form select { width: 100%; min-width: 0; }
+  .more-form button { border: 0; padding: 0 1.1rem; background: var(--surface); color: var(--accent); font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.15em; text-transform: uppercase; cursor: pointer; }
+  .more-form button:hover { background: var(--ink); color: var(--surface); }
+
+  /* The line above the table: count, page, two arrows; the sort select on narrow screens only. */
+  .count-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 16px 0 6px; flex-wrap: wrap; }
+  .count-line p { margin: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .brief-pager { display: inline-flex; gap: 4px; }
+  .brief-pager .pbtn { min-width: 28px; height: 28px; padding: 0 6px; font-size: 0.9rem; }
+  .sort-mobile { display: none; align-items: center; gap: 6px; }
+  .sort-mobile label { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 0.66rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-faint); }
+  .sort-mobile select { max-width: 180px; font-size: 0.85rem; }
+  .sort-mobile button { height: 28px; padding: 0 10px; border: 1px solid var(--line); background: transparent; color: var(--ink-muted); font-family: var(--font-mono); font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer; }
+
+  @media (width <= 760px) {
+    .segments { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .seg { padding: 0.6rem 0.75rem; }
+    .more-form { grid-template-columns: 1fr; }
+    .sort-mobile { display: flex; }
+  }
+</style>

@@ -1,6 +1,6 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { getHistory, getServer, getSiblings } from '../../lib/db';
+import { getHistory, getServer, getSiblings, latestRun, serverEverAnswered } from '../../lib/db';
 import { bucket, label, ms, num, tokens, date, windowShare, modelName } from '../../lib/format';
 
 const name = Astro.params.name ?? '';
@@ -8,9 +8,10 @@ const server = await getServer(name);
 if (!server) {
   return new Response('Not found', { status: 404 });
 }
-const [history, siblings] = await Promise.all([
+const [history, siblings, run] = await Promise.all([
   getHistory(name, 60),
-  server.toolset_hash ? getSiblings(server.toolset_hash, name) : Promise.resolve([])
+  server.toolset_hash ? getSiblings(server.toolset_hash, name) : Promise.resolve([]),
+  latestRun()
 ]);
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=10800');
 
@@ -18,7 +19,12 @@ const capabilities = server.capabilities ? (JSON.parse(server.capabilities) as s
 const topTools = server.top_tools ? (JSON.parse(server.top_tools) as Array<{ name: string; tokens: number }>) : [];
 const site = Astro.site?.toString().replace(/\/$/, '') ?? '';
 const badgeMd = `[![mcpcost](${site}/badge/${name}.svg)](${site}/s/${name})`;
+const badgeHtml = `<a href="${site}/s/${name}"><img src="${site}/badge/${name}.svg" alt="mcpcost" height="20"></a>`;
 const reachable = history.filter((h) => h.status === 'ok' || h.status === 'auth' || h.status === 'payment').length;
+// A server that never answered has a page that says only "timeout" or "error". Google reads that as a soft 404,
+// so the page is noindex (links still followed) until one probe gets an answer. The sitemap applies the same rule.
+const answered = bucket(server.status) !== 'down' || history.some((h) => bucket(h.status) !== 'down') || (await serverEverAnswered(name));
+const robots = answered ? undefined : 'noindex, follow';
 const heading = server.title ?? server.server_name ?? name;
 const ok = server.status === 'ok';
 const exact = ok && server.claude_tokens != null;
@@ -26,14 +32,107 @@ const model = modelName(server.claude_model);
 /** The number the page leads with: the exact Claude count, else the estimate. */
 const cost = exact ? server.claude_tokens : server.tools_tokens;
 const share = ok && cost ? ((cost / 200_000) * 100).toFixed(1) : null;
+/** For a server that needs auth: the tool set of the publisher's open-source package, measured in a container without credentials. */
+const derived =
+  !ok && server.derived_status === 'ok' && (server.derived_claude_tokens ?? server.derived_tools_tokens) != null
+    ? {
+        name: server.derived_package!,
+        registry: server.derived_registry ?? 'npm',
+        tools: server.derived_tool_count,
+        cost: (server.derived_claude_tokens ?? server.derived_tools_tokens)!,
+        exact: server.derived_claude_tokens != null,
+        probedAt: server.derived_probed_at ?? server.probed_at
+      }
+    : null;
+const derivedShare = derived ? ((derived.cost / 200_000) * 100).toFixed(1) : null;
+/** The model of a derived exact count: the run's, since the row keeps no model for it. */
+const derivedModel = modelName(run?.claudeTokens?.model ?? server.claude_model);
+// The run's percentiles on the same basis as the page's number: the exact count when both have it, else the estimate.
+const runStats = run ? (exact && run.claudeTokens ? run.claudeTokens : run.toolsTokens) : null;
+const multiple = ok && cost && runStats?.median ? cost / runStats.median : null;
+const multipleText = multiple == null ? null : multiple >= 10 ? `${Math.round(multiple)}×` : `${multiple.toFixed(1)}×`;
+const heavy = ok && cost != null && runStats?.p90 != null && cost > runStats.p90;
+const topShare = topTools.length && server.tools_tokens ? Math.round((topTools.reduce((a, t) => a + t.tokens, 0) / server.tools_tokens) * 100) : 0;
+const probeNow = server.transport !== 'stdio' ? `/check?target=${encodeURIComponent(server.url)}` : null;
+
+/** What the publisher can do about the result. One or two sentences per cause. */
+const hints: string[] = [];
+switch (server.status) {
+  case 'ok':
+    if (heavy) {
+      // Name the top tools only when they explain a good part of the cost; on a server with 70 even tools they do not.
+      const top = topShare >= 30 ? ` Its ${topTools.length} most expensive tools are ${topShare} % of the cost.` : '';
+      hints.push(`This server is in the heaviest 10 % of the registry.${top} Shorter descriptions, fewer optional parameters and fewer tools cut the cost. The command npx mcpcost --url <endpoint> --tools 50 lists every tool with its cost.`);
+    }
+    if (server.claude_error) hints.push(`The Anthropic count_tokens endpoint refused the tool schemas (${server.claude_error}). A client that validates schemas can refuse them too.`);
+    if (!hints.length) hints.push('The server answers initialize and tools/list. Nothing to fix.');
+    break;
+  case 'auth':
+    hints.push(`The server answers HTTP ${server.http_status ?? 401} to an unauthenticated initialize, so the probe cannot list its tools. That is correct for a private server. Some public servers answer initialize and tools/list without credentials and ask for auth on tool calls only; those get a token count here.`);
+    break;
+  case 'payment':
+    hints.push('The server answers HTTP 402 to initialize. The probe records it as paid and does not list its tools.');
+    break;
+  case 'not_found':
+    hints.push(`The endpoint answers HTTP ${server.http_status ?? 404}. The registry entry points to a URL that is not an MCP endpoint any more. Publish a new version of the registry entry with the current URL.`);
+    break;
+  case 'protocol_error':
+    hints.push('The endpoint answers HTTP 200, but not with a valid MCP initialize result. Common causes: the URL is a web page or a REST API and not the MCP endpoint, the server answers a JSON-RPC error on initialize, or the response is HTML.');
+    break;
+  case 'newer_protocol':
+    hints.push(`The server negotiates protocol ${server.protocol_version ?? ''}, which the current TypeScript SDK refuses. Clients built on the SDK cannot connect until the server accepts the version the client offers.`);
+    break;
+  case 'dns':
+    hints.push('The host name does not resolve. The domain has lapsed or the DNS record is gone.');
+    break;
+  case 'tls':
+    hints.push('The TLS handshake fails: an expired or mismatched certificate, or an unsupported protocol version.');
+    break;
+  case 'timeout':
+    hints.push('No answer within 15 seconds. The server is up but slow, or the request hangs. Some servers stall tools/list while a GET stream is open; the probe opens none.');
+    break;
+  case 'refused':
+    hints.push('The connection is refused. Nothing listens on that host and port.');
+    break;
+  case 'server_error':
+    hints.push(`The server answers HTTP ${server.http_status ?? '5xx'} on initialize. The error output, if any, is above.`);
+    break;
+  case 'rate_limited':
+    hints.push('The server answers HTTP 429. The probe sends one request at a time per host and one probe a day per server, so the limit is very low or shared with other users.');
+    break;
+  case 'install_failed':
+    hints.push('npx or uvx could not install the package. The package name in the registry entry is wrong, the package is not published, or the install needs a build step.');
+    break;
+  case 'no_bin':
+    hints.push('The package installs, but it has no executable to run. Add a bin entry (npm) or a console script entry point (PyPI).');
+    break;
+  case 'needs_env':
+    hints.push('The server exits because an environment variable is missing. The probe starts the package without secrets. A server that starts without secrets and asks for them on the first tool call is measured.');
+    break;
+  case 'needs_args':
+    hints.push('The server needs command line arguments that the registry entry does not list. Add them to the package arguments in the registry entry.');
+    break;
+  case 'needs_network':
+    hints.push('The server tries to reach the network on start. The probe runs in a container with the network off, so a server that connects lazily, on the first tool call, is measured.');
+    break;
+  case 'crashed':
+    hints.push('The process exited on start before it answered initialize. The error output is above.');
+    break;
+  default:
+    hints.push('The probe could not complete the handshake. The error output is above.');
+}
 const pageTitle = ok
   ? `${name}: ${num(cost)} tokens of context${exact ? ` in ${model}` : ''}, ${num(server.tool_count)} tools, alive`
-  : `${name}: ${label(server.status)}`;
+  : derived
+    ? `${name}: ${label(server.status)}, ${num(derived.cost)} tokens of context from the publisher's package, ${num(derived.tools)} tools`
+    : `${name}: ${label(server.status)}`;
 const answer = ok
   ? exact
-    ? `${name} costs ${num(server.claude_tokens)} tokens of context per session in ${model}. In Claude Code it costs ${num(server.claude_tokens_cc ?? server.claude_tokens)} tokens. It has ${num(server.tool_count)} tool definitions. That is ${share} % of a 200k window. The o200k_base estimate is ${num(server.tools_tokens)} tokens. Measured ${date(server.claude_measured_at ?? server.probed_at)}.`
+    ? `${name} costs ${num(server.claude_tokens)} tokens of context per session in ${model}. In Claude Code it costs ${num(server.claude_tokens_cc ?? server.claude_tokens)} tokens. It has ${num(server.tool_count)} tool definitions. That is ${share} % of a 200k window. Measured ${date(server.claude_measured_at ?? server.probed_at)}.`
     : `${name} costs about ${num(server.tools_tokens)} tokens of context per session (o200k_base estimate${server.claude_error ? ', Claude refused the schema' : ''}). It has ${num(server.tool_count)} tool definitions. That is ${share} % of a 200k window. Measured ${date(server.probed_at)}.`
-  : `${name} did not answer the probe on ${date(server.probed_at)}. Result: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}.`;
+  : derived
+    ? `${name} needs auth, so the daily probe cannot list its tools. The publisher's package ${derived.name} has ${num(derived.tools)} tool definitions that cost ${num(derived.cost)} tokens of context per session${derived.exact ? ` in ${derivedModel}` : ' (o200k_base estimate)'}, ${derivedShare} % of a 200k window. The tool definitions were read from the open-source package in a container, not from the authenticated server. Measured ${date(derived.probedAt)}.`
+    : `${name} did not answer the probe on ${date(server.probed_at)}. Result: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}.`;
 const pageUrl = `${site}/s/${name}`;
 const jsonld = {
   '@context': 'https://schema.org',
@@ -64,26 +163,35 @@ const jsonld = {
 };
 ---
 
-<Layout title={pageTitle} description={answer} jsonld={jsonld} feed={{ href: `/s/${name}.xml`, title: `${name} on mcpcost` }}>
+<Layout title={pageTitle} description={answer} jsonld={jsonld} robots={robots} feed={{ href: `/s/${name}.xml`, title: `${name} on mcpcost` }}>
   <p class="kicker mono">{name}</p>
   <h1 class="poster">{heading}</h1>
   {server.description && <p class="lede">{server.description}</p>}
 
   <p style="margin-top:22px">
     <span class={`tag big ${bucket(server.status)}`}>{label(server.status)}</span>
-    <span class="muted small"> probed {date(server.probed_at)}{server.http_status && <> · HTTP {server.http_status}</>}{server.auth_scheme && <> · {server.auth_scheme}</>}</span>
+    <span class="muted small"> probed {date(server.probed_at)}{server.http_status && <> · HTTP {server.http_status}</>}{server.auth_scheme && <> · {server.auth_scheme}</>}{server.measured_with_credentials ? <> · measured with credentials</> : null}</span>
   </p>
 
   {server.status === 'ok' && (
-    <div class="stats">
+    <div class="stats" style="margin-top:1.5rem">
       <div class="stat"><b>{num(server.tool_count)}</b><span>tools</span></div>
-      {exact && <div class="stat"><b>{tokens(server.claude_tokens)}</b><span>tokens in {model}</span></div>}
-      {exact && <div class="stat"><b>{tokens(server.claude_tokens_cc ?? server.claude_tokens)}</b><span>tokens in Claude Code</span></div>}
-      <div class="stat"><b>{windowShare(cost)}</b><span>of a 200k context window</span></div>
-      <div class="stat"><b>{tokens(server.tools_tokens)}</b><span>{exact ? 'o200k_base estimate' : 'tokens, o200k_base estimate'}</span></div>
+      <div class="stat"><b>{exact ? tokens(cost) : `≈ ${tokens(cost)}`}</b><span>{exact ? `tokens in ${model}` : 'tokens, estimate'}</span></div>
+      <div class="stat"><b>{exact ? windowShare(cost) : `≈ ${windowShare(cost)}`}</b><span>of Claude's 200k window</span></div>
+      {multipleText && <div class="stat"><b>{multipleText}</b><span>the median server</span></div>}
       <div class="stat"><b>{ms(server.init_ms)}</b><span>to initialize</span></div>
       <div class="stat"><b>{ms(server.tools_ms)}</b><span>to list tools</span></div>
     </div>
+  )}
+  {derived && (
+    <>
+      <div class="stats">
+        <div class="stat"><b>{num(derived.tools)}</b><span>tools, from the package {derived.name}</span></div>
+        <div class="stat"><b>{derived.exact ? tokens(derived.cost) : `≈ ${tokens(derived.cost)}`}</b><span>{derived.exact ? `tokens in ${derivedModel}` : 'tokens, estimate'}</span></div>
+        <div class="stat"><b>{derived.exact ? windowShare(derived.cost) : `≈ ${windowShare(derived.cost)}`}</b><span>of Claude's 200k window</span></div>
+      </div>
+      <p class="muted small" style="margin:10px 0 0">The server needs auth, so these tool definitions were read from the publisher's open-source package <span class="mono">{derived.registry}:{derived.name}</span>, started in a container with placeholder values and the network off, on {date(derived.probedAt)}. Tool definitions do not depend on the token, so this is what an authorized user loads, unless the server hides tools by plan or role.</p>
+    </>
   )}
   {server.status !== 'ok' && server.error && <pre>{server.error}</pre>}
 
@@ -96,44 +204,52 @@ const jsonld = {
     {server.server_name && <><dt>Reports itself as</dt><dd>{server.server_name} {server.server_version}</dd></>}
     {capabilities.length > 0 && <><dt>Capabilities</dt><dd class="mono">{capabilities.join(', ')}</dd></>}
     {server.instructions_chars != null && server.status === 'ok' && <><dt>Instructions</dt><dd>{server.instructions_chars ? `${num(server.instructions_chars)} characters` : 'none'}</dd></>}
+    {!ok && server.derived_package && !derived && <><dt>Package</dt><dd>The publisher's package <span class="mono">{server.derived_registry}:{server.derived_package}</span> did not list its tools in the container: {label(server.derived_status ?? 'error')}{server.derived_error ? <>, <span class="mono">{server.derived_error}</span></> : null}.</dd></>}
+    {ok && cost != null && <><dt>Of a 1M window</dt><dd>{exact ? windowShare(cost, 1_000_000) : `≈ ${windowShare(cost, 1_000_000)}`} of a 1M context window{exact ? '' : ', estimate'}</dd></>}
+    {derived && <><dt>Of a 1M window</dt><dd>{derived.exact ? windowShare(derived.cost, 1_000_000) : `≈ ${windowShare(derived.cost, 1_000_000)}`} of a 1M context window{derived.exact ? '' : ', estimate'}</dd></>}
     {ok && server.claude_error && <><dt>Claude count</dt><dd>The count_tokens endpoint refused the tool schemas: <span class="mono">{server.claude_error}</span>. The estimate stands in.</dd></>}
-    {exact && <><dt>Claude count</dt><dd>{model}, measured {date(server.claude_measured_at)}. Counted again when the tool definitions change. <a href="/methodology#tokens">Method</a>.</dd></>}
+    {exact && <><dt>Count</dt><dd>{tokens(server.claude_tokens)} tokens in {model}, exact, measured {date(server.claude_measured_at)}.{server.measured_with_credentials ? ' Measured with credentials, so this is what an authorized user gets.' : ''} With the Claude Code prefix <span class="mono">mcp__…__</span> on each tool name: {tokens(server.claude_tokens_cc ?? server.claude_tokens)}. The o200k_base estimate is {tokens(server.tools_tokens)}. Counted again when the tool definitions change. <a href="/methodology#tokens">Method</a>.</dd></>}
+    {ok && server.gemini_tokens != null && <><dt>Gemini</dt><dd>{tokens(server.gemini_tokens)} tokens in {server.gemini_model}, exact, from the Gemini countTokens endpoint, measured {date(server.gemini_measured_at)}.</dd></>}
+    {ok && server.gemini_tokens == null && server.gemini_error && <><dt>Gemini</dt><dd>The countTokens endpoint refused the tool schemas: <span class="mono">{server.gemini_error}</span>.</dd></>}
     {server.repo && <><dt>Repository</dt><dd><a href={server.repo} rel="noopener" class="break">{server.repo}</a></dd></>}
     {server.website && <><dt>Website</dt><dd><a href={server.website} rel="noopener" class="break">{server.website}</a></dd></>}
-    <dt>Registry</dt><dd>{server.registry_status}, updated {date(server.registry_updated_at)} · <a href={`https://registry.modelcontextprotocol.io/v0/servers?search=${encodeURIComponent(name)}`} rel="noopener">registry entry</a></dd>
+    {server.registry_status === 'tracked'
+      ? <><dt>Registry</dt><dd>Not in the official registry. Tracked on request since {date(server.registry_updated_at)}. <a href="https://registry.modelcontextprotocol.io" rel="noopener">Publish it</a> and it gets its registry name here.</dd></>
+      : <><dt>Registry</dt><dd>{server.registry_status}, updated {date(server.registry_updated_at)} · <a href={`https://registry.modelcontextprotocol.io/v0/servers?search=${encodeURIComponent(name)}`} rel="noopener">registry entry</a></dd></>}
     {history.length > 0 && <><dt>Reachable</dt><dd>{reachable} of the last {history.length} probe{history.length === 1 ? '' : 's'}</dd></>}
   </dl>
 
   {topTools.length > 0 && (
-    <>
-      <h2>Most expensive tools</h2>
+    <section class="panel" aria-labelledby="tools-h">
+      <h2 id="tools-h" class="panel-title">Most expensive tools</h2>
+      <p class="muted small">{exact && server.tools_tokens ? `The Claude column scales the o200k estimate of each tool by this server's ratio of exact to estimate, ${(server.claude_tokens! / server.tools_tokens).toFixed(2)}×.` : 'Estimates with the o200k_base tokenizer.'}</p>
       <div class="frame">
         <table>
-          <thead><tr><th>Tool</th><th class="num">Tokens (o200k)</th><th class="num">Share of this server</th></tr></thead>
+          <thead><tr><th>Tool</th>{exact && server.tools_tokens && <th class="num">≈ Claude tokens</th>}<th class="num">o200k estimate</th><th class="num">Share of this server</th></tr></thead>
           <tbody>
             {topTools.map((t) => (
-              <tr><td class="mono break">{t.name}</td><td class="num">{num(t.tokens)}</td><td class="num">{server.tools_tokens ? Math.round((t.tokens / server.tools_tokens) * 100) : 0} %</td></tr>
+              <tr><td class="mono break">{t.name}</td>{exact && server.tools_tokens && <td class="num">{num(Math.round((t.tokens * server.claude_tokens!) / server.tools_tokens))}</td>}<td class="num">{num(t.tokens)}</td><td class="num">{server.tools_tokens ? Math.round((t.tokens / server.tools_tokens) * 100) : 0} %</td></tr>
             ))}
           </tbody>
         </table>
       </div>
-    </>
+    </section>
   )}
 
   {siblings.length > 0 && (
-    <>
-      <h2>Same tool set as {num(server.toolset_siblings)} other server{server.toolset_siblings === 1 ? '' : 's'}</h2>
-      <p class="muted">These registry entries have the same tool names and the same schema sizes.</p>
+    <section class="panel" aria-labelledby="same-h">
+      <h2 id="same-h" class="panel-title">Same tool set as {num(server.toolset_siblings)} other server{server.toolset_siblings === 1 ? '' : 's'}</h2>
+      <p class="muted small">These registry entries have the same tool names and the same schema sizes.</p>
       <ul>
         {siblings.map((s) => <li><a href={`/s/${s.name}`}>{s.name}</a> <span class="faint mono">{s.host}</span></li>)}
         {(server.toolset_siblings ?? 0) > siblings.length && <li class="muted">and {num((server.toolset_siblings ?? 0) - siblings.length)} more</li>}
       </ul>
-    </>
+    </section>
   )}
 
   {history.length > 1 && (
-    <>
-      <h2>History</h2>
+    <section class="panel" aria-labelledby="history-h">
+      <h2 id="history-h" class="panel-title">History</h2>
       <p class="muted small">We add a row when the result changes. A server with no change keeps its last row.</p>
       <div class="frame">
         <table>
@@ -145,11 +261,59 @@ const jsonld = {
           </tbody>
         </table>
       </div>
-    </>
+    </section>
   )}
 
-  <h2>Badge and feed</h2>
-  <p><img src={`/badge/${name}.svg`} alt={`mcpcost: ${label(server.status)}`} height="20" /></p>
-  <pre>{badgeMd}</pre>
-  <p class="muted small">An entry for every probe that changed the result, the tool count or the token cost: <a href={`/s/${name}.xml`}>Atom feed</a>. Add it to a feed reader or a Slack RSS app to hear when the server stops answering or its tool set grows.</p>
+  <div class="cta">
+      <section class="panel" aria-labelledby="badge-h">
+        <h2 id="badge-h" class="panel-title">Badge for the README</h2>
+        <p style="margin:0"><img src={`/badge/${name}.svg`} alt={`mcpcost: ${label(server.status)}`} height="20" /></p>
+        <p class="muted small" style="margin:0.75rem 0 0">The result of the latest probe, the tool count and the token cost. The feed has an entry for every probe that changed them.</p>
+        <div class="cells-row">
+          <button type="button" data-copy={badgeMd}>Copy Markdown</button>
+          <button type="button" data-copy={badgeHtml}>Copy HTML</button>
+          <a href={`/s/${name}.xml`}>Atom feed</a>
+        </div>
+      </section>
+      <section class="panel" aria-labelledby="mail-h">
+        <h2 id="mail-h" class="panel-title">A mail when this server changes</h2>
+        <form class="checkform" method="post" action="/watch">
+          <input type="hidden" name="server" value={name} />
+          <input type="email" name="email" placeholder="you@example.com" required autocomplete="email" aria-label="E-mail address" />
+          <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px" />
+          <button type="submit">Watch</button>
+        </form>
+        <p class="muted small" style="margin:8px 0 0">Stops answering, comes back, tool set or cost changes. One confirmation mail first, a stop link in every mail.</p>
+      </section>
+  </div>
+
+  <section class="panel" aria-labelledby="publisher-h">
+    <h2 id="publisher-h" class="panel-title">For the publisher</h2>
+    <ul>
+      {hints.map((h) => <li>{h}</li>)}
+    </ul>
+    {probeNow && <p class="muted small">Fixed something? <a href={probeNow}>Probe it now</a>, with the same steps as the daily run. This page updates with the next daily run.</p>}
+  </section>
+
 </Layout>
+
+<style>
+  .cta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin: 1.5rem 0 0;
+  }
+  .cta + .panel {
+    margin-top: 1.5rem;
+  }
+  .cta > .panel {
+    margin: 0;
+    min-width: 0;
+  }
+  @media (width <= 760px) {
+    .cta {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

@@ -5,6 +5,7 @@
  * Needs the image: docker build -t mcpcost-stdio probe/stdio
  */
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +14,7 @@ import { promisify } from 'node:util';
 import type { RegistryEntry, RegistryPackage, ProbeResult } from '../packages/mcpcost/src/index.js';
 import { priceTools } from '../packages/mcpcost/src/probe.js';
 import type { RawTool } from '../packages/mcpcost/src/core.js';
+import { envNamesFromError } from '../packages/mcpcost/src/env-hints.js';
 
 const run = promisify(execFile);
 const { values: args } = parseArgs({
@@ -27,6 +29,8 @@ const { values: args } = parseArgs({
     part: { type: 'string', default: '' },
     /** A file with one registry name per line; overrides sample. */
     names: { type: 'string', default: '' },
+    /** The cache of probe/derive-packages.ts: packages of remote servers that need auth. Probed every run, split by --part. */
+    derived: { type: 'string', default: '' },
     concurrency: { type: 'string', default: '4' },
     seed: { type: 'string', default: '7' },
     image: { type: 'string', default: 'mcpcost-stdio' },
@@ -38,10 +42,12 @@ const { values: args } = parseArgs({
 });
 
 type StdioStatus = ProbeResult['status'] | 'install_failed' | 'no_bin' | 'needs_env' | 'needs_args' | 'needs_network' | 'crashed';
-interface Target { name: string; pkg: RegistryPackage; updatedAt: string }
+interface Target { name: string; pkg: RegistryPackage; updatedAt: string; derivedFor?: string }
 type Kind = 'npm' | 'pypi';
 interface Row {
   name: string;
+  /** The remote server this package stands in for: the row is its tool set, not a server of its own. */
+  derivedFor?: string;
   kind: Kind;
   identifier: string;
   version?: string;
@@ -74,14 +80,26 @@ async function loadTargets(): Promise<Target[]> {
   }
   if (args.shard !== '') all = all.filter((t) => shardOf(t.name) === Number(args.shard));
   all.sort((a, b) => a.name.localeCompare(b.name));
+  // Packages derived for gated remote servers: a few hundred, probed every run, so no shard.
+  let derived: Target[] = [];
+  if (args.derived && existsSync(args.derived)) {
+    const cache = JSON.parse(await readFile(args.derived, 'utf8')) as { derived?: Record<string, { registry: Kind; name: string }> };
+    derived = Object.entries(cache.derived ?? {})
+      .filter(([, d]) => kinds.has(d.registry))
+      .map(([forName, d]) => ({ name: forName, derivedFor: forName, pkg: { registryType: d.registry, identifier: d.name }, updatedAt: '' }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
   if (args.part) {
     const [k, n] = args.part.split('/').map(Number);
     all = all.filter((_, i) => i % n === k);
-    return args.sample ? all.slice(0, Number(args.sample)) : all;
+    derived = derived.filter((_, i) => i % n === k);
+    const list = [...all, ...derived];
+    return args.sample ? list.slice(0, Number(args.sample)) : list;
   }
   const rand = mulberry32(Number(args.seed));
   for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
-  return args.sample ? all.slice(0, Number(args.sample)) : all;
+  const list = args.sample ? all.slice(0, Number(args.sample)) : all;
+  return [...list, ...derived];
 }
 
 /** Which day of a seven-day cycle a server is probed on: a stable hash of its name. */
@@ -171,7 +189,7 @@ async function install(t: Target, dir: string): Promise<{ command: string[] } | 
 }
 
 async function probeOne(t: Target): Promise<Row> {
-  const row: Row = { name: t.name, kind: t.pkg.registryType as Kind, identifier: t.pkg.identifier, version: t.pkg.version, status: 'error' };
+  const row: Row = { name: t.name, derivedFor: t.derivedFor, kind: t.pkg.registryType as Kind, identifier: t.pkg.identifier, version: t.pkg.version, status: 'error' };
   const dir = await mkdtemp(join(tmpdir(), 'mcpcost-stdio-'));
   try {
     const { args: cliArgs, missing } = buildArgs(t.pkg);
@@ -183,27 +201,41 @@ async function probeOne(t: Target): Promise<Row> {
     const command = [...installed.command, ...cliArgs];
     row.command = command;
     const env = buildEnv(t.pkg);
-    row.env = Object.keys(env);
     // 3. run with the network off, read-only install, then list the tools
-    const envArgs = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
-    const { stdout } = await withTimeout(
-      run('docker', dockerArgs(['--network', 'none', '-v', `${dir}:/work:ro`, '--tmpfs', '/tmp', '-e', `PROBE_TIMEOUT_MS=${args['probe-timeout']}`, ...envArgs, args.image, 'node', '/app/probe.mjs', ...command]), { maxBuffer: 64e6 }),
-      Number(args['probe-timeout']) + 20_000, 'probe'
-    );
-    const parsed = JSON.parse(stdout.slice(stdout.indexOf('{'))) as { result: ProbeResult; tools: RawTool[] };
-    priceTools(parsed.result, parsed.tools);
-    row.result = parsed.result;
-    row.tools = parsed.tools;
-    row.status = parsed.result.status;
-    const text = `${parsed.result.error ?? ''}`;
-    if (row.status !== 'ok' && /api[_ -]?key|token|credential|unauthori[sz]ed|missing required|environment variable|must be set|must use|is required|not configured|is invalid|invalid url|not recognized|placeholder|please set|config/i.test(text)) row.status = 'needs_env';
-    if (row.status !== 'ok' && /^usage:|\busage:|unknown command|missing argument|expected a command|too few arguments/im.test(text)) row.status = 'needs_args';
-    // Closed before initialize with a stack trace or an import error: the server crashed on start.
-    if (row.status === 'error' && /Connection closed/.test(text)) row.status = 'crashed';
-    // A bridge to a remote server (mcp-remote and friends) cannot work with the network off; that is a remote server in disguise.
-    if (row.status !== 'ok' && /mcp-remote|ENOTFOUND|getaddrinfo|ECONNREFUSED|fetch failed|StreamableHTTPClientTransport|SSEClientTransport|Temporary failure in name resolution|Network is unreachable/.test(text)) row.status = 'needs_network';
-    if (row.status !== 'ok' && /ModuleNotFoundError|ImportError|Cannot find module|ERR_MODULE_NOT_FOUND|SyntaxError|TypeError|ReferenceError|Traceback/.test(text)) row.status = 'crashed';
-    if (row.status !== 'ok') row.error = text.slice(0, 300);
+    const probeWith = async (vars: Record<string, string>) => {
+      const envArgs = Object.entries(vars).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
+      const { stdout } = await withTimeout(
+        run('docker', dockerArgs(['--network', 'none', '-v', `${dir}:/work:ro`, '--tmpfs', '/tmp', '-e', `PROBE_TIMEOUT_MS=${args['probe-timeout']}`, ...envArgs, args.image, 'node', '/app/probe.mjs', ...command]), { maxBuffer: 64e6 }),
+        Number(args['probe-timeout']) + 20_000, 'probe'
+      );
+      const parsed = JSON.parse(stdout.slice(stdout.indexOf('{'))) as { result: ProbeResult; tools: RawTool[] };
+      priceTools(parsed.result, parsed.tools);
+      const text = `${parsed.result.error ?? ''}`;
+      let status: StdioStatus = parsed.result.status;
+      if (status !== 'ok' && /api[_ -]?key|token|credential|unauthori[sz]ed|missing required|environment variable|must be set|must use|is required|not configured|is invalid|invalid url|not recognized|placeholder|please set|config/i.test(text)) status = 'needs_env';
+      if (status !== 'ok' && /^usage:|\busage:|unknown command|missing argument|expected a command|too few arguments/im.test(text)) status = 'needs_args';
+      // Closed before initialize with a stack trace or an import error: the server crashed on start.
+      if (status === 'error' && /Connection closed/.test(text)) status = 'crashed';
+      // A bridge to a remote server (mcp-remote and friends) cannot work with the network off; that is a remote server in disguise.
+      if (status !== 'ok' && /mcp-remote|ENOTFOUND|getaddrinfo|ECONNREFUSED|fetch failed|StreamableHTTPClientTransport|SSEClientTransport|Temporary failure in name resolution|Network is unreachable/.test(text)) status = 'needs_network';
+      if (status !== 'ok' && /ModuleNotFoundError|ImportError|Cannot find module|ERR_MODULE_NOT_FOUND|SyntaxError|TypeError|ReferenceError|Traceback/.test(text)) status = 'crashed';
+      return { parsed, text, status };
+    };
+    let attempt = await probeWith(env);
+    // The server said which variables it wants (a derived package has no registry entry to list them): once more with those set.
+    if (attempt.status === 'needs_env' || attempt.status === 'crashed') {
+      const wanted = envNamesFromError(attempt.text).filter((n) => !(n in env));
+      if (wanted.length) {
+        for (const n of wanted) env[n] = 'mcpcost-placeholder';
+        const again = await probeWith(env);
+        if (again.status === 'ok' || again.status !== attempt.status) attempt = again;
+      }
+    }
+    row.env = Object.keys(env);
+    row.result = attempt.parsed.result;
+    row.tools = attempt.parsed.tools;
+    row.status = attempt.status;
+    if (row.status !== 'ok') row.error = attempt.text.slice(0, 300);
     return row;
   } catch (e) {
     row.status = /timed out/.test(String(e)) ? 'timeout' : 'error';

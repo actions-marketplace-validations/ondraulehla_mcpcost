@@ -34,7 +34,7 @@ const faq = [
   },
   {
     q: 'How do we count the tokens?',
-    a: `We ask the Anthropic count_tokens endpoint. It returns the exact number of input tokens for a request, as the model will see it. We send one request with the server's tools and one request without them. The difference is what the tools cost. The endpoint is free and calls no model. The number is exact for ${model}. Other models count in a different way. We also show an o200k_base estimate over the compact JSON of each tool. ${ratio ? `The exact count is ${ratio.median.toFixed(2)} times the estimate at the median (${ratio.p10.toFixed(2)} to ${ratio.p90.toFixed(2)} for 80 % of servers).` : ''}`
+    a: `We ask the Anthropic count_tokens endpoint. It returns the exact number of input tokens for a request, as the model will see it. We send one request with the server's tools and one request without them. The difference is what the tools cost. The endpoint is free and calls no model. The number is exact for ${model}. Other models count in a different way. Where the run had a Gemini key, the server page also shows the exact count from the Gemini countTokens endpoint, the same method. We also show an o200k_base estimate over the compact JSON of each tool. ${ratio ? `The exact count is ${ratio.median.toFixed(2)} times the estimate at the median (${ratio.p10.toFixed(2)} to ${ratio.p90.toFixed(2)} for 80 % of servers).` : ''}`
   },
   {
     q: 'What does Claude Code add?',
@@ -67,29 +67,35 @@ const jsonld = {
   <p class="answer">{faq[0].a}</p>
 
   {run && stats && (
-    <div class="stats">
+    <section class="panel" aria-labelledby="today-h">
+      <h2 id="today-h" class="panel-title">Today</h2>
+      <div class="stats">
       <div class="stat"><b>{num(median)}</b><span>median tokens per server{exact ? ` in ${model}` : ''}</span></div>
       <div class="stat"><b>{num(p90)}</b><span>90th percentile</span></div>
       <div class="stat"><b>{num(p99)}</b><span>99th percentile</span></div>
       <div class="stat"><b>{num(max)}</b><span>heaviest server</span></div>
       {cc ? <div class="stat"><b>{num(cc.median)}</b><span>median in Claude Code</span></div> : <div class="stat"><b>{num(run.toolCount.median)}</b><span>median tools per server</span></div>}
       <div class="stat"><b>{pct(run.ok, run.probed)}</b><span>of registry servers answer at all</span></div>
-    </div>
+      </div>
+    </section>
   )}
 
-  {faq.slice(1).map((f) => (
-    <>
-      <h2>{f.q}</h2>
-      <p>{f.a}</p>
-    </>
-  ))}
+  <section class="panel" aria-labelledby="faq-h">
+    <h2 id="faq-h" class="panel-title">Questions</h2>
+    {faq.slice(1).map((f) => (
+      <>
+        <h3>{f.q}</h3>
+        <p>{f.a}</p>
+      </>
+    ))}
+  </section>
 
   {heaviest && (
-    <>
-      <h2>The heaviest servers today</h2>
+    <section class="panel" aria-labelledby="heavy-h">
+      <h2 id="heavy-h" class="panel-title">The heaviest servers today</h2>
       <div class="frame">
         <table>
-          <thead><tr><th>Server</th><th class="num">Tools</th><th class="num">{exact ? 'Claude' : 'Tokens'}</th>{exact && <th class="num">Claude Code</th>}<th class="num">Of 200k</th></tr></thead>
+          <thead><tr><th>Server</th><th class="num">Tools</th><th class="num">{exact ? 'Claude' : 'Tokens'}</th>{exact && <th class="num">Claude Code</th>}<th class="num">Of Claude's 200k</th></tr></thead>
           <tbody>
             {run!.heaviest.slice(0, 10).map((s) => (
               <tr>
@@ -103,7 +109,7 @@ const jsonld = {
           </tbody>
         </table>
       </div>
-      <p><a href="/servers?sort=claude">All servers by token cost →</a> · <a href="/statistics">Statistics →</a> · <a href="/methodology">Method →</a></p>
-    </>
+      <p class="panel-note"><a href="/servers?sort=claude">All servers by token cost →</a> · <a href="/statistics">Statistics →</a> · <a href="/methodology">Method →</a></p>
+    </section>
   )}
 </Layout>

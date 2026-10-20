@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { latestRun, serversInRowidWindow } from '../lib/db';
+import { latestRun, serversInSitemapChunk } from '../lib/db';
 import { CHUNK } from './sitemap.xml';
 
 const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -15,10 +15,10 @@ export const GET: APIRoute = async ({ params, site }) => {
     entries = ['/', '/tokens', '/servers', '/statistics', '/hosts', '/check', '/methodology'].map((p) => ({ loc: `${base}${p}`, lastmod }));
   } else {
     const n = Number(params.chunk);
-    if (!Number.isInteger(n) || n < 1 || n > 100) return new Response('Not found', { status: 404 });
-    // A rowid window reads only its own rows; OFFSET would read every row before it.
-    const results = await serversInRowidWindow((n - 1) * CHUNK, n * CHUNK);
-    if (!results.length) return new Response('Not found', { status: 404 });
+    if (!/^\d{1,9}$/.test(params.chunk ?? '')) return new Response('Not found', { status: 404 });
+    // A rowid range reads only its own rows; OFFSET would read every row before it.
+    // A chunk that emptied out since the index was cached is a valid, empty sitemap, not an error.
+    const results = await serversInSitemapChunk(n, CHUNK);
     entries = results.map((r) => ({ loc: `${base}/s/${r.name}`, lastmod: r.probed_at.slice(0, 10) }));
   }
   const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries

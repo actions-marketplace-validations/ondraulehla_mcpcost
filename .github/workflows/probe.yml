@@ -23,6 +23,8 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       # Exact Claude counts come from the free count_tokens endpoint. Without the key the run keeps the o200k estimate only.
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # Exact Gemini counts come from the free countTokens endpoint. Without the key the run has no Gemini column.
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -54,16 +56,32 @@ jobs:
             if gh run download "$id" --name "stdio-$id" --dir data/stdio 2>/dev/null; then echo "stdio run $id"; break; fi
           done
           s=$(find data/stdio -name stdio-run.json | head -1); test -n "$s" && { [ "$s" = data/stdio/stdio-run.json ] || cp "$s" data/stdio/stdio-run.json; } || echo "::notice::No stdio run found."
+          # The packages derived for gated remote servers, found by the previous run.
+          for id in $(gh run list --workflow "Daily probe" --limit 10 --json databaseId -q '.[].databaseId'); do
+            if gh run download "$id" --name "derived-$id" --dir data/cache 2>/dev/null; then echo "derived packages from run $id"; break; fi
+          done
+          d=$(find data/cache -name derived-packages.json | head -1); test -n "$d" && { [ "$d" = data/cache/derived-packages.json ] || cp "$d" data/cache/derived-packages.json; } || echo "::notice::No derived packages yet."
+      - name: Load the credentials for servers that need auth
+        # Stored in the D1 table "credentials" by probe/credentials-sync.ts; see the README, "Servers that need auth".
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
+        run: node --import tsx probe/credentials-sync.ts pull --out data/cache/credentials.json
       - name: Probe the registry
         run: |
           if [ -n "${{ inputs.sample }}" ]; then
-            npm run probe --silent -- --sample "${{ inputs.sample }}" --per-host 2 --out data/raw/probe-run.json --claude-cache data/cache/servers.json
+            npm run probe --silent -- --sample "${{ inputs.sample }}" --per-host 2 --out data/raw/probe-run.json --claude-cache data/cache/servers.json --credentials data/cache/credentials.json
           else
-            npm run probe --silent -- --all --concurrency 24 --out data/raw/probe-run.json --claude-cache data/cache/servers.json
+            npm run probe --silent -- --all --concurrency 24 --out data/raw/probe-run.json --claude-cache data/cache/servers.json --credentials data/cache/credentials.json
           fi
+      - name: Store the refreshed credentials
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' && hashFiles('data/cache/credentials.json') != '' }}
+        run: node --import tsx probe/credentials-sync.ts push --in data/cache/credentials.json
       - name: Count the tools of the stdio run
         if: ${{ hashFiles('data/stdio/stdio-run.json') != '' }}
         run: node --import tsx probe/count-tools.ts --in data/stdio/stdio-run.json --cache data/cache/servers.json --deadline-min 40
+      - name: Dump the board's statuses, so the import can repair rows that drifted
+        if: ${{ inputs.sample == '' && env.CLOUDFLARE_API_TOKEN != '' }}
+        working-directory: site
+        run: npx wrangler d1 execute mcp-pulse --remote --json --command "SELECT name, status FROM servers" > ../data/previous/d1-status.json || rm -f ../data/previous/d1-status.json
       - name: Build the site data and the D1 import
         run: |
           stdio=""; [ -f data/stdio/stdio-run.json ] && stdio="--stdio data/stdio/stdio-run.json"
@@ -72,11 +90,25 @@ jobs:
           else
             node --import tsx probe/build-data.ts --in data/raw/probe-run.json --out data/latest $stdio
           fi
+          d1=""; [ -s data/previous/d1-status.json ] && d1="--d1-status data/previous/d1-status.json"
           if [ -f data/previous/servers.json ]; then
-            node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql --previous data/previous/servers.json --previous-hosts data/previous/hosts.json
+            node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql --previous data/previous/servers.json --previous-hosts data/previous/hosts.json $d1
           else
-            node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql
+            node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql $d1
           fi
+      - name: Find the open-source packages of servers that need auth
+        # Reads the repositories the registry names, at most a few hundred an hour; the result feeds the stdio run.
+        if: ${{ inputs.sample == '' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node --import tsx probe/derive-packages.ts --servers data/latest/servers.json --cache data/cache/derived-packages.json
+      - name: Keep the derived packages
+        if: ${{ inputs.sample == '' && hashFiles('data/cache/derived-packages.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: derived-${{ github.run_id }}
+          path: data/cache/derived-packages.json
+          retention-days: 30
       - name: Keep the Claude counts as a cache
         if: ${{ inputs.sample == '' }}
         uses: actions/upload-artifact@v4
@@ -85,11 +117,16 @@ jobs:
           path: data/latest/servers.json
           retention-days: 30
           compression-level: 9
-      - name: Apply the schema
-        # Every statement is idempotent: CREATE ... IF NOT EXISTS and DROP ... IF EXISTS.
+      - name: Apply the schema and the pending migrations
+        # schema.sql is idempotent (CREATE ... IF NOT EXISTS). A migration that adds columns runs once, when its first column is missing.
         if: ${{ inputs.sample == '' && env.CLOUDFLARE_API_TOKEN != '' }}
         working-directory: site
-        run: npx wrangler d1 execute mcp-pulse --remote --file=schema.sql
+        run: |
+          npx wrangler d1 execute mcp-pulse --remote --file=schema.sql
+          has() { npx wrangler d1 execute mcp-pulse --remote --json --command "SELECT count(*) AS n FROM pragma_table_info('servers') WHERE name='$1'" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].results[0].n))'; }
+          if [ "$(has gemini_tokens)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/003-gemini.sql; echo "migration 003 applied"; fi
+          if [ "$(has measured_with_credentials)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/004-credentials.sql; echo "migration 004 applied"; fi
+          if [ "$(has derived_package)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/005-derived.sql; echo "migration 005 applied"; fi
       - name: Import into D1
         if: ${{ inputs.sample == '' && env.CLOUDFLARE_API_TOKEN != '' }}
         working-directory: site

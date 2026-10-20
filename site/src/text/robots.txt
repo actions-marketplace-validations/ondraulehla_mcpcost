@@ -1,8 +1,22 @@
+# SEO scrapers fetch every page and every list variant and bring nothing. They are refused.
+User-agent: ShapBot
+User-agent: SemrushBot
+User-agent: DataForSeoBot
+User-agent: AhrefsBot
+User-agent: MJ12bot
+User-agent: DotBot
+User-agent: PetalBot
+User-agent: Bytespider
+Disallow: /
+
 User-agent: *
 Allow: /
+Crawl-delay: 2
 # The list is one page of fifty servers at a time; every sort, filter and page is a separate database read.
 # Crawlers get the first page and every server's own page (all in the sitemap), not the thousands of list variants.
 Disallow: /servers?
 Disallow: /api/
 Disallow: /check?
+Disallow: /watch
+Disallow: /track
 Sitemap: https://mcpcost.ulehla.dev/sitemap.xml

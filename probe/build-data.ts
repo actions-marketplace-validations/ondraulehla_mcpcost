@@ -38,10 +38,14 @@ interface RawRow {
   status: string;
   result: ProbeResult;
   payloadHash?: string;
+  /** Probed with stored credentials: the result is what an authorized user sees. */
+  withCredentials?: boolean;
 }
 
 interface StdioRow {
   name: string;
+  /** Set when the package stands in for a gated remote server: its tool set goes on that server's row. */
+  derivedFor?: string;
   kind: 'npm' | 'pypi';
   identifier: string;
   version?: string;
@@ -86,6 +90,26 @@ export interface ServerRow {
   claudeMeasuredAt?: string;
   /** Why Claude refused to count, for example a schema the API does not accept. */
   claudeError?: string;
+  /** Exact count from the Gemini countTokens endpoint. */
+  geminiTokens?: number;
+  geminiModel?: string;
+  geminiMeasuredAt?: string;
+  geminiError?: string;
+  /** Measured with stored credentials (a header or an OAuth token), so the count is what an authorized user gets. */
+  measuredWithCredentials?: boolean;
+  /** For a gated remote server: the tool set of the publisher's open-source package, measured in a container. */
+  derivedPackage?: {
+    registry: 'npm' | 'pypi';
+    name: string;
+    status: string;
+    probedAt: string;
+    toolCount?: number;
+    toolsTokens?: number;
+    claudeTokens?: number;
+    claudeModel?: string;
+    geminiTokens?: number;
+    error?: string;
+  };
   instructionsChars?: number;
   /** Hash of the sorted tool names and schema sizes. Equal hashes mean the same tool set. */
   toolsetHash?: string;
@@ -106,7 +130,10 @@ const registryMeta = new Map(registryRaw.map((r) => [r.server.name, r._meta['io.
  * from the previous run while the registry still lists them.
  */
 const stdioFile = args.stdio && existsSync(args.stdio) ? (JSON.parse(await readFile(args.stdio, 'utf8')) as { probedAt: string; rows: StdioRow[] }) : null;
-const stdioRows: RawRow[] = (stdioFile?.rows ?? []).map((r) => {
+/** Packages that stand in for gated remote servers, by the remote server's name. Not rows of their own. */
+const derivedByName = new Map<string, StdioRow>();
+for (const r of stdioFile?.rows ?? []) if (r.derivedFor) derivedByName.set(r.derivedFor, r);
+const stdioRows: RawRow[] = (stdioFile?.rows ?? []).filter((r) => !r.derivedFor).map((r) => {
   const kind = r.kind ?? 'npm';
   const host = kind === 'npm' ? 'npmjs.com' : 'pypi.org';
   const url = kind === 'npm' ? `npm:${r.identifier}${r.version ? `@${r.version}` : ''}` : `pypi:${r.identifier}${r.version ? `==${r.version}` : ''}`;
@@ -157,6 +184,11 @@ const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
     claudeModel: res.claude?.model,
     claudeMeasuredAt: res.claude?.measuredAt,
     claudeError: res.claude?.error,
+    geminiTokens: res.gemini?.tokens,
+    geminiModel: res.gemini?.model,
+    geminiMeasuredAt: res.gemini?.measuredAt,
+    geminiError: res.gemini?.error,
+    measuredWithCredentials: r.withCredentials || undefined,
     instructionsChars: res.instructionsChars,
     toolsetHash,
     topTools: res.tools ? [...res.tools].sort((a, b) => b.tokens - a.tokens).slice(0, 5).map((t) => ({ name: t.name, tokens: t.tokens })) : undefined,
@@ -165,6 +197,27 @@ const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
 });
 
 rows.push(...carried);
+
+// The derived tool set of a gated remote server: today's container result, else what the previous run had.
+const previousDerived = new Map(previousForCarry.filter((r) => r.derivedPackage).map((r) => [r.name, r.derivedPackage!]));
+for (const r of rows) {
+  if (r.transport === 'stdio' || (r.status !== 'auth' && r.status !== 'payment')) continue;
+  const d = derivedByName.get(r.name);
+  if (d) {
+    r.derivedPackage = {
+      registry: d.kind,
+      name: d.identifier,
+      status: d.status,
+      probedAt: stdioFile?.probedAt ?? run.probedAt,
+      toolCount: d.result?.toolCount,
+      toolsTokens: d.result?.toolsTokens,
+      claudeTokens: d.result?.claude?.tokens,
+      claudeModel: d.result?.claude?.model,
+      geminiTokens: d.result?.gemini?.tokens,
+      error: d.status === 'ok' ? undefined : (d.error ?? d.result?.error)?.slice(0, 160)
+    };
+  } else if (previousDerived.has(r.name)) r.derivedPackage = previousDerived.get(r.name);
+}
 
 /**
  * A broken runner looks like a mass outage: on 2026-10-14 a run saw 15 049
@@ -257,6 +310,8 @@ const counted = ok.filter((r) => r.claudeTokens != null);
 const claude = counted.map((r) => r.claudeTokens!);
 const claudeCc = counted.map((r) => r.claudeTokensCc ?? r.claudeTokens!);
 const claudeModel = counted[0]?.claudeModel;
+const geminiCounted = ok.filter((r) => r.geminiTokens != null);
+const geminiAll = geminiCounted.map((r) => r.geminiTokens!);
 /** Histogram of the exact counts: how many alive servers fall into each cost band. */
 const HISTOGRAM_EDGES = [500, 1000, 2000, 5000, 10000, 20000, 50000, 100000];
 const histogram = (xs: number[]) => {
@@ -269,7 +324,8 @@ const uniqueToolsets = new Set(ok.map((r) => r.toolsetHash)).size;
 const weight = (r: ServerRow) => r.claudeTokens ?? (counted.length ? -1 : (r.toolsTokens ?? 0));
 const summary = {
   probedAt: run.probedAt,
-  registryEntries: registryRaw.length,
+  registryEntries: registryRaw.filter((r) => r._meta['io.modelcontextprotocol.registry/official']?.status !== 'tracked').length,
+  tracked: registryRaw.filter((r) => r._meta['io.modelcontextprotocol.registry/official']?.status === 'tracked').length,
   registryWithRemote: registryRaw.filter((r) => r.server.remotes?.length).length,
   registryWithPackage: registryRaw.filter((r) => !r.server.remotes?.length && r.server.packages?.some((p) => p.registryType === 'npm' || p.registryType === 'pypi')).length,
   stdioProbed: rows.filter((r) => r.transport === 'stdio').length,
@@ -294,6 +350,14 @@ const summary = {
         claudeCode: { median: quantile(claudeCc, 0.5), p90: quantile(claudeCc, 0.9), p99: quantile(claudeCc, 0.99), max: Math.max(0, ...claudeCc), total: claudeCc.reduce((a, b) => a + b, 0) },
         /** Exact count divided by the estimate, over the counted servers. */
         ratioToEstimate: { median: quantile(counted.map((r) => r.claudeTokens! / Math.max(1, r.toolsTokens ?? 1)), 0.5), p10: quantile(counted.map((r) => r.claudeTokens! / Math.max(1, r.toolsTokens ?? 1)), 0.1), p90: quantile(counted.map((r) => r.claudeTokens! / Math.max(1, r.toolsTokens ?? 1)), 0.9) }
+      }
+    : undefined,
+  geminiTokens: geminiCounted.length
+    ? {
+        model: geminiCounted[0]?.geminiModel,
+        counted: geminiCounted.length,
+        refused: ok.filter((r) => r.geminiError).length,
+        median: quantile(geminiAll, 0.5), p90: quantile(geminiAll, 0.9), p99: quantile(geminiAll, 0.99), max: Math.max(0, ...geminiAll), total: geminiAll.reduce((a, b) => a + b, 0)
       }
     : undefined,
   toolCount: { median: quantile(ok.map((r) => r.toolCount ?? 0), 0.5), p90: quantile(ok.map((r) => r.toolCount ?? 0), 0.9), max: Math.max(0, ...ok.map((r) => r.toolCount ?? 0)) },

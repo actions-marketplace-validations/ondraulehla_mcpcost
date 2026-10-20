@@ -8,12 +8,14 @@ import { probeRemote, VERSION } from './probe.js';
 import { probeStdio } from './stdio.js';
 import { TOKENIZER } from './tokens.js';
 import type { ProbeResult } from './types.js';
+import { loadCredentials, saveCredentials, credentialsFor, defaultCredentialsPath, type CredentialStore, type FileProvider } from './credentials.js';
 
 const HELP = `mcpcost ${VERSION}: how many tokens do your MCP servers cost before the first prompt?
 
 Usage
   mcpcost [options]                 measure every server in the configs it can find
   mcpcost mcp                       serve the same measurements as an MCP server over stdio
+  mcpcost auth <url>                store credentials for a server that needs auth (see mcpcost auth --help)
   mcpcost --config <file>           measure one config file (repeatable)
   mcpcost --url <url>               measure one remote server (repeatable)
   mcpcost --stdio "<command args>"  measure one local server (repeatable)
@@ -24,15 +26,21 @@ Options
   --tools <n>          list the n most expensive tools of each server (default 0)
   --claude             exact counts from the Anthropic count_tokens endpoint (free, needs ANTHROPIC_API_KEY)
   --model <id>         model for --claude (default claude-opus-5-5)
+  --gemini             exact counts from the Gemini countTokens endpoint (free, needs GEMINI_API_KEY)
+  --gemini-model <id>  model for --gemini (default gemini-3.8-flash)
   --timeout <ms>       per server (default 15000)
   --no-stdio           do not start local servers, only measure remote ones
+  --credentials <file> credentials for servers that need auth (default ~/.mcpcost/credentials.json)
   --json               machine-readable output
   --help, --version
 
 Config files it looks for: .mcp.json, ~/.claude.json, Claude Desktop, Cursor, VS Code, Windsurf, Gemini CLI.
 Without --claude, tokens are an estimate: ${TOKENIZER} over name, description and input schema of each tool.
 With --claude, the exact count for the model is shown too, as published and with the Claude Code mcp__<server>__ prefix.
+With --gemini, the exact count for Gemini is shown too. With both, --budget and the percentages use the Claude count.
 The same probe runs the public board at https://mcpcost.ulehla.dev`;
+
+type Basis = 'claude' | 'gemini' | 'estimate';
 
 interface Row {
   name: string;
@@ -41,6 +49,8 @@ interface Row {
   target: string;
   result?: ProbeResult;
   skipped?: string;
+  /** Measured with stored credentials: a header or an OAuth token from the credentials file. */
+  withCredentials?: boolean;
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -48,6 +58,10 @@ export async function main(argv: string[]): Promise<number> {
     const { serveStdio } = await import('./mcp.js');
     await serveStdio();
     return new Promise(() => undefined);
+  }
+  if (argv[0] === 'auth') {
+    const { authCommand } = await import('./auth-cli.js');
+    return authCommand(argv.slice(1));
   }
   const { values } = parseArgs({
     args: argv,
@@ -60,8 +74,11 @@ export async function main(argv: string[]): Promise<number> {
       tools: { type: 'string', default: '0' },
       timeout: { type: 'string', default: '15000' },
       'no-stdio': { type: 'boolean', default: false },
+      credentials: { type: 'string' },
       claude: { type: 'boolean', default: false },
       model: { type: 'string' },
+      gemini: { type: 'boolean', default: false },
+      'gemini-model': { type: 'string' },
       json: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
       version: { type: 'boolean', default: false }
@@ -86,6 +103,12 @@ export async function main(argv: string[]): Promise<number> {
     return 2;
   }
   const claudeFor = (serverName: string) => (values.claude && apiKey ? { apiKey, model: values.model, serverName } : undefined);
+  const geminiKey = process.env.GEMINI_API_KEY;
+  if (values.gemini && !geminiKey) {
+    console.error('--gemini needs GEMINI_API_KEY in the environment. Only the free countTokens endpoint is called.');
+    return 2;
+  }
+  const gemini = values.gemini && geminiKey ? { apiKey: geminiKey, model: values['gemini-model'] } : undefined;
 
   const servers: ConfiguredServer[] = [];
   const sources: string[] = [];
@@ -119,6 +142,17 @@ export async function main(argv: string[]): Promise<number> {
     }
   }
 
+  // Credentials for servers that need auth. The file is optional; a missing default file means none.
+  const credentialsFile = values.credentials ?? defaultCredentialsPath();
+  let store: CredentialStore | null = null;
+  try {
+    store = await loadCredentials(credentialsFile);
+  } catch (e) {
+    console.error(`cannot read ${credentialsFile}: ${e instanceof Error ? e.message : String(e)}`);
+    return 2;
+  }
+  const providers: FileProvider[] = [];
+
   const rows: Row[] = [];
   const running: Promise<void>[] = [];
   for (const s of servers) {
@@ -132,22 +166,41 @@ export async function main(argv: string[]): Promise<number> {
       row.skipped = 'local server, --no-stdio';
       continue;
     }
+    let headers = s.headers;
+    let authProvider: FileProvider | undefined;
+    if (s.kind === 'remote' && store) {
+      const creds = credentialsFor(store, s.url!);
+      if (creds) {
+        // Headers from the config win; the stored ones fill in what the config leaves out.
+        if (creds.headers) headers = { ...creds.headers, ...(s.headers ?? {}) };
+        authProvider = creds.authProvider;
+        if (authProvider) providers.push(authProvider);
+        row.withCredentials = true;
+      }
+    }
     const job =
       s.kind === 'remote'
-        ? probeRemote({ url: s.url!, type: s.type ?? 'streamable-http' }, { timeoutMs, headers: s.headers, claude: claudeFor(s.name) })
-        : probeStdio({ command: s.command!, args: s.args, env: s.env, cwd: s.cwd }, { timeoutMs, claude: claudeFor(s.name) });
+        ? probeRemote({ url: s.url!, type: s.type ?? 'streamable-http' }, { timeoutMs, headers, authProvider, claude: claudeFor(s.name), gemini })
+        : probeStdio({ command: s.command!, args: s.args, env: s.env, cwd: s.cwd }, { timeoutMs, claude: claudeFor(s.name), gemini });
     running.push(job.then((r) => void (row.result = r)));
   }
   await Promise.all(running);
+  // A refreshed token goes back to the file.
+  if (store && providers.some((p) => p.changed)) await saveCredentials(store, credentialsFile).catch((e) => console.error(`cannot write ${credentialsFile}: ${e instanceof Error ? e.message : String(e)}`));
 
   const measured = rows.filter((r) => r.result?.status === 'ok');
-  const exact = values.claude;
-  /** The number a row is ranked and budgeted by: the exact Claude count with --claude, else the estimate. */
-  const cost = (r: Row) => (exact ? r.result?.claude?.tokens : r.result?.toolsTokens);
+  /** The number a row is ranked and budgeted by: the exact Claude count with --claude, else the Gemini count with --gemini, else the estimate. */
+  const basis: Basis = values.claude ? 'claude' : values.gemini ? 'gemini' : 'estimate';
+  const exact = basis !== 'estimate';
+  const cost = (r: Row) => (basis === 'claude' ? r.result?.claude?.tokens : basis === 'gemini' ? r.result?.gemini?.tokens : r.result?.toolsTokens);
   const total = measured.reduce((a, r) => a + (cost(r) ?? 0), 0);
   const totalEstimate = measured.reduce((a, r) => a + (r.result?.toolsTokens ?? 0), 0);
   const totalTools = measured.reduce((a, r) => a + (r.result?.toolCount ?? 0), 0);
-  const model = measured.find((r) => r.result?.claude?.model)?.result?.claude?.model ?? values.model ?? 'claude-opus-5-5';
+  const model =
+    basis === 'gemini'
+      ? (measured.find((r) => r.result?.gemini?.model)?.result?.gemini?.model ?? values['gemini-model'] ?? 'gemini-3.8-flash')
+      : (measured.find((r) => r.result?.claude?.model)?.result?.claude?.model ?? values.model ?? 'claude-opus-5-5');
+  const geminiModel = measured.find((r) => r.result?.gemini?.model)?.result?.gemini?.model ?? values['gemini-model'] ?? 'gemini-3.8-flash';
   rows.sort((a, b) => (cost(b) ?? -1) - (cost(a) ?? -1));
 
   if (values.json) {
@@ -156,7 +209,7 @@ export async function main(argv: string[]): Promise<number> {
         {
           version: VERSION,
           tokenizer: TOKENIZER,
-          exact: exact ? { endpoint: 'count_tokens', model } : null,
+          exact: basis === 'claude' ? { endpoint: 'count_tokens', model, provider: 'anthropic' } : basis === 'gemini' ? { endpoint: 'countTokens', model, provider: 'google' } : null,
           window,
           sources,
           total: { servers: measured.length, tools: totalTools, tokens: total, tokensEstimate: totalEstimate, shareOfWindow: total / window },
@@ -166,13 +219,19 @@ export async function main(argv: string[]): Promise<number> {
             kind: r.kind,
             target: r.target,
             skipped: r.skipped,
+            withCredentials: r.withCredentials || undefined,
             status: r.result?.status,
             error: r.result?.error,
             toolCount: r.result?.toolCount,
+            /** The number the row is ranked and budgeted by, on the basis above. */
+            tokens: cost(r),
             toolsTokens: r.result?.toolsTokens,
             claudeTokens: r.result?.claude?.tokens,
             claudeTokensClaudeCode: r.result?.claude?.tokensClaudeCode,
             claudeError: r.result?.claude?.error,
+            geminiTokens: r.result?.gemini?.tokens,
+            geminiModel: r.result?.gemini?.model,
+            geminiError: r.result?.gemini?.error,
             shareOfWindow: cost(r) != null ? cost(r)! / window : undefined,
             initializeMs: r.result?.latencyMs.initialize,
             toolsListMs: r.result?.latencyMs.toolsList,
@@ -185,7 +244,7 @@ export async function main(argv: string[]): Promise<number> {
       )
     );
   } else {
-    console.log(render(rows, { window, total, totalTools, topTools, sources, exact, model, cost }));
+    console.log(render(rows, { window, total, totalTools, topTools, sources, basis, model, geminiModel, withGemini: Boolean(gemini), cost }));
   }
 
   if (budget !== undefined && total > budget) {
@@ -213,15 +272,16 @@ function statusText(r: Row): string {
   if (r.skipped) return `skipped: ${r.skipped}`;
   const s = r.result?.status;
   if (!s) return '';
-  if (s === 'ok') return 'alive';
-  if (s === 'auth') return `needs auth${r.result?.authScheme ? ` (${r.result.authScheme})` : ''}`;
+  if (s === 'ok') return r.withCredentials ? 'alive (credentials)' : 'alive';
+  if (s === 'auth') return `needs auth${r.result?.authScheme ? ` (${r.result.authScheme})` : ''}${r.withCredentials ? ', stored credentials refused' : ''}`;
   if (s === 'payment') return 'payment required';
   if (s === 'newer_protocol') return 'newer protocol than this SDK';
   if (s === 'not_found') return r.kind === 'stdio' ? 'command not found' : 'not found';
   return s.replace('_', ' ');
 }
 
-function render(rows: Row[], o: { window: number; total: number; totalTools: number; topTools: number; sources: string[]; exact: boolean; model: string; cost: (r: Row) => number | undefined }): string {
+function render(rows: Row[], o: { window: number; total: number; totalTools: number; topTools: number; sources: string[]; basis: Basis; model: string; geminiModel: string; withGemini: boolean; cost: (r: Row) => number | undefined }): string {
+  const claude = o.basis === 'claude';
   const lines: string[] = [];
   lines.push(`mcpcost ${VERSION} · tool definitions your agent loads before the first prompt`);
   if (o.sources.length) lines.push(o.sources.map((s) => `  ${shortSource(s)}`).join('\n'));
@@ -231,28 +291,38 @@ function render(rows: Row[], o: { window: number; total: number; totalTools: num
     return lines.join('\n');
   }
   const table: string[][] = [
-    o.exact
-      ? ['server', 'source', 'result', 'tools', 'claude', 'claude code', 'o200k', `of ${Math.round(o.window / 1000)}k`]
-      : ['server', 'source', 'result', 'tools', 'tokens', `of ${Math.round(o.window / 1000)}k`]
+    [
+      'server', 'source', 'result', 'tools',
+      ...(claude ? ['claude', 'claude code'] : []),
+      ...(o.withGemini ? ['gemini'] : []),
+      o.basis === 'estimate' ? 'tokens' : 'o200k',
+      `of ${Math.round(o.window / 1000)}k`
+    ]
   ];
+  const exactCell = (n: number | undefined, error: string | undefined) => (n != null ? fmt(n) : error ? 'refused' : '');
   for (const r of rows) {
     const ok = r.result?.status === 'ok';
     const c = r.result?.claude;
+    const g = r.result?.gemini;
     table.push([
       r.name.length > 28 ? r.name.slice(0, 27) + '…' : r.name,
       shortSource(r.source).replace(/^.*\//, ''),
       statusText(r),
       ok ? fmt(r.result?.toolCount) : '',
-      ...(o.exact ? [ok ? (c?.tokens != null ? fmt(c.tokens) : c?.error ? 'refused' : '') : '', ok ? fmt(c?.tokensClaudeCode) : ''] : []),
+      ...(claude ? [ok ? exactCell(c?.tokens, c?.error) : '', ok ? fmt(c?.tokensClaudeCode) : ''] : []),
+      ...(o.withGemini ? [ok ? exactCell(g?.tokens, g?.error) : ''] : []),
       ok ? fmt(r.result?.toolsTokens) : '',
       ok && o.cost(r) != null ? pct(o.cost(r)!, o.window) : ''
     ]);
   }
   const totalEstimate = rows.reduce((a, r) => a + (r.result?.status === 'ok' ? (r.result.toolsTokens ?? 0) : 0), 0);
   const totalCc = rows.reduce((a, r) => a + (r.result?.claude?.tokensClaudeCode ?? 0), 0);
+  const totalClaude = rows.reduce((a, r) => a + (r.result?.claude?.tokens ?? 0), 0);
+  const totalGemini = rows.reduce((a, r) => a + (r.result?.gemini?.tokens ?? 0), 0);
   table.push([
     'total', '', `${rows.filter((r) => r.result?.status === 'ok').length} of ${rows.length} measured`, fmt(o.totalTools),
-    ...(o.exact ? [fmt(o.total), fmt(totalCc)] : []),
+    ...(claude ? [fmt(totalClaude), fmt(totalCc)] : []),
+    ...(o.withGemini ? [fmt(totalGemini)] : []),
     fmt(totalEstimate), pct(o.total, o.window)
   ]);
   const widths = table[0].map((_, i) => Math.max(...table.map((row) => row[i].length)));
@@ -278,11 +348,13 @@ function render(rows: Row[], o: { window: number; total: number; totalTools: num
       }
     }
   }
-  if (o.exact) {
-    lines.push('', `  claude: exact count from the Anthropic count_tokens endpoint for ${o.model}. claude code: the same with the mcp__<server>__ prefix on each tool name.`);
+  if (o.basis !== 'estimate') {
+    lines.push('');
+    if (claude) lines.push(`  claude: exact count from the Anthropic count_tokens endpoint for ${o.model}. claude code: the same with the mcp__<server>__ prefix on each tool name.`);
+    if (o.withGemini) lines.push(`  gemini: exact count from the Gemini countTokens endpoint for ${o.geminiModel}.`);
     lines.push(`  o200k: the estimate without a key, ${TOKENIZER} over name, description and input schema. "refused": the endpoint did not accept the schema.`);
-    const refused = rows.filter((r) => r.result?.claude?.error);
-    for (const r of refused) lines.push(`  ${r.name}: ${r.result!.claude!.error!.slice(0, 160)}`);
+    const refused = rows.filter((r) => r.result?.claude?.error || r.result?.gemini?.error);
+    for (const r of refused) lines.push(`  ${r.name}: ${(r.result!.claude?.error ?? r.result!.gemini?.error)!.slice(0, 160)}`);
   } else {
     lines.push('', `  Estimated with ${TOKENIZER} over name, description and input schema of each tool. Claude counts about 1.9 times this. Add --claude for the exact count.`);
   }
