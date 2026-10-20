@@ -30,7 +30,8 @@ export async function createClaudeCounter(options: { apiKey?: string; cachePath?
   if (options.cachePath && existsSync(options.cachePath)) {
     const prev = JSON.parse(await readFile(options.cachePath, 'utf8')) as Array<{ name: string; payloadHash?: string; claudeModel?: string; claudeTokens?: number; claudeTokensCc?: number; claudeMeasuredAt?: string; claudeError?: string }>;
     for (const p of prev) {
-      if (p.payloadHash && p.claudeModel === model && p.claudeMeasuredAt && (p.claudeTokens != null || p.claudeError)) {
+      // An error about the key (a 401 in one run left 5 917 servers on the estimate for days) is not kept: the server is counted again.
+      if (p.payloadHash && p.claudeModel === model && p.claudeMeasuredAt && (p.claudeTokens != null || (p.claudeError && !/x-api-key|api key|authentication|unauthori/i.test(p.claudeError)))) {
         cache.set(p.name, { payloadHash: p.payloadHash, model: p.claudeModel, tokens: p.claudeTokens, tokensClaudeCode: p.claudeTokensCc, measuredAt: p.claudeMeasuredAt, error: p.claudeError });
       }
     }
@@ -61,7 +62,7 @@ export async function createClaudeCounter(options: { apiKey?: string; cachePath?
       } catch (e) {
         const message = e instanceof ClaudeCountError ? e.message : String(e);
         // A refused schema is a stable fact about the server; a transport failure is not, so leave it out and retry next run.
-        if (e instanceof ClaudeCountError && e.status >= 400 && e.status < 500 && e.status !== 429) return { model, measuredAt, error: message };
+        if (e instanceof ClaudeCountError && e.status >= 400 && e.status < 500 && e.status !== 429 && e.status !== 401 && e.status !== 403) return { model, measuredAt, error: message };
         console.error(`  count_tokens failed for ${name}: ${message}`);
         return undefined;
       }

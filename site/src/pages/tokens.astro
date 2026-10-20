@@ -38,11 +38,11 @@ const faq = [
   },
   {
     q: 'What does Claude Code add?',
-    a: `Claude Code names each tool mcp__<server>__<tool>. The longer name costs more tokens. We count that variant too. ${cc ? `The median server costs ${num(cc.median)} tokens in Claude Code against ${num(median)} with the published names.` : ''} Claude Code also adds a tool-use system prompt one time per request. For ${model} it is 286 tokens. When MCP tools take more than 10 % of the context, Claude Code can defer them and load them on demand through tool search.`
+    a: `Claude Code names each tool mcp__<server>__<tool>. The longer name costs more tokens. We count that variant too. ${cc ? `The median server costs ${num(cc.median)} tokens in Claude Code against ${num(median)} with the published names.` : ''} Claude Code also adds a tool-use system prompt one time per request. For ${model} it is 286 tokens. Claude Code defers MCP tool definitions by default (tool search) and loads a tool's definition when it needs it, so the count is the ceiling for a session, not what every turn pays.`
   },
   {
     q: 'How many tokens does one specific MCP server cost?',
-    a: `Each remote server in the registry, and each npm or PyPI package server, has a page at ${site}/s/<registry name>. The page shows the exact cost in ${model}, the cost in Claude Code, the estimate, the tool count and the status. For a server that is not in the registry, ${site}/check probes it now and counts it the same way. In a terminal, npx mcpcost measures the servers in your own Claude Code, Claude Desktop, Cursor, VS Code or Windsurf config. With ANTHROPIC_API_KEY set and --claude, mcpcost asks the same endpoint.`
+    a: `Each remote server in the registry, and each npm or PyPI package server, has a page at ${site}/s/<registry name>. The page shows the exact cost in ${model}, the cost in Claude Code, the estimate, the tool count and the status. For a server that is not in the registry, ${site}/check probes it now and counts it the same way. In a terminal, npx mcpcost measures the servers in your own Claude Code, Claude Desktop, Cursor, VS Code, Windsurf or Gemini CLI config. With ANTHROPIC_API_KEY set and --claude, mcpcost asks the same endpoint.`
   },
   {
     q: 'What is a good budget?',
@@ -50,7 +50,7 @@ const faq = [
   },
   {
     q: 'Does a server that needs auth also cost tokens?',
-    a: 'Yes. After you authenticate, it sends its tool definitions like any other server. The board cannot list the tools of a server that refuses clients without credentials. These servers show “needs auth” and no count. mcpcost measures them with the headers from your config.'
+    a: 'Yes. After you authenticate, it sends its tool definitions like any other server. The board cannot list the tools of a server that refuses clients without credentials. These servers show “needs auth”. When the open-source package of the publisher is on npm or PyPI, the page shows the tool set of that package instead, with a note. In a terminal, npx mcpcost measures such a server with the headers from your config, or with the credentials you store once through npx mcpcost auth.'
   }
 ];
 const jsonld = {
