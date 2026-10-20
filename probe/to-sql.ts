@@ -33,7 +33,7 @@ const { values: args } = parseArgs({
      */
     'd1-status': { type: 'string' },
     /** How many drifted rows to repair in one run: each full row costs about twelve index writes of the daily budget. */
-    'repair-limit': { type: 'string', default: '3000' },
+    'repair-limit': { type: 'string', default: '2000' },
     /** How many stale rows to delete in one run. */
     'delete-limit': { type: 'string', default: '600' },
     'rows-per-insert': { type: 'string', default: '40' }
