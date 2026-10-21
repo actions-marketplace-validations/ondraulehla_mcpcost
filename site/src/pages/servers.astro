@@ -172,16 +172,14 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
   <p class="kicker">{run ? `probed ${run.probedAt.slice(0, 10)}` : ''}</p>
   <h1 class="poster">{heading}</h1>
 
-  <form class="checkform search" method="get" action="/servers" role="search">
+  {/* One form for the search and every filter: one Search button sends them all. The segments and the chips inside it are links. */}
+  <form class="list-form" method="get" action="/servers" role="search">
+  <div class="checkform search">
     <input type="search" name="q" value={q} placeholder="Search by name, title, description or host" autocomplete="off" aria-label="Search servers" />
-    {statusParam && <input type="hidden" name="status" value={statusParam} />}
-    {host && <input type="hidden" name="host" value={host} />}
-    {protocol && <input type="hidden" name="protocol" value={protocol} />}
-    {transport && <input type="hidden" name="transport" value={transport} />}
-    {tokensParam && <input type="hidden" name="tokens" value={tokensParam} />}
+    {(statusParam || defaultView) && <input type="hidden" name="status" value={statusParam || 'ok'} />}
     {sort !== DEFAULT_SORT && <input type="hidden" name="sort" value={sort} />}
     <button type="submit">Search</button>
-  </form>
+  </div>
 
   <nav class="segments" aria-label="Result">
     {BUCKETS.map((b) => (
@@ -204,10 +202,7 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
 
   <details class="more" open={Boolean(host || protocol || transport || tokensParam) || undefined}>
     <summary>More filters{(host || protocol || transport || tokensParam) && <span class="muted"> · {[host, rangeLabel, protocol && `protocol ${protocol}`, transport && transportLabel[transport]].filter(Boolean).join(' · ')}</span>}</summary>
-    <form class="more-form" method="get" action="/servers">
-      {q && <input type="hidden" name="q" value={q} />}
-      {(statusParam || defaultView) && <input type="hidden" name="status" value={statusParam || 'ok'} />}
-      {sort !== DEFAULT_SORT && <input type="hidden" name="sort" value={sort} />}
+    <div class="more-form">
       <label>Host
         <input type="text" name="host" value={host} list="host-options" placeholder="any" autocomplete="off" spellcheck="false" />
         <datalist id="host-options">
@@ -236,9 +231,9 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
           <option value="stdio" selected={transport === 'stdio'}>stdio (npm, PyPI)</option>
         </select>
       </label>
-      <button type="submit">Apply</button>
-    </form>
+    </div>
   </details>
+  </form>
 
   {active.length > 0 && (
     <div class="chips active-filters" aria-label="Active filters">
@@ -353,15 +348,13 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
   .more[open] summary::before { content: '−'; }
   .more summary .muted { text-transform: none; letter-spacing: 0.04em; }
   /* As wide as the segments above and the table below. */
-  .more-form { display: grid; grid-template-columns: minmax(170px, 1.3fr) minmax(190px, 1.2fr) minmax(140px, 1fr) minmax(140px, 1fr) auto; gap: 1px; margin-top: 8px; border: 1px solid var(--line); background: var(--line); }
+  .more-form { display: grid; grid-template-columns: minmax(170px, 1.3fr) minmax(190px, 1.2fr) minmax(140px, 1fr) minmax(140px, 1fr); gap: 1px; margin-top: 8px; border: 1px solid var(--line); background: var(--line); }
   .more-form label, .more-form .range { display: flex; flex-direction: column; gap: 6px; padding: 0.625rem 0.75rem 0.75rem; background: var(--surface); font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-faint); }
   .more-form select, .more-form input { width: 100%; min-width: 0; }
   .range-inputs { display: flex; align-items: center; gap: 6px; }
   .range-inputs input { flex: 1 1 0; -moz-appearance: textfield; }
   .range-inputs input::-webkit-outer-spin-button, .range-inputs input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   .range-to { text-transform: none; letter-spacing: 0.04em; color: var(--ink-faint); }
-  .more-form button { border: 0; padding: 0 1.1rem; background: var(--surface); color: var(--accent); font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.15em; text-transform: uppercase; cursor: pointer; }
-  .more-form button:hover { background: var(--ink); color: var(--surface); }
 
   /* The line above the table: count, page, two arrows; the sort select on narrow screens only. */
   .count-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 16px 0 6px; flex-wrap: wrap; }
