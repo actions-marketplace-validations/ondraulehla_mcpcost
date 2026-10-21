@@ -122,8 +122,12 @@ CREATE TABLE IF NOT EXISTS hosts (
 -- a page of them reads 40 000 rows once in three hours, while an index would cost a write on every row change.
 -- See migrations/006-fewer-indexes.sql.
 CREATE INDEX IF NOT EXISTS servers_tools_name ON servers (tool_count DESC, name);
-CREATE INDEX IF NOT EXISTS servers_claude ON servers (claude_tokens DESC, name);
-CREATE INDEX IF NOT EXISTS servers_status_claude ON servers (status, claude_tokens DESC, name);
+-- The Tokens column sorts and filters by the number the board shows: the exact count, else the estimate.
+-- Two indexes hold that expression, servers_status_shown (status, coalesce(claude_tokens, tools_tokens) DESC, name)
+-- and servers_shown (coalesce(claude_tokens, tools_tokens) DESC, name). Building one costs a write per row, about
+-- 42 000, so they are not here: migrations 007 and 008 create them, and the probe workflow applies one a day inside
+-- its write budget. A new database needs both applied by hand. The expression must read exactly like SHOWN_TOKENS
+-- in site/src/lib/db.ts for SQLite to use the index.
 
 -- Full-text search over the columns people search by. The trigram tokenizer
 -- matches inside words, so "wiki" finds DeepWiki and "copilot" finds

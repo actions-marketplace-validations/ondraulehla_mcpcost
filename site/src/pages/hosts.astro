@@ -9,7 +9,7 @@ const total = run?.probed ?? hosts.reduce((a, h) => a + h.servers, 0);
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=3600');
 ---
 
-<Layout title="Hosts">
+<Layout title="MCP server hosts" description="Who publishes the MCP registry: every host with its servers, how many are alive, need auth or are down, its distinct tool sets and the median token cost.">
   <p class="kicker">{run ? `${num(run.hosts)} hosts · probed ${run.probedAt.slice(0, 10)}` : ''}</p>
   <h1 class="poster">Who publishes the registry</h1>
   <p class="lede">Probed servers, grouped by host name. “Distinct tool sets” is the number of different tool lists that one host serves.</p>

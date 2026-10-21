@@ -81,6 +81,19 @@ jobs:
         if: ${{ inputs.sample == '' && env.CLOUDFLARE_API_TOKEN != '' }}
         working-directory: site
         run: npx wrangler d1 execute mcp-pulse --remote --json --command "SELECT name, status FROM servers" > ../data/previous/d1-status.json || rm -f ../data/previous/d1-status.json
+      - name: Build one missing token index inside today's write budget
+        # Migrations 007 and 008 each build an index over every row, about 42 000 writes of the 100 000 a day.
+        # One a day, before the import, which then gets what the index leaves of the budget.
+        if: ${{ inputs.sample == '' && env.CLOUDFLARE_API_TOKEN != '' }}
+        working-directory: site
+        run: |
+          count() { npx wrangler d1 execute mcp-pulse --remote --json --command "$1" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].results[0].n))'; }
+          rows=$(count "SELECT count(*) AS n FROM servers")
+          if [ "$(count "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='servers_claude'")" != "0" ]; then
+            npx wrangler d1 execute mcp-pulse --remote --file=migrations/007-shown-tokens.sql && echo "migration 007 applied, about $rows writes" && echo "INDEX_WRITES=$rows" >> "$GITHUB_ENV"
+          elif [ "$(count "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='servers_shown'")" = "0" ]; then
+            npx wrangler d1 execute mcp-pulse --remote --file=migrations/008-shown-tokens-all.sql && echo "migration 008 applied, about $rows writes" && echo "INDEX_WRITES=$rows" >> "$GITHUB_ENV"
+          fi
       - name: Build the site data and the D1 import
         run: |
           stdio=""; [ -f data/stdio/stdio-run.json ] && stdio="--stdio data/stdio/stdio-run.json"
@@ -90,10 +103,11 @@ jobs:
             node --import tsx probe/build-data.ts --in data/raw/probe-run.json --out data/latest $stdio
           fi
           d1=""; [ -s data/previous/d1-status.json ] && d1="--d1-status data/previous/d1-status.json"
+          budget=$(( 85000 - ${INDEX_WRITES:-0} ))
           if [ -f data/previous/servers.json ]; then
-            node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql --previous data/previous/servers.json $d1
+            node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql --previous data/previous/servers.json --write-budget "$budget" $d1
           else
-            node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql $d1
+            node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql --write-budget "$budget" $d1
           fi
       - name: Find the open-source packages of servers that need auth
         # Reads the repositories the registry names, at most a few hundred an hour; the result feeds the stdio run.

@@ -107,8 +107,6 @@ export interface RunSummary {
     /** Alive servers per cost band: bins[i] holds counts below edges[i]; the last bin is the rest. */
     histogram?: { edges: number[]; bins: number[] };
   };
-  /** Alive servers per band of the number the board shows (the exact count, else the estimate); runs since 2026-10-21. */
-  tokenBands?: { edges: number[]; bins: number[] };
   /** Exact Gemini counts, present once a run had a Gemini key. */
   geminiTokens?: TokenStats & { model?: string; counted: number; refused: number };
   toolCount: { median: number; p90: number; max: number };
@@ -116,6 +114,8 @@ export interface RunSummary {
   hosts: number;
   /** The 500 biggest hosts, from the run that wrote them (runs since 2026-10-21); older runs have the hosts table. */
   topHosts?: Array<{ host: string; servers: number; ok: number; gated: number; dead: number; uniqueToolsets: number; medianTokens: number }>;
+  /** The smallest and the largest number the board shows for an alive server (exact count, else estimate); runs since 2026-10-21. */
+  shownTokens?: { min: number; max: number };
   heaviest: Array<{ name: string; toolCount: number; toolsTokens: number; claudeTokens?: number; claudeTokensCc?: number; host: string }>;
   /** Package (stdio) servers on the board, and how many of them this run probed. */
   stdioProbed?: number;
@@ -233,25 +233,31 @@ export async function getSiblings(hash: string, except: string, limit = 12): Pro
   return results;
 }
 
+/** The number the board shows: the exact count when there is one, else the estimate. Two indexes in schema.sql hold this expression. */
+export const SHOWN_TOKENS = 'coalesce(claude_tokens, tools_tokens)';
+
 type Dir = 'ASC' | 'DESC';
 interface SortSpec {
-  /** The sort column, or null when the sort is by name alone. */
+  /** The sort column or expression, or null when the sort is by name alone. */
   col: string | null;
+  /** The row field that holds the sort value for the cursor, when it is not the column itself. */
+  key?: string;
   dir: Dir;
   /** Direction of the name tie-break; the reverse of a sort reads its index backwards, so the name flips too. */
   nameDir: Dir;
   where: string;
   label: string;
 }
-const sortSpec = (col: string | null, dir: Dir, nameDir: Dir, where: string, label: string): SortSpec => ({ col, dir, nameDir, where, label });
+const sortSpec = (col: string | null, dir: Dir, nameDir: Dir, where: string, label: string, key?: string): SortSpec => ({ col, dir, nameDir, where, label, key });
 
 /**
  * Sort keys. Each matches an index in schema.sql. The opposite direction reads
  * the same index backwards, so its name tie-break is reversed too.
  */
 export const SORTS = {
-  claude: sortSpec('claude_tokens', 'DESC', 'ASC', '', 'Claude: most tokens'),
-  'claude-asc': sortSpec('claude_tokens', 'ASC', 'DESC', 'claude_tokens IS NOT NULL', 'Claude: fewest tokens'),
+  // The Tokens column: the number the board shows, so a server with an estimate only ranks by that estimate.
+  claude: sortSpec(SHOWN_TOKENS, 'DESC', 'ASC', '', 'tokens: most', 'shown_tokens'),
+  'claude-asc': sortSpec(SHOWN_TOKENS, 'ASC', 'DESC', `${SHOWN_TOKENS} IS NOT NULL`, 'tokens: fewest', 'shown_tokens'),
   tokens: sortSpec('tools_tokens', 'DESC', 'ASC', '', 'estimate: largest'),
   'tokens-asc': sortSpec('tools_tokens', 'ASC', 'DESC', 'tools_tokens IS NOT NULL', 'estimate: smallest'),
   tools: sortSpec('tool_count', 'DESC', 'ASC', '', 'tools: most'),
@@ -357,12 +363,12 @@ export interface ListQuery {
 }
 
 export const LIST_COLUMNS =
-  'name, title, host, transport, status, http_status, auth_scheme, protocol_version, init_ms, tool_count, tools_tokens, claude_tokens, claude_tokens_cc, toolset_siblings, registry_updated_at, derived_package, derived_status, derived_tools_tokens, derived_claude_tokens';
+  `name, title, host, transport, status, http_status, auth_scheme, protocol_version, init_ms, tool_count, tools_tokens, claude_tokens, claude_tokens_cc, toolset_siblings, registry_updated_at, derived_package, derived_status, derived_tools_tokens, derived_claude_tokens, ${SHOWN_TOKENS} AS shown_tokens`;
 export type ListRow = Pick<
   ServerRecord,
   | 'name' | 'title' | 'host' | 'transport' | 'status' | 'http_status' | 'auth_scheme' | 'protocol_version'
   | 'init_ms' | 'tool_count' | 'tools_tokens' | 'claude_tokens' | 'claude_tokens_cc' | 'toolset_siblings' | 'registry_updated_at' | 'derived_package' | 'derived_status' | 'derived_tools_tokens' | 'derived_claude_tokens'
->;
+> & { shown_tokens: number | null };
 
 export interface ListResult {
   rows: ListRow[];
@@ -408,6 +414,13 @@ export function tokenBand(text: string | undefined | null): { lo: number; hi: nu
   return { lo: Number(m[1] || 0), hi: m[2] ? Number(m[2]) : null };
 }
 
+/** The SQL of a token range: lower end in, upper end out. */
+function tokenCondition(text: string | undefined): { sql: string; binds: number[] } | null {
+  const band = tokenBand(text);
+  if (!band) return null;
+  return band.hi === null ? { sql: `${SHOWN_TOKENS} >= ?`, binds: [band.lo] } : { sql: `${SHOWN_TOKENS} >= ? AND ${SHOWN_TOKENS} < ?`, binds: [band.lo, band.hi] };
+}
+
 /** The filter part of a list query, shared by the page and its count. */
 function listWhere(query: ListQuery): { where: string[]; binds: unknown[] } {
   const where: string[] = [];
@@ -442,13 +455,10 @@ function listWhere(query: ListQuery): { where: string[]; binds: unknown[] } {
     where.push('transport = ?');
     binds.push(query.transport);
   }
-  const band = tokenBand(query.tokens);
+  const band = tokenCondition(query.tokens);
   if (band) {
-    // The number the board shows: the exact count when there is one, else the estimate. Lower edge in, upper edge out.
-    const shown = 'coalesce(claude_tokens, tools_tokens)';
-    where.push(band.hi === null ? `${shown} >= ?` : `${shown} >= ? AND ${shown} < ?`);
-    binds.push(band.lo);
-    if (band.hi !== null) binds.push(band.hi);
+    where.push(band.sql);
+    binds.push(...band.binds);
   }
   const sort = SORTS[query.sort ?? DEFAULT_SORT] ?? SORTS[DEFAULT_SORT];
   if (sort.where) where.push(sort.where);
@@ -456,15 +466,29 @@ function listWhere(query: ListQuery): { where: string[]; binds: unknown[] } {
 }
 
 /**
- * How many servers a filtered list has. It reads every matching row (a text search
- * reads only the matches through the FTS index), so the page asks for it only when
- * the run summary cannot answer, and the edge keeps the page for hours.
+ * How many servers of each status the other filters of a query leave: the counts on the
+ * result segments and the cause chips, and the total of the list, all from one query. It
+ * reads every matching row (a text search reads only the matches through the FTS index),
+ * so the page asks only when the run summary cannot answer, and the edge keeps the page for hours.
  */
-export async function countServers(query: ListQuery): Promise<number> {
-  const { where, binds } = listWhere(query);
+export interface StatusCount {
+  /** Rows of this status under every other filter, the token range included. */
+  n: number;
+  /** The smallest and the largest shown token count of this status under the other filters, the token range left out. */
+  lo: number | null;
+  hi: number | null;
+}
+export async function countByStatus(query: Omit<ListQuery, 'status'>): Promise<Record<string, StatusCount>> {
+  const { where, binds } = listWhere({ ...query, status: '', tokens: undefined });
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-  const row = await db().prepare(`SELECT count(*) AS n FROM servers ${whereSql}`).bind(...binds).first<{ n: number }>();
-  return row?.n ?? 0;
+  const band = tokenCondition(query.tokens);
+  const count = band ? `count(*) FILTER (WHERE ${band.sql})` : 'count(*)';
+  const { results } = await db()
+    .prepare(`SELECT status, ${count} AS n, min(${SHOWN_TOKENS}) AS lo, max(${SHOWN_TOKENS}) AS hi FROM servers ${whereSql} GROUP BY status`)
+    // The FILTER clause stands before the WHERE in the SQL, so its values bind first.
+    .bind(...(band?.binds ?? []), ...binds)
+    .all<{ status: string; n: number; lo: number | null; hi: number | null }>();
+  return Object.fromEntries(results.map((r) => [r.status, { n: r.n, lo: r.lo, hi: r.hi }]));
 }
 
 export async function listServers(query: ListQuery): Promise<ListResult> {
@@ -488,7 +512,7 @@ export async function listServers(query: ListQuery): Promise<ListResult> {
   const more = results.length > perPage;
   const rows = results.slice(0, perPage);
   if (back) rows.reverse();
-  const edge = (row: ListRow): Cursor => ({ value: sort.col ? ((row as unknown as Record<string, string | number | null>)[sort.col] ?? null) : null, name: row.name });
+  const edge = (row: ListRow): Cursor => ({ value: sort.col ? ((row as unknown as Record<string, string | number | null>)[sort.key ?? sort.col] ?? null) : null, name: row.name });
   const first = rows[0];
   const last = rows[rows.length - 1];
   return {
