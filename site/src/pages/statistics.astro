@@ -24,7 +24,7 @@ const topHeavy = run ? run.heaviest.slice(0, 12) : [];
 const heavyMax = Math.max(1, ...topHeavy.map((h) => h.claudeTokens ?? h.toolsTokens));
 ---
 
-<Layout title="Statistics" description="Results, token costs, protocols, auth and publishers of every remote and package server in the MCP registry, as charts with a table under each.">
+<Layout title="MCP registry statistics" description="Results, token costs, protocols, auth and publishers of every remote and package server in the MCP registry, as charts with a table under each.">
   <p class="kicker">{run ? `${num(run.probed)} servers · probed ${date(run.probedAt)}` : ''}</p>
   <h1 class="poster">Statistics</h1>
 

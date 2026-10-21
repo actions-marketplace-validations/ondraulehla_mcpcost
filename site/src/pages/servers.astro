@@ -1,7 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import Pager from '../components/Pager.astro';
-import { latestRun, listServers, countServers, tokenBand, SORTS, DEFAULT_SORT, MAX_NUMBERED_PAGE, decodeCursor, encodeCursor, ACCESS_STATUSES, SETUP_STATUSES, type SortKey } from '../lib/db';
+import { latestRun, listServers, countByStatus, tokenBand, SORTS, DEFAULT_SORT, MAX_NUMBERED_PAGE, decodeCursor, encodeCursor, ACCESS_STATUSES, SETUP_STATUSES, type SortKey } from '../lib/db';
 import { bucket, label, ms, num, tokens, STATUS_LABEL } from '../lib/format';
 import { GATED_STATUSES } from '../../../packages/mcpcost/src/types.ts';
 
@@ -14,26 +14,30 @@ const status = statusParam === 'all' ? '' : defaultView ? 'ok' : statusParam;
 const host = p.get('host') ?? '';
 const protocol = p.get('protocol') ?? '';
 const transport = p.get('transport') ?? '';
-/** Bands of the shown token count; the histogram edges 1 000, 5 000 and 20 000 give their counts. */
-const BANDS = [
-  { key: '-1000', label: 'under 1k', edges: [0, 1000] },
-  { key: '1000-5000', label: '1k to 5k', edges: [1000, 5000] },
-  { key: '5000-20000', label: '5k to 20k', edges: [5000, 20000] },
-  { key: '20000-', label: '20k and more', edges: [20000, Infinity] }
-];
-const tokensParam = BANDS.some((b) => b.key === p.get('tokens')) ? p.get('tokens')! : '';
+// A token range: `tokens=lo-hi` in links, `tmin` and `tmax` from the form; either end may be empty.
+const digits = (v: string | null) => (v ?? '').trim().replace(/[^0-9]/g, '').slice(0, 7);
+const tokensParam = (() => {
+  const t = p.get('tokens');
+  if (t && tokenBand(t)) return t;
+  const lo = digits(p.get('tmin')), hi = digits(p.get('tmax'));
+  const band = tokenBand(`${lo}-${hi}`);
+  if (!band) return '';
+  // Ends the wrong way round are swapped; a range below the smallest number is dropped.
+  return band.hi !== null && band.hi < band.lo ? `${hi}-${lo}` : `${lo}-${hi}`;
+})();
+const range = tokenBand(tokensParam);
 const sort = (Object.keys(SORTS).includes(p.get('sort') ?? '') ? p.get('sort') : DEFAULT_SORT) as SortKey;
 // Pages 1 to MAX_NUMBERED_PAGE come by number; beyond that `c` is a cursor, `d=prev` goes back, `p` is the page label.
 const cursor = decodeCursor(p.get('c'));
 const back = p.get('d') === 'prev';
 const requestedPage = cursor ? Math.max(1, Number(p.get('p') ?? '1') || 1) : Math.min(MAX_NUMBERED_PAGE, Math.max(1, Number(p.get('page') ?? '1') || 1));
 
-// A filtered list has no count in the run summary; one COUNT over the same condition gives it, so the pager knows its last page.
+// A filtered list has no counts in the run summary; one query grouped by status gives the segment counts, the cause counts and the total.
 const needsCount = Boolean(q || host || protocol || transport || tokensParam || SORTS[sort].where);
 const [{ rows, hasNext, hasPrev, perPage, page, nextCursor, prevCursor }, run, counted] = await Promise.all([
   listServers({ q, status, host, protocol, transport, tokens: tokensParam, sort, page: requestedPage, cursor, back }),
   latestRun(),
-  needsCount ? countServers({ q, status, host, protocol, transport, tokens: tokensParam, sort }) : Promise.resolve(null)
+  needsCount ? countByStatus({ q, host, protocol, transport, tokens: tokensParam, sort }) : Promise.resolve(null)
 ]);
 function pageHref(n: number, c: { value: string | number | null; name: string } | null, direction?: 'prev'): string {
   const u = new URL(Astro.url);
@@ -50,10 +54,12 @@ function pageHref(n: number, c: { value: string | number | null; name: string } 
 const nextHref = hasNext ? pageHref(page + 1, nextCursor) : null;
 const prevHref = hasPrev ? pageHref(page - 1, prevCursor, 'prev') : null;
 
-/** The result buckets and their counts, from the run summary: no query needed. */
-const sum = (set: ReadonlySet<string>) => (run ? [...set].reduce((a, s) => a + (run.byStatus[s] ?? 0), 0) : 0);
+/** Servers per status under the other filters: counted when a filter is on, else from the run summary with no query. */
+const byStatus: Record<string, number> | null = counted ?? run?.byStatus ?? null;
+const sum = (set: ReadonlySet<string>) => (byStatus ? [...set].reduce((a, s) => a + (byStatus[s] ?? 0), 0) : 0);
+const allCount = byStatus ? Object.values(byStatus).reduce((a, n) => a + n, 0) : 0;
 const gatedCount = sum(GATED_STATUSES);
-const counts = run ? { ok: run.ok, access: sum(ACCESS_STATUSES), setup: sum(SETUP_STATUSES), down: run.probed - run.ok - gatedCount, all: run.probed } : null;
+const counts = byStatus ? { ok: byStatus.ok ?? 0, access: sum(ACCESS_STATUSES), setup: sum(SETUP_STATUSES), down: allCount - (byStatus.ok ?? 0) - gatedCount, all: allCount } : null;
 type Bucket = 'ok' | 'access' | 'setup' | 'down' | 'all';
 const BUCKETS: Bucket[] = ['ok', 'access', 'setup', 'down', 'all'];
 const activeBucket: Bucket =
@@ -61,39 +67,28 @@ const activeBucket: Bucket =
 const inBucket = (b: Bucket, k: string) => (b === 'access' ? ACCESS_STATUSES.has(k) : b === 'setup' ? SETUP_STATUSES.has(k) : b === 'down' ? k !== 'ok' && !GATED_STATUSES.has(k) : false);
 /** The causes of the active bucket, with counts, zero counts left out. */
 const causes: Array<{ key: string; label: string; count: number }> =
-  activeBucket === 'ok' || activeBucket === 'all' || !run
+  activeBucket === 'ok' || activeBucket === 'all' || !byStatus
     ? []
     : Object.entries(STATUS_LABEL)
         .filter(([k]) => inBucket(activeBucket, k))
-        .map(([k, v]) => ({ key: k, label: v, count: run.byStatus[k] ?? 0 }))
+        .map(([k, v]) => ({ key: k, label: v, count: byStatus[k] ?? 0 }))
         .filter((c) => c.count > 0)
         .sort((a, b) => b.count - a.count);
 
-// The total: from the run summary when the list is only a status, else the counted one.
-const total =
-  counted !== null
-    ? counted
-    : run
-      ? status === ''
-        ? run.probed
-        : status === 'down'
-          ? counts!.down
-          : status === 'gated'
-            ? gatedCount
-            : status === 'access' || status === 'setup'
-              ? counts![status]
-              : (run.byStatus[status] ?? 0)
-      : null;
+// The total of the list: the count of its status under the other filters.
+const total = counts
+  ? status === ''
+    ? counts.all
+    : status === 'gated'
+      ? gatedCount
+      : status === 'ok' || status === 'access' || status === 'setup' || status === 'down'
+        ? counts[status]
+        : (byStatus![status] ?? 0)
+  : null;
 const pages = total !== null ? Math.max(1, Math.ceil(total / perPage)) : null;
 const protocols = run ? Object.keys(run.protocols).filter((v) => v !== 'unknown').sort().reverse() : [];
-/** How many alive servers each band holds, from the run summary: the sum of the histogram bins between its edges. */
-const bandCounts = run?.tokenBands ?? run?.claudeTokens?.histogram ?? null;
-const bandCount = (edges: number[]): number | null => {
-  if (!bandCounts) return null;
-  const { edges: e, bins } = bandCounts;
-  return bins.reduce((a, n, i) => ((i === 0 ? 0 : e[i - 1]) >= edges[0] && (i < e.length ? e[i] : Infinity) <= edges[1] ? a + n : a), 0);
-};
-const bandLabel = (key: string) => BANDS.find((b) => b.key === key)?.label ?? key;
+/** The token range in words: "1 000 to 5 000 tokens", "from 20 000 tokens", "up to 1 000 tokens". */
+const rangeLabel = range ? (range.hi === null ? `from ${num(range.lo)} tokens` : range.lo === 0 ? `up to ${num(range.hi)} tokens` : `${num(range.lo)} to ${num(range.hi)} tokens`) : '';
 /** The hosts the host field offers: the biggest ones of the run. */
 const hostOptions = (run?.topHosts ?? []).slice(0, 60).map((h) => h.host);
 
@@ -105,8 +100,9 @@ const filtered = Boolean(q || statusParam || host || protocol || transport || to
 /** The current URL with some parameters changed (null removes one), the page reset. A filter added to the default view keeps it on alive servers. */
 function withParams(changes: Record<string, string | null>): string {
   const u = new URL(Astro.url);
-  for (const k of ['page', 'c', 'd', 'p']) u.searchParams.delete(k);
+  for (const k of ['page', 'c', 'd', 'p', 'tmin', 'tmax']) u.searchParams.delete(k);
   if (defaultView && !('status' in changes)) u.searchParams.set('status', 'ok');
+  if (tokensParam && !('tokens' in changes)) u.searchParams.set('tokens', tokensParam);
   for (const [k, v] of Object.entries(changes)) {
     if (v === null || v === '') u.searchParams.delete(k);
     else u.searchParams.set(k, v);
@@ -124,7 +120,7 @@ if (statusParam && statusParam !== 'ok') active.push({ label: statusParam === 'a
 if (host) active.push({ label: host, href: withParams({ host: null }) });
 if (protocol) active.push({ label: `protocol ${protocol}`, href: withParams({ protocol: null }) });
 if (transport) active.push({ label: transportLabel[transport] ?? transport, href: withParams({ transport: null }) });
-if (tokensParam) active.push({ label: `${bandLabel(tokensParam)} tokens`, href: withParams({ tokens: null }) });
+if (tokensParam) active.push({ label: rangeLabel, href: withParams({ tokens: null }) });
 
 /** Column headers: first click sorts the natural way (numbers high first, text A to Z), the second click flips. */
 const columns: Array<{ label: string; first: SortKey; second: SortKey; num?: boolean }> = [
@@ -147,7 +143,11 @@ function arrow(key: SortKey): string {
 }
 const bucketTitle: Record<Bucket, string> = { ok: 'Alive servers', access: 'Servers that need auth', setup: 'Servers that need setup', down: 'Down or broken servers', all: 'Every server' };
 const heading = host ? host : q ? `Servers matching “${q}”` : status === 'gated' ? 'Servers that need auth or setup' : ['ok', '', 'access', 'setup', 'down'].includes(status) ? bucketTitle[activeBucket] : `${label(status)} servers`;
-const title = host ? `Servers on ${host}` : heading;
+// The default view is the page search engines index, so its title and description say what the list is.
+const title = host ? `Servers on ${host}` : defaultView ? 'MCP server list, ranked by token cost' : heading;
+const description = defaultView
+  ? 'Every remote and package MCP server in the official registry: alive or down, tool count and the context tokens its tool list costs, ranked. Filter by host, protocol, transport and token range.'
+  : undefined;
 // Every sort, filter and page is its own database read, so crawlers index only the first page of the default view.
 const robots = filtered || page > 1 || sort !== DEFAULT_SORT ? 'noindex, follow' : undefined;
 /** Everything but the sort, as hidden fields for the small sort form on narrow screens. */
@@ -155,7 +155,7 @@ const hiddenForSort = [...p.entries()].filter(([k]) => !['sort', 'page', 'c', 'd
 const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${num(rows.length)}${hasNext ? '+' : ''} servers on this page` : 'no servers';
 ---
 
-<Layout title={title} robots={robots}>
+<Layout title={title} description={description} robots={robots}>
   <p class="kicker">{run ? `probed ${run.probedAt.slice(0, 10)}` : ''}</p>
   <h1 class="poster">{heading}</h1>
 
@@ -189,22 +189,11 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
     </nav>
   )}
 
-  {(activeBucket === 'ok' || activeBucket === 'all') && (
-    <nav class="chips bands" aria-label="Tokens the tool list costs">
-      <span class="chips-label">tokens</span>
-      <a class={`chip${tokensParam ? '' : ' active'}`} href={withParams({ tokens: null })} rel="nofollow">any</a>
-      {BANDS.map((b) => (
-        <a class={`chip${tokensParam === b.key ? ' active' : ''}`} href={withParams({ tokens: b.key })} rel="nofollow">{b.label}{bandCount(b.edges) !== null && <b>{num(bandCount(b.edges)!)}</b>}</a>
-      ))}
-    </nav>
-  )}
-
-  <details class="more" open={Boolean(host || protocol || transport) || undefined}>
-    <summary>More filters{(host || protocol || transport) && <span class="muted"> · {[host, protocol && `protocol ${protocol}`, transport && transportLabel[transport]].filter(Boolean).join(' · ')}</span>}</summary>
+  <details class="more" open={Boolean(host || protocol || transport || tokensParam) || undefined}>
+    <summary>More filters{(host || protocol || transport || tokensParam) && <span class="muted"> · {[host, rangeLabel, protocol && `protocol ${protocol}`, transport && transportLabel[transport]].filter(Boolean).join(' · ')}</span>}</summary>
     <form class="more-form" method="get" action="/servers">
       {q && <input type="hidden" name="q" value={q} />}
       {(statusParam || defaultView) && <input type="hidden" name="status" value={statusParam || 'ok'} />}
-      {tokensParam && <input type="hidden" name="tokens" value={tokensParam} />}
       {sort !== DEFAULT_SORT && <input type="hidden" name="sort" value={sort} />}
       <label>Host
         <input type="text" name="host" value={host} list="host-options" placeholder="any" autocomplete="off" spellcheck="false" />
@@ -212,6 +201,14 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
           {hostOptions.map((h) => <option value={h} />)}
         </datalist>
       </label>
+      <div class="range" role="group" aria-label="Tokens the tool list costs">
+        <span class="range-label">Tokens</span>
+        <span class="range-inputs">
+          <input type="number" name="tmin" value={range && range.lo > 0 ? range.lo : ''} min="0" step="1" inputmode="numeric" placeholder="0" aria-label="Tokens from" />
+          <span class="range-to">to</span>
+          <input type="number" name="tmax" value={range?.hi ?? ''} min="0" step="1" inputmode="numeric" placeholder="any" aria-label="Tokens up to" />
+        </span>
+      </div>
       <label>Protocol
         <select name="protocol">
           <option value="">any</option>
@@ -337,14 +334,18 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
 
   /* Host, protocol and transport, folded away until needed. */
   .more { margin-top: 10px; }
-  .more summary { cursor: pointer; font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); list-style: none; display: inline-flex; align-items: center; gap: 8px; }
+  .more summary { cursor: pointer; font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); list-style: none; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; white-space: nowrap; }
   .more summary::-webkit-details-marker { display: none; }
   .more summary::before { content: '+'; display: inline-block; width: 1em; color: var(--accent); }
   .more[open] summary::before { content: '−'; }
   .more summary .muted { text-transform: none; letter-spacing: 0.04em; }
-  .more-form { display: grid; grid-template-columns: minmax(180px, 1.4fr) minmax(150px, 1fr) minmax(150px, 1fr) auto; gap: 1px; margin-top: 8px; border: 1px solid var(--line); background: var(--line); max-width: 820px; }
-  .more-form label { display: flex; flex-direction: column; gap: 6px; padding: 0.625rem 0.75rem 0.75rem; background: var(--surface); font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-faint); }
+  .more-form { display: grid; grid-template-columns: minmax(170px, 1.3fr) minmax(190px, 1.2fr) minmax(140px, 1fr) minmax(140px, 1fr) auto; gap: 1px; margin-top: 8px; border: 1px solid var(--line); background: var(--line); max-width: 960px; }
+  .more-form label, .more-form .range { display: flex; flex-direction: column; gap: 6px; padding: 0.625rem 0.75rem 0.75rem; background: var(--surface); font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-faint); }
   .more-form select, .more-form input { width: 100%; min-width: 0; }
+  .range-inputs { display: flex; align-items: center; gap: 6px; }
+  .range-inputs input { flex: 1 1 0; -moz-appearance: textfield; }
+  .range-inputs input::-webkit-outer-spin-button, .range-inputs input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .range-to { text-transform: none; letter-spacing: 0.04em; color: var(--ink-faint); }
   .more-form button { border: 0; padding: 0 1.1rem; background: var(--surface); color: var(--accent); font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.15em; text-transform: uppercase; cursor: pointer; }
   .more-form button:hover { background: var(--ink); color: var(--surface); }
 

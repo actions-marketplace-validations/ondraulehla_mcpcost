@@ -107,8 +107,6 @@ export interface RunSummary {
     /** Alive servers per cost band: bins[i] holds counts below edges[i]; the last bin is the rest. */
     histogram?: { edges: number[]; bins: number[] };
   };
-  /** Alive servers per band of the number the board shows (the exact count, else the estimate); runs since 2026-10-21. */
-  tokenBands?: { edges: number[]; bins: number[] };
   /** Exact Gemini counts, present once a run had a Gemini key. */
   geminiTokens?: TokenStats & { model?: string; counted: number; refused: number };
   toolCount: { median: number; p90: number; max: number };
@@ -456,15 +454,16 @@ function listWhere(query: ListQuery): { where: string[]; binds: unknown[] } {
 }
 
 /**
- * How many servers a filtered list has. It reads every matching row (a text search
- * reads only the matches through the FTS index), so the page asks for it only when
- * the run summary cannot answer, and the edge keeps the page for hours.
+ * How many servers of each status the other filters of a query leave: the counts on the
+ * result segments and the cause chips, and the total of the list, all from one query. It
+ * reads every matching row (a text search reads only the matches through the FTS index),
+ * so the page asks only when the run summary cannot answer, and the edge keeps the page for hours.
  */
-export async function countServers(query: ListQuery): Promise<number> {
-  const { where, binds } = listWhere(query);
+export async function countByStatus(query: Omit<ListQuery, 'status'>): Promise<Record<string, number>> {
+  const { where, binds } = listWhere({ ...query, status: '' });
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-  const row = await db().prepare(`SELECT count(*) AS n FROM servers ${whereSql}`).bind(...binds).first<{ n: number }>();
-  return row?.n ?? 0;
+  const { results } = await db().prepare(`SELECT status, count(*) AS n FROM servers ${whereSql} GROUP BY status`).bind(...binds).all<{ status: string; n: number }>();
+  return Object.fromEntries(results.map((r) => [r.status, r.n]));
 }
 
 export async function listServers(query: ListQuery): Promise<ListResult> {
