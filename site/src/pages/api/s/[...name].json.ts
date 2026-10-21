@@ -22,6 +22,7 @@ export const GET: APIRoute = async ({ params, site }) => {
       statusLabel: label(server.status),
       httpStatus: server.http_status,
       authScheme: server.auth_scheme,
+      authDocumentation: server.auth_documentation,
       protocolVersion: server.protocol_version,
       serverInfo: server.server_name ? { name: server.server_name, version: server.server_version } : null,
       capabilities: server.capabilities ? JSON.parse(server.capabilities) : null,

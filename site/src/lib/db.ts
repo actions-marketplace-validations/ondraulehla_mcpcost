@@ -16,6 +16,8 @@ export interface ServerRecord {
   status: string;
   http_status: number | null;
   auth_scheme: string | null;
+  /** The publisher's guide to getting access, from the OAuth protected-resource metadata. */
+  auth_documentation: string | null;
   protocol_version: string | null;
   server_name: string | null;
   server_version: string | null;

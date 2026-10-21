@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS servers (
   status TEXT NOT NULL,
   http_status INTEGER,
   auth_scheme TEXT,
+  -- The publisher's guide to getting access: resource_documentation of the OAuth protected-resource metadata (migration 009).
+  auth_documentation TEXT,
   protocol_version TEXT,
   server_name TEXT,
   server_version TEXT,

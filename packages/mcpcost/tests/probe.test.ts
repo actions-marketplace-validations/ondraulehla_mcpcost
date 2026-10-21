@@ -82,6 +82,31 @@ describe('probeRemote classification with a fake fetch', () => {
     expect(r.authResourceMetadata).toBe('https://fixture.example/.well-known/oauth-protected-resource');
   });
 
+  it('reads resource_documentation from the protected-resource metadata', async () => {
+    const seen: string[] = [];
+    const fakeFetch: typeof fetch = async (input) => {
+      const u = String(input instanceof Request ? input.url : input);
+      seen.push(u);
+      if (u.endsWith('/.well-known/oauth-protected-resource/mcp')) return new Response('{"resource":"https://fixture.example/mcp","resource_documentation":"https://fixture.example/docs/auth"}', { status: 200 });
+      return new Response('', { status: 401, headers: { 'www-authenticate': 'Bearer error="invalid_token"' } });
+    };
+    const r = await probeRemote(target, { fetch: fakeFetch });
+    expect(r.status).toBe('auth');
+    expect(r.authDocumentation).toBe('https://fixture.example/docs/auth');
+    expect(seen).toContain('https://fixture.example/.well-known/oauth-protected-resource/mcp');
+  });
+
+  it('takes the metadata URL from WWW-Authenticate first and ignores a documentation value that is not a URL', async () => {
+    const fakeFetch: typeof fetch = async (input) => {
+      const u = String(input instanceof Request ? input.url : input);
+      if (u === 'https://meta.example/prm') return new Response('{"resource_documentation":"see the readme"}', { status: 200 });
+      return new Response('', { status: 401, headers: { 'www-authenticate': 'Bearer resource_metadata="https://meta.example/prm"' } });
+    };
+    const r = await probeRemote(target, { fetch: fakeFetch });
+    expect(r.authResourceMetadata).toBe('https://meta.example/prm');
+    expect(r.authDocumentation).toBeUndefined();
+  });
+
   it.each([
     [402, 'payment'],
     [403, 'auth'],

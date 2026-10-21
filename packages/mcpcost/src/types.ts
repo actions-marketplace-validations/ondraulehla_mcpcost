@@ -95,6 +95,8 @@ export interface ProbeResult {
   authScheme?: string;
   /** Whether the server advertises OAuth protected-resource metadata in WWW-Authenticate. */
   authResourceMetadata?: string;
+  /** The `resource_documentation` URL of that metadata: the server's own guide to getting access. */
+  authDocumentation?: string;
   latencyMs: {
     initialize?: number;
     toolsList?: number;

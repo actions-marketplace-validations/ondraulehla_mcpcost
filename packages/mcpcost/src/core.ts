@@ -98,9 +98,36 @@ export async function probeRemoteRaw(remote: { url: string; type: RemoteTranspor
         const m = /resource_metadata="([^"]+)"/i.exec(www);
         if (m) result.authResourceMetadata = m[1];
       }
+      if (result.status === 'auth') {
+        result.authDocumentation = await resourceDocumentation(url, result.authResourceMetadata, baseFetch, Math.min(timeoutMs, 10_000));
+      }
     }
   }
   return { result, tools };
+}
+
+/**
+ * The `resource_documentation` of the server's OAuth protected-resource metadata (RFC 9728): the
+ * publisher's own guide to getting access. The WWW-Authenticate header names the metadata URL; without
+ * it, the well-known path with the resource path, then the bare one, as the SDK's discovery does.
+ */
+async function resourceDocumentation(url: URL, fromHeader: string | undefined, baseFetch: typeof fetch, timeoutMs: number): Promise<string | undefined> {
+  const candidates = fromHeader
+    ? [fromHeader]
+    : [...(url.pathname !== '/' ? [`${url.origin}/.well-known/oauth-protected-resource${url.pathname}`] : []), `${url.origin}/.well-known/oauth-protected-resource`];
+  for (const candidate of candidates) {
+    try {
+      const res = await baseFetch(candidate, { headers: { accept: 'application/json', 'user-agent': USER_AGENT }, signal: AbortSignal.timeout(timeoutMs) });
+      if (!res.ok) continue;
+      const doc = (await res.json()) as { resource_documentation?: unknown };
+      const value = typeof doc.resource_documentation === 'string' ? doc.resource_documentation.trim() : '';
+      if (/^https?:\/\//i.test(value) && value.length <= 500) return value;
+      return undefined;
+    } catch {
+      // The next candidate, or nothing: the documentation is a bonus, not a result.
+    }
+  }
+  return undefined;
 }
 
 /** The part every transport shares: initialize, read the server info, list the tools. */
