@@ -22,7 +22,7 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
   <section class="panel" aria-labelledby="how-we-probe-a-server-h">
     <h2 id="how-we-probe-a-server-h" class="panel-title">How we probe a server</h2>
   <ol>
-    <li>Connect with the official TypeScript SDK. The client name is <code>mcpcost</code>. We send no credentials.</li>
+    <li>Connect with the official TypeScript SDK. The client name is <code>mcpcost</code>. We send no credentials, with one exception: a server whose owner stored credentials through <code>mcpcost auth</code> is probed with them, and its page says “measured with credentials”.</li>
     <li>Send <code>initialize</code> and <code>notifications/initialized</code>. Record the time to the <code>initialize</code> result, the protocol version, the server name and version, the capabilities and the length of the instructions.</li>
     <li>If the server has tools, call <code>tools/list</code>. Follow the pagination. Record the time and the tools.</li>
     <li>Do not open the standalone GET stream. The probe answers 405 to the SDK's GET. The probe needs no messages from the server. Some servers stop <code>tools/list</code> while that stream is open.</li>
@@ -47,7 +47,7 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
   <section class="panel" aria-labelledby="tokens-h" id="tokens">
     <h2 id="tokens-h" class="panel-title">Token counts</h2>
   <p>
-    Each server page shows up to three numbers for the tool definitions.
+    A server page leads with one number: the exact Claude count when the run has it, else the estimate. The facts under it hold the other counts, and a server that needs auth can show the tool set of its publisher's open-source package instead (see below).
   </p>
   <dl class="facts">
     <dt>Claude</dt><dd>The exact count from the Anthropic <code>count_tokens</code> endpoint, model <code>claude-opus-5-5</code>, tool names as the server publishes them. We send one request with the server's tools and a small marker tool, and one request with the marker tool only. The difference is what the server's tools cost. The tool-use system prompt is in both requests, so it falls out. The endpoint is free and calls no model.</dd>
@@ -56,10 +56,10 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
     <dt>o200k</dt><dd>An estimate. We serialize each tool as compact JSON with <code>name</code>, <code>description</code> and <code>input_schema</code> and count with the <code>o200k_base</code> tokenizer. It is the same estimate for every server and it needs no API key. The exact Claude count is about 1.9 times this estimate at the median, because Claude renders the schemas in its own format and tokenizes prose in its own way.</dd>
   </dl>
   <p>
-    “Of a 200k context window” divides the Claude count by 200 000. A request with tools also carries a tool-use system prompt one time: 286 tokens for Claude Opus 5.5. We do not add it to any server. Claude Code can defer MCP tools when they take more than 10 % of the context; the count then applies only to the tools it loads.
+    “Of a 200k context window” divides the Claude count by 200 000. A request with tools also carries a tool-use system prompt one time: 286 tokens for Claude Opus 5.5. We do not add it to any server. Claude Code defers MCP tool definitions by default (tool search) and loads a tool's definition when it needs it; the count is then the ceiling, not what every turn pays.
   </p>
   <p>
-    We count a server again only when its tool definitions change. The date next to the Claude count is the date of that count. About 5 % of alive servers publish a schema the endpoint refuses, for example a top-level <code>oneOf</code>. These servers show the estimate and the reason.
+    We count a server again only when its tool definitions change. The date next to the Claude count is the date of that count. Some servers publish a schema the endpoint refuses, for example a top-level oneOf or two tools with the same name; they show the estimate and the reason. These servers show the estimate and the reason.
   </p>
   </section>
 
@@ -77,6 +77,27 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
   </p>
   </section>
 
+  <section class="panel" aria-labelledby="gated-h">
+    <h2 id="gated-h" class="panel-title">Servers that need auth</h2>
+    <p>
+      A server that answers 401 or 402 is reachable but gives no tool list. Two things fill the gap. The owner of the board can store credentials for a server with <code>mcpcost auth</code> (the MCP OAuth flow or a header); the daily probe then uses them and the page says “measured with credentials”. For the rest, the tool definitions do not depend on the token: when the registry entry names a public repository with a package on npm or PyPI, the package is started in the container like any package server, and the page shows its tool set with the note “from the publisher's package”.
+    </p>
+  </section>
+
+  <section class="panel" aria-labelledby="tracked-h">
+    <h2 id="tracked-h" class="panel-title">Outside the registry</h2>
+    <p>
+      A URL that is not in the registry can be tracked from <a href="/check">/check</a>. The daily probe then measures it with the registry servers, under the name <code>url/&lt;host&gt;/&lt;path&gt;</code>, with a page, a badge, a feed and alerts like any other server.
+    </p>
+  </section>
+
+  <section class="panel" aria-labelledby="retries-h">
+    <h2 id="retries-h" class="panel-title">Second attempts</h2>
+    <p>
+      A server that times out but answered in the previous run gets a second, slower attempt at the end of the run, so a fault on our side does not show as an outage. A package server that exits asking for a variable is started once more with that variable set to a placeholder.
+    </p>
+  </section>
+
   <section class="panel" aria-labelledby="machine-access-h">
     <h2 id="machine-access-h" class="panel-title">Machine access</h2>
   <p>
@@ -88,7 +109,7 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
   <section class="panel" aria-labelledby="being-a-good-guest-h">
     <h2 id="being-a-good-guest-h" class="panel-title">Being a good guest</h2>
   <p>
-    Each request carries the User-Agent <code>mcpcost/&lt;version&gt; (+https://github.com/ondraulehla/mcpcost)</code>. The probe runs one time each day. It sends no tool calls. It makes at most three requests to each server.
+    Each request carries the User-Agent <code>mcpcost/&lt;version&gt; (+https://github.com/ondraulehla/mcpcost)</code>. The probe runs one time each day. It sends no tool calls. It makes at most three requests to each server, six when the first attempt timed out and the server answered the day before.
     To exclude a server, <a href="https://github.com/ondraulehla/mcpcost/issues" rel="noopener">open an issue</a> with its registry name.
   </p>
   </section>

@@ -41,7 +41,7 @@ export async function attachGemini(result: ProbeResult, tools: RawTool[], gemini
     result.gemini = { model: c.model, tokens: c.tokens, measuredAt };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    if (e instanceof GeminiCountError && e.status >= 400 && e.status < 500 && e.status !== 429) result.gemini = { model: gemini.model ?? GEMINI_MODEL, measuredAt, error: message };
+    if (e instanceof GeminiCountError && e.status >= 400 && e.status < 500 && e.status !== 429 && e.status !== 401 && e.status !== 403) result.gemini = { model: gemini.model ?? GEMINI_MODEL, measuredAt, error: message };
   }
   return result;
 }
@@ -56,7 +56,7 @@ export async function attachClaude(result: ProbeResult, tools: RawTool[], claude
     result.claude = { model: c.model, tokens: c.tokens, tokensClaudeCode: c.tokensClaudeCode, measuredAt };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    if (e instanceof ClaudeCountError && e.status >= 400 && e.status < 500 && e.status !== 429) result.claude = { model: claude.model ?? CLAUDE_MODEL, measuredAt, error: message };
+    if (e instanceof ClaudeCountError && e.status >= 400 && e.status < 500 && e.status !== 429 && e.status !== 401 && e.status !== 403) result.claude = { model: claude.model ?? CLAUDE_MODEL, measuredAt, error: message };
   }
   return result;
 }

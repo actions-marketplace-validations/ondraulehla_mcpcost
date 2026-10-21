@@ -67,7 +67,7 @@ const gotoMax = numberedPages ?? maxNumbered;
   </div>
   <form class="pager-goto" method="get" action={url.pathname}>
     {hidden.map(([k, v]) => <input type="hidden" name={k} value={v} />)}
-    <label>go to<input type="number" name="page" min="1" max={gotoMax} value={Math.min(page, gotoMax)} aria-label="Page number" /><span class="of">of {gotoMax}{pages !== null && pages > gotoMax ? ` numbered, ${pages.toLocaleString('en-US').replace(/,/g, ' ')} in all` : ''}</span></label>
+    <label>go to<input type="number" name="page" min="1" max={gotoMax} value={Math.min(page, gotoMax)} aria-label="Page number" /><span class="of">of {gotoMax.toLocaleString('en-US').replace(/,/g, ' ')}</span></label>
     <button type="submit">Go</button>
   </form>
 </nav>

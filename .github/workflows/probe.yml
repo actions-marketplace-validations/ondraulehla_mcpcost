@@ -44,7 +44,6 @@ jobs:
           done
           # A single-file artifact lands at the target path itself, so copy only when the paths differ.
           f=$(find data/previous -name servers.json | head -1); test -n "$f" && { [ "$f" = data/previous/servers.json ] || cp "$f" data/previous/servers.json; } || echo "::notice::No previous run found, importing everything."
-          h=$(find data/previous -name hosts.json | head -1); test -n "$h" && { [ "$h" = data/previous/hosts.json ] || cp "$h" data/previous/hosts.json; } || true
           # The count cache is uploaded before the import, so counting progress survives a failed import.
           for id in $(gh run list --workflow "Daily probe" --limit 10 --json databaseId -q '.[].databaseId'); do
             if gh run download "$id" --name "claude-cache-$id" --dir data/cache 2>/dev/null; then echo "count cache from run $id"; break; fi
@@ -92,7 +91,7 @@ jobs:
           fi
           d1=""; [ -s data/previous/d1-status.json ] && d1="--d1-status data/previous/d1-status.json"
           if [ -f data/previous/servers.json ]; then
-            node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql --previous data/previous/servers.json --previous-hosts data/previous/hosts.json $d1
+            node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql --previous data/previous/servers.json $d1
           else
             node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql $d1
           fi
@@ -127,6 +126,8 @@ jobs:
           if [ "$(has gemini_tokens)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/003-gemini.sql; echo "migration 003 applied"; fi
           if [ "$(has measured_with_credentials)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/004-credentials.sql; echo "migration 004 applied"; fi
           if [ "$(has derived_package)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/005-derived.sql; echo "migration 005 applied"; fi
+          idx=$(npx wrangler d1 execute mcp-pulse --remote --json --command "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='servers_init_name'" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].results[0].n))')
+          if [ "$idx" != "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/006-fewer-indexes.sql; echo "migration 006 applied"; fi
       - name: Import into D1
         if: ${{ inputs.sample == '' && env.CLOUDFLARE_API_TOKEN != '' }}
         working-directory: site

@@ -22,8 +22,6 @@ const { values: args } = parseArgs({
     in: { type: 'string', default: 'data/latest' },
     out: { type: 'string', default: 'data/latest/import.sql' },
     previous: { type: 'string' },
-    /** hosts.json of the previous run. Only host rows that changed are written. */
-    'previous-hosts': { type: 'string' },
     /**
      * The board's own state: name and status of every row, from
      * `wrangler d1 execute mcp-pulse --remote --json --command "SELECT name, status FROM servers"`.
@@ -32,10 +30,15 @@ const { values: args } = parseArgs({
      * failed or bad import stays in the database for good: on 2026-10-14 one left 14 000 rows on "timeout".
      */
     'd1-status': { type: 'string' },
-    /** How many drifted rows to repair in one run: each full row costs about twelve index writes of the daily budget. */
-    'repair-limit': { type: 'string', default: '3000' },
-    /** How many stale rows to delete in one run. */
-    'delete-limit': { type: 'string', default: '600' },
+    /**
+     * The daily write budget the import may use. D1's free tier allows 100 000 rows written a day,
+     * and every index entry counts as a row; the rest is for the watches and the credentials.
+     */
+    'write-budget': { type: 'string', default: '85000' },
+    /** At most this many drifted rows repaired in one run, whatever the budget leaves. */
+    'repair-limit': { type: 'string', default: '6000' },
+    /** At most this many stale rows deleted in one run. */
+    'delete-limit': { type: 'string', default: '1000' },
     'rows-per-insert': { type: 'string', default: '40' }
   }
 });
@@ -66,9 +69,6 @@ if (args['d1-status'] && existsSync(args['d1-status'])) {
   for (const r of rows) d1Status.set(r.name, r.status);
 }
 const summary = JSON.parse(await readFile(`${args.in}/summary.json`, 'utf8')) as { probedAt: string };
-const hosts = JSON.parse(await readFile(`${args.in}/hosts.json`, 'utf8')) as Array<{
-  host: string; servers: number; byStatus: Record<string, number>; uniqueToolsets: number; medianTokens: number;
-}>;
 
 type Value = string | number | boolean | null | undefined | string[] | object;
 function lit(v: Value): string {
@@ -157,17 +157,7 @@ const probeRows = servers
     return !p || p.status !== s.status || p.toolCount !== s.toolCount || p.toolsTokens !== s.toolsTokens || p.claudeTokens !== s.claudeTokens;
   })
   .map((s) => [s.name, s.probedAt, s.status, s.initMs, s.toolCount, s.toolsTokens, s.claudeTokens]);
-const dead = (b: Record<string, number>) => Object.entries(b).filter(([k]) => k !== 'ok' && !GATED_STATUSES.has(k)).reduce((a, [, n]) => a + n, 0);
-const changedHosts = new Set(servers.map((s) => s.host));
-// Hosts are compared without the run date, which would differ every day.
-const hostKey = (h: (typeof hosts)[number]) => JSON.stringify({ ...h, probedAt: undefined });
-const previousHosts = args['previous-hosts'] && existsSync(args['previous-hosts'])
-  ? new Map((JSON.parse(await readFile(args['previous-hosts'], 'utf8')) as typeof hosts).map((h) => [h.host, hostKey(h)]))
-  : null;
-const hostRows = hosts
-  .filter((h) => !previous || changedHosts.has(h.host))
-  .filter((h) => !previousHosts || previousHosts.get(h.host) !== hostKey(h))
-  .map((h) => [h.host, h.servers, h.byStatus.ok ?? 0, (h.byStatus.auth ?? 0) + (h.byStatus.payment ?? 0) + (h.byStatus.newer_protocol ?? 0), dead(h.byStatus), h.uniqueToolsets, h.medianTokens, summary.probedAt]);
+// The hosts table is not written any more: the hosts page reads the biggest hosts from the run summary.
 
 /**
  * Rows the database holds with another status than this run found, outside the
@@ -179,8 +169,16 @@ const rank = (s: ServerRow) => (s.status === 'ok' ? 0 : GATED_STATUSES.has(s.sta
 const drifted = d1Status.size
   ? allServers.filter((s) => !written.has(s.name) && d1Status.has(s.name) && d1Status.get(s.name) !== s.status).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
   : [];
-const repaired = drifted.slice(0, Number(args['repair-limit']));
-const stale = d1Status.size ? [...d1Status.keys()].filter((n) => !currentNames.has(n) && !removed.includes(n)).slice(0, Number(args['delete-limit'])) : [];
+/**
+ * Writes per row, counted the way D1 counts them (the row plus one entry per index touched,
+ * plus the FTS triggers): with the seven indexes left a new or whole row costs about 11, a narrow
+ * update about 6, a delete about 10, a history row 2. The repair takes what the ordinary import leaves.
+ */
+const ordinaryWrites = newServers.length * 11 + changedServers.length * 6 + probeRows.length * 2 + removed.length * 10 + 2;
+const left = Math.max(0, Number(args['write-budget']) - ordinaryWrites);
+const staleAll = d1Status.size ? [...d1Status.keys()].filter((n) => !currentNames.has(n) && !removed.includes(n)) : [];
+const stale = staleAll.slice(0, Math.min(Number(args['delete-limit']), Math.floor(left / 10 / 4)));
+const repaired = drifted.slice(0, Math.min(Number(args['repair-limit']), Math.floor((left - stale.length * 10) / 11)));
 const repairStatements = [
   ...multiInsert('servers', serverColumns, repaired.map(serverValues), 'INSERT', upsertSuffix('name', serverColumns)),
   ...multiInsert('probes', ['name', 'probed_at', 'status', 'init_ms', 'tool_count', 'tools_tokens', 'claude_tokens'], repaired.map((s) => [s.name, s.probedAt, s.status, s.initMs, s.toolCount, s.toolsTokens, s.claudeTokens]), 'INSERT OR IGNORE'),
@@ -192,18 +190,16 @@ const statements = [
   ...serverStatements,
   ...multiInsert('probes', ['name', 'probed_at', 'status', 'init_ms', 'tool_count', 'tools_tokens', 'claude_tokens'], probeRows, 'INSERT OR IGNORE'),
   ...(removed.length ? [`DELETE FROM servers WHERE name IN (${removed.map(lit).join(',')});`] : []),
-  ...(previous ? [] : ['DELETE FROM hosts;']),
-  ...multiInsert('hosts', ['host', 'servers', 'ok', 'auth', 'dead', 'unique_toolsets', 'median_tokens', 'probed_at'], hostRows),
   // Keep 90 days of history so the free tier database stays small.
   `DELETE FROM probes WHERE probed_at < ${lit(new Date(Date.now() - 90 * 86_400_000).toISOString())};`,
   // Last, so the ordinary import is complete even when the write budget runs out here.
   ...repairStatements
 ];
-if (d1Status.size) console.error(`drift against the database: ${drifted.length} rows differ in status, ${repaired.length} repaired in this run, ${stale.length} stale rows deleted (${[...d1Status.keys()].filter((n) => !currentNames.has(n)).length} stale in all)`);
+if (d1Status.size) console.error(`drift against the database: ${drifted.length} rows differ in status, ${repaired.length} repaired in this run, ${stale.length} of ${staleAll.length} stale rows deleted; about ${ordinaryWrites} writes for the ordinary import, ${repaired.length * 11 + stale.length * 10} for the repair, budget ${args['write-budget']}`);
 await writeFile(args.out, statements.join('\n') + '\n');
 await writeFile(`${args.in}/changed.json`, JSON.stringify({ changed: servers.map((s) => s.name), removed }));
 console.error(
   previous
-    ? `wrote ${statements.length} statements: ${newServers.length} new and ${changedServers.length} changed of ${allServers.length} servers, ${removed.length} removed, ${hostRows.length} hosts touched, to ${args.out}`
-    : `wrote ${statements.length} statements for ${servers.length} servers and ${hosts.length} hosts to ${args.out}`
+    ? `wrote ${statements.length} statements: ${newServers.length} new and ${changedServers.length} changed of ${allServers.length} servers, ${removed.length} removed, to ${args.out}`
+    : `wrote ${statements.length} statements for ${servers.length} servers to ${args.out}`
 );

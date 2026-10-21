@@ -24,7 +24,7 @@ export async function createGeminiCounter(options: { apiKey?: string; cachePath?
   if (options.cachePath && existsSync(options.cachePath)) {
     const prev = JSON.parse(await readFile(options.cachePath, 'utf8')) as Array<{ name: string; payloadHash?: string; geminiModel?: string; geminiTokens?: number; geminiMeasuredAt?: string; geminiError?: string }>;
     for (const p of prev) {
-      if (p.payloadHash && p.geminiModel === model && p.geminiMeasuredAt && (p.geminiTokens != null || p.geminiError)) {
+      if (p.payloadHash && p.geminiModel === model && p.geminiMeasuredAt && (p.geminiTokens != null || (p.geminiError && !/API_KEY|api key|PERMISSION_DENIED|UNAUTHENTICATED/i.test(p.geminiError)))) {
         cache.set(p.name, { payloadHash: p.payloadHash, model: p.geminiModel, tokens: p.geminiTokens, measuredAt: p.geminiMeasuredAt, error: p.geminiError });
       }
     }
@@ -54,7 +54,7 @@ export async function createGeminiCounter(options: { apiKey?: string; cachePath?
       } catch (e) {
         const message = e instanceof GeminiCountError ? e.message : String(e);
         // A refused schema is a stable fact about the server; a transport failure is not, so leave it out and retry next run.
-        if (e instanceof GeminiCountError && e.status >= 400 && e.status < 500 && e.status !== 429) return { model, measuredAt, error: message };
+        if (e instanceof GeminiCountError && e.status >= 400 && e.status < 500 && e.status !== 429 && e.status !== 401 && e.status !== 403) return { model, measuredAt, error: message };
         console.error(`  countTokens failed for ${name}: ${message}`);
         return undefined;
       }

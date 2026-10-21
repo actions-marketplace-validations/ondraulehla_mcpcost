@@ -9,7 +9,7 @@ import { bucket, label, num, pct, date, ms, modelName } from '../lib/format';
 
 const runs = await recentRuns(30);
 const run = runs[0] ?? null;
-const hosts = run ? await listHosts(12) : [];
+const hosts = run ? await listHosts(12, run) : [];
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=10800');
 
 const gated = run ? (run.byStatus.auth ?? 0) + (run.byStatus.payment ?? 0) + (run.byStatus.newer_protocol ?? 0) : 0;

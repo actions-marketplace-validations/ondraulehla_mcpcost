@@ -320,6 +320,28 @@ const histogram = (xs: number[]) => {
   return { edges: HISTOGRAM_EDGES, bins };
 };
 const uniqueToolsets = new Set(ok.map((r) => r.toolsetHash)).size;
+const hostMap = new Map<string, ServerRow[]>();
+for (const r of rows) (hostMap.get(r.host) ?? hostMap.set(r.host, []).get(r.host)!).push(r);
+const hosts = [...hostMap.entries()]
+  .map(([host, list]) => ({
+    host,
+    servers: list.length,
+    byStatus: count(list, (r) => r.status),
+    uniqueToolsets: new Set(list.filter((r) => r.toolsetHash).map((r) => r.toolsetHash)).size,
+    medianTokens: quantile(list.filter((r) => r.status === 'ok').map((r) => r.toolsTokens ?? 0), 0.5)
+  }))
+  .sort((a, b) => b.servers - a.servers);
+
+/** The hosts page and the statistics read the biggest hosts from the run summary: one row written a day instead of 1 700. */
+const topHosts = hosts.slice(0, 500).map((h) => ({
+  host: h.host,
+  servers: h.servers,
+  ok: h.byStatus.ok ?? 0,
+  gated: [...GATED_STATUSES].reduce((a, k) => a + (h.byStatus[k] ?? 0), 0),
+  dead: h.servers - (h.byStatus.ok ?? 0) - [...GATED_STATUSES].reduce((a, k) => a + (h.byStatus[k] ?? 0), 0),
+  uniqueToolsets: h.uniqueToolsets,
+  medianTokens: h.medianTokens
+}));
 /** Ranks by the exact Claude count when the run has one, else by the estimate. */
 const weight = (r: ServerRow) => r.claudeTokens ?? (counted.length ? -1 : (r.toolsTokens ?? 0));
 const summary = {
@@ -363,21 +385,11 @@ const summary = {
   toolCount: { median: quantile(ok.map((r) => r.toolCount ?? 0), 0.5), p90: quantile(ok.map((r) => r.toolCount ?? 0), 0.9), max: Math.max(0, ...ok.map((r) => r.toolCount ?? 0)) },
   initMs: { median: quantile(ok.map((r) => r.initMs ?? 0), 0.5), p90: quantile(ok.map((r) => r.initMs ?? 0), 0.9) },
   hosts: new Set(rows.map((r) => r.host)).size,
+  topHosts,
+  tokenBands: histogram(ok.map((r) => r.claudeTokens ?? r.toolsTokens).filter((n): n is number => n != null)),
   changes,
   heaviest: [...ok].sort((a, b) => weight(b) - weight(a)).slice(0, 20).map((r) => ({ name: r.name, toolCount: r.toolCount, toolsTokens: r.toolsTokens, claudeTokens: r.claudeTokens, claudeTokensCc: r.claudeTokensCc, host: r.host }))
 };
-
-const hostMap = new Map<string, ServerRow[]>();
-for (const r of rows) (hostMap.get(r.host) ?? hostMap.set(r.host, []).get(r.host)!).push(r);
-const hosts = [...hostMap.entries()]
-  .map(([host, list]) => ({
-    host,
-    servers: list.length,
-    byStatus: count(list, (r) => r.status),
-    uniqueToolsets: new Set(list.filter((r) => r.toolsetHash).map((r) => r.toolsetHash)).size,
-    medianTokens: quantile(list.filter((r) => r.status === 'ok').map((r) => r.toolsTokens ?? 0), 0.5)
-  }))
-  .sort((a, b) => b.servers - a.servers);
 
 await mkdir(args.out, { recursive: true });
 await writeFile(`${args.out}/servers.json`, JSON.stringify(rows));

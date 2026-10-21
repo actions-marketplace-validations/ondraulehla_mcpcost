@@ -118,10 +118,10 @@ CREATE TABLE IF NOT EXISTS hosts (
 -- Every index entry is a row written on each update of its columns, so there
 -- are as few as the page needs.
 -- A status change rewrites every index that starts with status, so only the default sort has one.
-CREATE INDEX IF NOT EXISTS servers_tokens_name ON servers (tools_tokens DESC, name);
+-- Sorts by the estimate, by latency, by the registry date and by protocol scan the table instead of an index:
+-- a page of them reads 40 000 rows once in three hours, while an index would cost a write on every row change.
+-- See migrations/006-fewer-indexes.sql.
 CREATE INDEX IF NOT EXISTS servers_tools_name ON servers (tool_count DESC, name);
-CREATE INDEX IF NOT EXISTS servers_init_name ON servers (init_ms, name);
-CREATE INDEX IF NOT EXISTS servers_updated_name ON servers (registry_updated_at DESC, name);
 CREATE INDEX IF NOT EXISTS servers_claude ON servers (claude_tokens DESC, name);
 CREATE INDEX IF NOT EXISTS servers_status_claude ON servers (status, claude_tokens DESC, name);
 
@@ -159,7 +159,6 @@ CREATE INDEX IF NOT EXISTS servers_url ON servers (url);
 
 -- Column sorts and filters on the list page.
 CREATE INDEX IF NOT EXISTS servers_status_name ON servers (status, name);
-CREATE INDEX IF NOT EXISTS servers_protocol_name ON servers (protocol_version, name);
 CREATE INDEX IF NOT EXISTS servers_host_name ON servers (host, name);
 
 -- The statistics page lists the biggest hosts; without this the query read the whole table.

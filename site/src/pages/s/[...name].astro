@@ -170,7 +170,7 @@ const jsonld = {
 
   <p style="margin-top:22px">
     <span class={`tag big ${bucket(server.status)}`}>{label(server.status)}</span>
-    <span class="muted small"> probed {date(server.probed_at)}{server.http_status && <> · HTTP {server.http_status}</>}{server.auth_scheme && <> · {server.auth_scheme}</>}{server.measured_with_credentials ? <> · measured with credentials</> : null}</span>
+    <span class="muted small"> probed {date(run?.probedAt ?? server.probed_at)}{run && server.probed_at.slice(0, 10) < run.probedAt.slice(0, 10) && <> · unchanged since {date(server.probed_at)}</>}{server.http_status && <> · HTTP {server.http_status}</>}{server.auth_scheme && <> · {server.auth_scheme}</>}{server.measured_with_credentials ? <> · measured with credentials</> : null}</span>
   </p>
 
   {server.status === 'ok' && (
@@ -216,7 +216,7 @@ const jsonld = {
     {server.registry_status === 'tracked'
       ? <><dt>Registry</dt><dd>Not in the official registry. Tracked on request since {date(server.registry_updated_at)}. <a href="https://registry.modelcontextprotocol.io" rel="noopener">Publish it</a> and it gets its registry name here.</dd></>
       : <><dt>Registry</dt><dd>{server.registry_status}, updated {date(server.registry_updated_at)} · <a href={`https://registry.modelcontextprotocol.io/v0/servers?search=${encodeURIComponent(name)}`} rel="noopener">registry entry</a></dd></>}
-    {history.length > 0 && <><dt>Reachable</dt><dd>{reachable} of the last {history.length} probe{history.length === 1 ? '' : 's'}</dd></>}
+    {history.length > 1 && <><dt>Changes</dt><dd>{history.length} recorded, reachable in {reachable} of them. A row is added when the result, the tool count or the cost changes.</dd></>}
   </dl>
 
   {topTools.length > 0 && (
