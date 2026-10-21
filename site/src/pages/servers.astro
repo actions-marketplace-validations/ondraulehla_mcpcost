@@ -33,13 +33,12 @@ const back = p.get('d') === 'prev';
 const requestedPage = cursor ? Math.max(1, Number(p.get('p') ?? '1') || 1) : Math.min(MAX_NUMBERED_PAGE, Math.max(1, Number(p.get('page') ?? '1') || 1));
 
 // A filtered list has no counts in the run summary; one query grouped by status gives the segment counts, the cause counts and the total.
+// The unfiltered list never asks: that query reads the whole table, and the summary answers (its token bounds from 2026-10-22 on).
 const needsCount = Boolean(q || host || protocol || transport || tokensParam || SORTS[sort].where);
-const run = await latestRun();
-// A run from before 2026-10-21 has no token bounds in its summary; the count query gives them.
-const needsBounds = !run?.shownTokens;
-const [{ rows, hasNext, hasPrev, perPage, page, nextCursor, prevCursor }, counted] = await Promise.all([
+const [{ rows, hasNext, hasPrev, perPage, page, nextCursor, prevCursor }, run, counted] = await Promise.all([
   listServers({ q, status, host, protocol, transport, tokens: tokensParam, sort, page: requestedPage, cursor, back }),
-  needsCount || needsBounds ? countByStatus({ q, host, protocol, transport, tokens: tokensParam, sort }) : Promise.resolve(null)
+  latestRun(),
+  needsCount ? countByStatus({ q, host, protocol, transport, tokens: tokensParam, sort }) : Promise.resolve(null)
 ]);
 function pageHref(n: number, c: { value: string | number | null; name: string } | null, direction?: 'prev'): string {
   const u = new URL(Astro.url);
@@ -57,7 +56,7 @@ const nextHref = hasNext ? pageHref(page + 1, nextCursor) : null;
 const prevHref = hasPrev ? pageHref(page - 1, prevCursor, 'prev') : null;
 
 /** Servers per status under the other filters: counted when a filter is on, else from the run summary with no query. */
-const byStatus: Record<string, number> | null = counted && needsCount ? Object.fromEntries(Object.entries(counted).map(([k, v]) => [k, v.n])) : (run?.byStatus ?? null);
+const byStatus: Record<string, number> | null = counted ? Object.fromEntries(Object.entries(counted).map(([k, v]) => [k, v.n])) : (run?.byStatus ?? null);
 const sum = (set: ReadonlySet<string>) => (byStatus ? [...set].reduce((a, s) => a + (byStatus[s] ?? 0), 0) : 0);
 const allCount = byStatus ? Object.values(byStatus).reduce((a, n) => a + n, 0) : 0;
 const gatedCount = sum(GATED_STATUSES);
@@ -204,7 +203,7 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
     <summary>More filters{(host || protocol || transport || tokensParam) && <span class="muted"> · {[host, rangeLabel, protocol && `protocol ${protocol}`, transport && transportLabel[transport]].filter(Boolean).join(' · ')}</span>}</summary>
     <div class="more-form">
       <label>Host
-        <input type="text" name="host" value={host} list="host-options" placeholder="any" autocomplete="off" spellcheck="false" />
+        <input type="text" name="host" value={host} list="host-options" placeholder="any, or part of a name" autocomplete="off" spellcheck="false" />
         <datalist id="host-options">
           {hostOptions.map((h) => <option value={h} />)}
         </datalist>

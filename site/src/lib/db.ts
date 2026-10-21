@@ -347,6 +347,7 @@ export const MAX_NUMBERED_PAGE = 1000;
 export interface ListQuery {
   q?: string;
   status?: string;
+  /** Part of a host name, matched anywhere in it. */
   host?: string;
   protocol?: string;
   transport?: string;
@@ -444,8 +445,16 @@ function listWhere(query: ListQuery): { where: string[]; binds: unknown[] } {
     binds.push(query.status);
   }
   if (query.host) {
-    where.push('host = ?');
-    binds.push(query.host);
+    // Part of a host name is enough: "foura" finds mcp.foura.ai. Three characters or more go through the
+    // trigram index of the host column; a shorter text scans, which is rare.
+    const h = query.host.trim().toLowerCase().replace(/"/g, '');
+    if ([...h].length >= 3) {
+      where.push('servers.rowid IN (SELECT rowid FROM servers_fts WHERE servers_fts MATCH ?)');
+      binds.push(`host:"${h}"`);
+    } else {
+      where.push('instr(lower(host), ?) > 0');
+      binds.push(h);
+    }
   }
   if (query.protocol) {
     where.push('protocol_version = ?');
@@ -491,9 +500,29 @@ export async function countByStatus(query: Omit<ListQuery, 'status'>): Promise<R
   return Object.fromEntries(results.map((r) => [r.status, { n: r.n, lo: r.lo, hi: r.hi }]));
 }
 
+/** Whether migration 007 has built the index on the shown number, asked once in ten minutes per isolate. */
+let shownIndexed: { value: boolean; expires: number } | null = null;
+async function shownIndexExists(): Promise<boolean> {
+  const now = Date.now();
+  if (shownIndexed && shownIndexed.expires > now) return shownIndexed.value;
+  const row = await db().prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'index' AND name = 'servers_status_shown'").first<{ n: number }>();
+  shownIndexed = { value: (row?.n ?? 0) > 0, expires: now + 600_000 };
+  return shownIndexed.value;
+}
+
+/**
+ * Until the index on the shown number exists, the Tokens sort reads the index on claude_tokens instead:
+ * sorting by an expression without its index reads the whole table on every page, and a day of that
+ * spends the free tier's five million reads.
+ */
+async function effectiveSort(spec: SortSpec): Promise<SortSpec> {
+  if (spec.col !== SHOWN_TOKENS || (await shownIndexExists())) return spec;
+  return { ...spec, col: 'claude_tokens', key: 'claude_tokens', where: spec.where.replace(SHOWN_TOKENS, 'claude_tokens') };
+}
+
 export async function listServers(query: ListQuery): Promise<ListResult> {
   const { where, binds } = listWhere(query);
-  const sort = SORTS[query.sort ?? DEFAULT_SORT] ?? SORTS[DEFAULT_SORT];
+  const sort = await effectiveSort(SORTS[query.sort ?? DEFAULT_SORT] ?? SORTS[DEFAULT_SORT]);
   const perPage = Math.min(200, Math.max(10, query.perPage ?? 50));
   const cursor = query.cursor ?? null;
   const back = Boolean(cursor && query.back);
@@ -532,12 +561,12 @@ export async function listServers(query: ListQuery): Promise<ListResult> {
  * over time; the index lists only the chunks that still have rows. One scan of the table, cached for a day.
  * D1 binds a JS number as a float, so the division is cast back to an integer.
  */
-export async function serverSitemapChunks(size: number): Promise<Array<{ chunk: number; count: number; lastmod: string }>> {
-  const { results } = await db()
-    .prepare('SELECT CAST(rowid / ? AS INTEGER) AS chunk, count(*) AS count, max(probed_at) AS lastmod FROM servers GROUP BY chunk ORDER BY chunk')
-    .bind(size)
-    .all<{ chunk: number; count: number; lastmod: string }>();
-  return results;
+export async function serverSitemapChunks(size: number, lastmod: string): Promise<Array<{ chunk: number; lastmod: string }>> {
+  // The largest rowid alone: one read, where a GROUP BY over the rowids read the whole table on every
+  // crawler's visit from every edge. A chunk of removed rows only comes out empty, which a crawler takes in stride.
+  const row = await db().prepare('SELECT max(rowid) AS top FROM servers').first<{ top: number | null }>();
+  const top = row?.top ?? 0;
+  return Array.from({ length: Math.floor(top / size) + 1 }, (_, chunk) => ({ chunk, lastmod }));
 }
 
 /**
