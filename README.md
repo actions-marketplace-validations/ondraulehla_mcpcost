@@ -141,7 +141,7 @@ registry ──▶ probe/run.ts ──▶ data/raw/probe-run.json
 - `packages/mcpcost/` the library and the CLI `mcpcost`: registry client, remote and stdio probe, config discovery, token counting
 - `probe/` the batch runner and the data pipeline
 - `site/` the board: Astro 7 with the Cloudflare adapter on Workers, rendered from D1 with FTS5 search, SVG badges, no client JavaScript beyond the theme switch and the analytics beacon
-- `.github/workflows/probe.yml` runs the whole pipeline daily and commits `summary.json` and `hosts.json`
+- `.github/workflows/probe.yml` runs the whole pipeline daily: probe, counts, `build-data`, `to-sql`, the D1 import. The run's `summary.json`, `servers.json` and `hosts.json` go up as a workflow artifact; the next run diffs against it and imports only the rows that changed, inside the free tier's 100 000 row writes a day
 - `.github/workflows/deploy.yml` deploys the site when `site/` changes
 
 ## Methodology
@@ -175,7 +175,7 @@ npm run dev
 
 The alert mails need a sending domain: either Cloudflare Email Sending (Workers Paid plan, then the `send_email` binding in `site/wrangler.jsonc`) or Resend (verify the domain there and `npx wrangler secret put RESEND_API_KEY`). Without one, the watch form says that the confirmation mail could not be sent.
 
-Deploying needs a Cloudflare account with a D1 database named `mcpcost` (`wrangler d1 create mcpcost`, then put the id in `site/wrangler.jsonc`). The workflows expect the repository secrets `CLOUDFLARE_API_TOKEN` (Workers Scripts: Edit, D1: Edit) and `CLOUDFLARE_ACCOUNT_ID`.
+Deploying needs a Cloudflare account with a D1 database named `mcpcost` (`wrangler d1 create mcpcost`, then put the id in `site/wrangler.jsonc`). The workflows expect the repository secrets `CLOUDFLARE_API_TOKEN` (Workers Scripts: Edit, D1: Edit) and `CLOUDFLARE_ACCOUNT_ID`. Both workflows apply `site/schema.sql` and the pending files in `site/migrations/` on every run. The two indexes on the shown token count (migrations 007 and 008) are the exception: each build writes a row per server, so the probe workflow applies one a day before the import and gives the import the rest of the write budget. A new database needs them applied by hand once.
 
 ### The old host
 
