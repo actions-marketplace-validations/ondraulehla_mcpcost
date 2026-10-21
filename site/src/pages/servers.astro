@@ -204,7 +204,7 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
     <summary>More filters{(host || protocol || transport || tokensParam) && <span class="muted"> · {[host, rangeLabel, protocol && `protocol ${protocol}`, transport && transportLabel[transport]].filter(Boolean).join(' · ')}</span>}</summary>
     <div class="more-form">
       <label>Host
-        <input type="text" name="host" value={host} list="host-options" placeholder="any" autocomplete="off" spellcheck="false" />
+        <input type="text" name="host" value={host} list="host-options" placeholder="any, or part of a name" autocomplete="off" spellcheck="false" />
         <datalist id="host-options">
           {hostOptions.map((h) => <option value={h} />)}
         </datalist>

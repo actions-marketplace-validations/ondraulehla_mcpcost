@@ -347,6 +347,7 @@ export const MAX_NUMBERED_PAGE = 1000;
 export interface ListQuery {
   q?: string;
   status?: string;
+  /** Part of a host name, matched anywhere in it. */
   host?: string;
   protocol?: string;
   transport?: string;
@@ -444,8 +445,16 @@ function listWhere(query: ListQuery): { where: string[]; binds: unknown[] } {
     binds.push(query.status);
   }
   if (query.host) {
-    where.push('host = ?');
-    binds.push(query.host);
+    // Part of a host name is enough: "foura" finds mcp.foura.ai. Three characters or more go through the
+    // trigram index of the host column; a shorter text scans, which is rare.
+    const h = query.host.trim().toLowerCase().replace(/"/g, '');
+    if ([...h].length >= 3) {
+      where.push('servers.rowid IN (SELECT rowid FROM servers_fts WHERE servers_fts MATCH ?)');
+      binds.push(`host:"${h}"`);
+    } else {
+      where.push('instr(lower(host), ?) > 0');
+      binds.push(h);
+    }
   }
   if (query.protocol) {
     where.push('protocol_version = ?');
