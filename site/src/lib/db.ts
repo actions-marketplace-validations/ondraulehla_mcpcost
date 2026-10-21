@@ -233,25 +233,31 @@ export async function getSiblings(hash: string, except: string, limit = 12): Pro
   return results;
 }
 
+/** The number the board shows: the exact count when there is one, else the estimate. Two indexes in schema.sql hold this expression. */
+export const SHOWN_TOKENS = 'coalesce(claude_tokens, tools_tokens)';
+
 type Dir = 'ASC' | 'DESC';
 interface SortSpec {
-  /** The sort column, or null when the sort is by name alone. */
+  /** The sort column or expression, or null when the sort is by name alone. */
   col: string | null;
+  /** The row field that holds the sort value for the cursor, when it is not the column itself. */
+  key?: string;
   dir: Dir;
   /** Direction of the name tie-break; the reverse of a sort reads its index backwards, so the name flips too. */
   nameDir: Dir;
   where: string;
   label: string;
 }
-const sortSpec = (col: string | null, dir: Dir, nameDir: Dir, where: string, label: string): SortSpec => ({ col, dir, nameDir, where, label });
+const sortSpec = (col: string | null, dir: Dir, nameDir: Dir, where: string, label: string, key?: string): SortSpec => ({ col, dir, nameDir, where, label, key });
 
 /**
  * Sort keys. Each matches an index in schema.sql. The opposite direction reads
  * the same index backwards, so its name tie-break is reversed too.
  */
 export const SORTS = {
-  claude: sortSpec('claude_tokens', 'DESC', 'ASC', '', 'Claude: most tokens'),
-  'claude-asc': sortSpec('claude_tokens', 'ASC', 'DESC', 'claude_tokens IS NOT NULL', 'Claude: fewest tokens'),
+  // The Tokens column: the number the board shows, so a server with an estimate only ranks by that estimate.
+  claude: sortSpec(SHOWN_TOKENS, 'DESC', 'ASC', '', 'tokens: most', 'shown_tokens'),
+  'claude-asc': sortSpec(SHOWN_TOKENS, 'ASC', 'DESC', `${SHOWN_TOKENS} IS NOT NULL`, 'tokens: fewest', 'shown_tokens'),
   tokens: sortSpec('tools_tokens', 'DESC', 'ASC', '', 'estimate: largest'),
   'tokens-asc': sortSpec('tools_tokens', 'ASC', 'DESC', 'tools_tokens IS NOT NULL', 'estimate: smallest'),
   tools: sortSpec('tool_count', 'DESC', 'ASC', '', 'tools: most'),
@@ -357,12 +363,12 @@ export interface ListQuery {
 }
 
 export const LIST_COLUMNS =
-  'name, title, host, transport, status, http_status, auth_scheme, protocol_version, init_ms, tool_count, tools_tokens, claude_tokens, claude_tokens_cc, toolset_siblings, registry_updated_at, derived_package, derived_status, derived_tools_tokens, derived_claude_tokens';
+  `name, title, host, transport, status, http_status, auth_scheme, protocol_version, init_ms, tool_count, tools_tokens, claude_tokens, claude_tokens_cc, toolset_siblings, registry_updated_at, derived_package, derived_status, derived_tools_tokens, derived_claude_tokens, ${SHOWN_TOKENS} AS shown_tokens`;
 export type ListRow = Pick<
   ServerRecord,
   | 'name' | 'title' | 'host' | 'transport' | 'status' | 'http_status' | 'auth_scheme' | 'protocol_version'
   | 'init_ms' | 'tool_count' | 'tools_tokens' | 'claude_tokens' | 'claude_tokens_cc' | 'toolset_siblings' | 'registry_updated_at' | 'derived_package' | 'derived_status' | 'derived_tools_tokens' | 'derived_claude_tokens'
->;
+> & { shown_tokens: number | null };
 
 export interface ListResult {
   rows: ListRow[];
@@ -407,9 +413,6 @@ export function tokenBand(text: string | undefined | null): { lo: number; hi: nu
   if (!m || (!m[1] && !m[2])) return null;
   return { lo: Number(m[1] || 0), hi: m[2] ? Number(m[2]) : null };
 }
-
-/** The number the board shows: the exact count when there is one, else the estimate. */
-const SHOWN_TOKENS = 'coalesce(claude_tokens, tools_tokens)';
 
 /** The SQL of a token range: lower end in, upper end out. */
 function tokenCondition(text: string | undefined): { sql: string; binds: number[] } | null {
@@ -509,7 +512,7 @@ export async function listServers(query: ListQuery): Promise<ListResult> {
   const more = results.length > perPage;
   const rows = results.slice(0, perPage);
   if (back) rows.reverse();
-  const edge = (row: ListRow): Cursor => ({ value: sort.col ? ((row as unknown as Record<string, string | number | null>)[sort.col] ?? null) : null, name: row.name });
+  const edge = (row: ListRow): Cursor => ({ value: sort.col ? ((row as unknown as Record<string, string | number | null>)[sort.key ?? sort.col] ?? null) : null, name: row.name });
   const first = rows[0];
   const last = rows[rows.length - 1];
   return {
