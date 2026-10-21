@@ -352,7 +352,8 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
   .more summary::before { content: '+'; display: inline-block; width: 1em; color: var(--accent); }
   .more[open] summary::before { content: '−'; }
   .more summary .muted { text-transform: none; letter-spacing: 0.04em; }
-  .more-form { display: grid; grid-template-columns: minmax(170px, 1.3fr) minmax(190px, 1.2fr) minmax(140px, 1fr) minmax(140px, 1fr) auto; gap: 1px; margin-top: 8px; border: 1px solid var(--line); background: var(--line); max-width: 960px; }
+  /* As wide as the segments above and the table below. */
+  .more-form { display: grid; grid-template-columns: minmax(170px, 1.3fr) minmax(190px, 1.2fr) minmax(140px, 1fr) minmax(140px, 1fr) auto; gap: 1px; margin-top: 8px; border: 1px solid var(--line); background: var(--line); }
   .more-form label, .more-form .range { display: flex; flex-direction: column; gap: 6px; padding: 0.625rem 0.75rem 0.75rem; background: var(--surface); font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-faint); }
   .more-form select, .more-form input { width: 100%; min-width: 0; }
   .range-inputs { display: flex; align-items: center; gap: 6px; }
