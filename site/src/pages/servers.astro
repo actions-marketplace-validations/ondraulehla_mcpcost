@@ -34,10 +34,12 @@ const requestedPage = cursor ? Math.max(1, Number(p.get('p') ?? '1') || 1) : Mat
 
 // A filtered list has no counts in the run summary; one query grouped by status gives the segment counts, the cause counts and the total.
 const needsCount = Boolean(q || host || protocol || transport || tokensParam || SORTS[sort].where);
-const [{ rows, hasNext, hasPrev, perPage, page, nextCursor, prevCursor }, run, counted] = await Promise.all([
+const run = await latestRun();
+// A run from before 2026-10-21 has no token bounds in its summary; the count query gives them.
+const needsBounds = !run?.shownTokens;
+const [{ rows, hasNext, hasPrev, perPage, page, nextCursor, prevCursor }, counted] = await Promise.all([
   listServers({ q, status, host, protocol, transport, tokens: tokensParam, sort, page: requestedPage, cursor, back }),
-  latestRun(),
-  needsCount ? countByStatus({ q, host, protocol, transport, tokens: tokensParam, sort }) : Promise.resolve(null)
+  needsCount || needsBounds ? countByStatus({ q, host, protocol, transport, tokens: tokensParam, sort }) : Promise.resolve(null)
 ]);
 function pageHref(n: number, c: { value: string | number | null; name: string } | null, direction?: 'prev'): string {
   const u = new URL(Astro.url);
@@ -55,7 +57,7 @@ const nextHref = hasNext ? pageHref(page + 1, nextCursor) : null;
 const prevHref = hasPrev ? pageHref(page - 1, prevCursor, 'prev') : null;
 
 /** Servers per status under the other filters: counted when a filter is on, else from the run summary with no query. */
-const byStatus: Record<string, number> | null = counted ?? run?.byStatus ?? null;
+const byStatus: Record<string, number> | null = counted && needsCount ? Object.fromEntries(Object.entries(counted).map(([k, v]) => [k, v.n])) : (run?.byStatus ?? null);
 const sum = (set: ReadonlySet<string>) => (byStatus ? [...set].reduce((a, s) => a + (byStatus[s] ?? 0), 0) : 0);
 const allCount = byStatus ? Object.values(byStatus).reduce((a, n) => a + n, 0) : 0;
 const gatedCount = sum(GATED_STATUSES);
@@ -86,6 +88,17 @@ const total = counts
         : (byStatus![status] ?? 0)
   : null;
 const pages = total !== null ? Math.max(1, Math.ceil(total / perPage)) : null;
+/** The statuses the list holds, for the token bounds of the range field. */
+const inList = (k: string) =>
+  status === '' ? true : status === 'ok' ? k === 'ok' : status === 'gated' ? GATED_STATUSES.has(k) : status === 'access' ? ACCESS_STATUSES.has(k) : status === 'setup' ? SETUP_STATUSES.has(k) : status === 'down' ? k !== 'ok' && !GATED_STATUSES.has(k) : k === status;
+/** The smallest and the largest token count the list can show with the other filters on: the placeholders of the range field. */
+const bounds: { lo: number; hi: number } | null = (() => {
+  if (counted) {
+    const rows = Object.entries(counted).filter(([k, v]) => inList(k) && v.lo !== null && v.hi !== null);
+    return rows.length ? { lo: Math.min(...rows.map(([, v]) => v.lo!)), hi: Math.max(...rows.map(([, v]) => v.hi!)) } : null;
+  }
+  return run?.shownTokens ? { lo: run.shownTokens.min, hi: run.shownTokens.max } : null;
+})();
 const protocols = run ? Object.keys(run.protocols).filter((v) => v !== 'unknown').sort().reverse() : [];
 /** The token range in words: "1 000 to 5 000 tokens", "from 20 000 tokens", "up to 1 000 tokens". */
 const rangeLabel = range ? (range.hi === null ? `from ${num(range.lo)} tokens` : range.lo === 0 ? `up to ${num(range.hi)} tokens` : `${num(range.lo)} to ${num(range.hi)} tokens`) : '';
@@ -204,9 +217,9 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
       <div class="range" role="group" aria-label="Tokens the tool list costs">
         <span class="range-label">Tokens</span>
         <span class="range-inputs">
-          <input type="number" name="tmin" value={range && range.lo > 0 ? range.lo : ''} min="0" step="1" inputmode="numeric" placeholder="0" aria-label="Tokens from" />
+          <input type="number" name="tmin" value={range && range.lo > 0 ? range.lo : ''} min="0" step="1" inputmode="numeric" placeholder={bounds ? String(bounds.lo) : '0'} aria-label="Tokens from" title={bounds ? `The smallest in this list: ${num(bounds.lo)}` : undefined} />
           <span class="range-to">to</span>
-          <input type="number" name="tmax" value={range?.hi ?? ''} min="0" step="1" inputmode="numeric" placeholder="any" aria-label="Tokens up to" />
+          <input type="number" name="tmax" value={range?.hi ?? ''} min="0" step="1" inputmode="numeric" placeholder={bounds ? String(bounds.hi) : 'any'} aria-label="Tokens up to" title={bounds ? `The largest in this list: ${num(bounds.hi)}` : undefined} />
         </span>
       </div>
       <label>Protocol

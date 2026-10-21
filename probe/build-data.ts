@@ -386,6 +386,10 @@ const summary = {
   initMs: { median: quantile(ok.map((r) => r.initMs ?? 0), 0.5), p90: quantile(ok.map((r) => r.initMs ?? 0), 0.9) },
   hosts: new Set(rows.map((r) => r.host)).size,
   topHosts,
+  shownTokens: (() => {
+    const shown = ok.map((r) => r.claudeTokens ?? r.toolsTokens).filter((n): n is number => n != null);
+    return shown.length ? { min: Math.min(...shown), max: Math.max(...shown) } : undefined;
+  })(),
   changes,
   heaviest: [...ok].sort((a, b) => weight(b) - weight(a)).slice(0, 20).map((r) => ({ name: r.name, toolCount: r.toolCount, toolsTokens: r.toolsTokens, claudeTokens: r.claudeTokens, claudeTokensCc: r.claudeTokensCc, host: r.host }))
 };

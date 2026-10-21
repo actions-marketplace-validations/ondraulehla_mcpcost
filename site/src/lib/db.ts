@@ -114,6 +114,8 @@ export interface RunSummary {
   hosts: number;
   /** The 500 biggest hosts, from the run that wrote them (runs since 2026-10-21); older runs have the hosts table. */
   topHosts?: Array<{ host: string; servers: number; ok: number; gated: number; dead: number; uniqueToolsets: number; medianTokens: number }>;
+  /** The smallest and the largest number the board shows for an alive server (exact count, else estimate); runs since 2026-10-21. */
+  shownTokens?: { min: number; max: number };
   heaviest: Array<{ name: string; toolCount: number; toolsTokens: number; claudeTokens?: number; claudeTokensCc?: number; host: string }>;
   /** Package (stdio) servers on the board, and how many of them this run probed. */
   stdioProbed?: number;
@@ -406,6 +408,16 @@ export function tokenBand(text: string | undefined | null): { lo: number; hi: nu
   return { lo: Number(m[1] || 0), hi: m[2] ? Number(m[2]) : null };
 }
 
+/** The number the board shows: the exact count when there is one, else the estimate. */
+const SHOWN_TOKENS = 'coalesce(claude_tokens, tools_tokens)';
+
+/** The SQL of a token range: lower end in, upper end out. */
+function tokenCondition(text: string | undefined): { sql: string; binds: number[] } | null {
+  const band = tokenBand(text);
+  if (!band) return null;
+  return band.hi === null ? { sql: `${SHOWN_TOKENS} >= ?`, binds: [band.lo] } : { sql: `${SHOWN_TOKENS} >= ? AND ${SHOWN_TOKENS} < ?`, binds: [band.lo, band.hi] };
+}
+
 /** The filter part of a list query, shared by the page and its count. */
 function listWhere(query: ListQuery): { where: string[]; binds: unknown[] } {
   const where: string[] = [];
@@ -440,13 +452,10 @@ function listWhere(query: ListQuery): { where: string[]; binds: unknown[] } {
     where.push('transport = ?');
     binds.push(query.transport);
   }
-  const band = tokenBand(query.tokens);
+  const band = tokenCondition(query.tokens);
   if (band) {
-    // The number the board shows: the exact count when there is one, else the estimate. Lower edge in, upper edge out.
-    const shown = 'coalesce(claude_tokens, tools_tokens)';
-    where.push(band.hi === null ? `${shown} >= ?` : `${shown} >= ? AND ${shown} < ?`);
-    binds.push(band.lo);
-    if (band.hi !== null) binds.push(band.hi);
+    where.push(band.sql);
+    binds.push(...band.binds);
   }
   const sort = SORTS[query.sort ?? DEFAULT_SORT] ?? SORTS[DEFAULT_SORT];
   if (sort.where) where.push(sort.where);
@@ -459,11 +468,24 @@ function listWhere(query: ListQuery): { where: string[]; binds: unknown[] } {
  * reads every matching row (a text search reads only the matches through the FTS index),
  * so the page asks only when the run summary cannot answer, and the edge keeps the page for hours.
  */
-export async function countByStatus(query: Omit<ListQuery, 'status'>): Promise<Record<string, number>> {
-  const { where, binds } = listWhere({ ...query, status: '' });
+export interface StatusCount {
+  /** Rows of this status under every other filter, the token range included. */
+  n: number;
+  /** The smallest and the largest shown token count of this status under the other filters, the token range left out. */
+  lo: number | null;
+  hi: number | null;
+}
+export async function countByStatus(query: Omit<ListQuery, 'status'>): Promise<Record<string, StatusCount>> {
+  const { where, binds } = listWhere({ ...query, status: '', tokens: undefined });
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-  const { results } = await db().prepare(`SELECT status, count(*) AS n FROM servers ${whereSql} GROUP BY status`).bind(...binds).all<{ status: string; n: number }>();
-  return Object.fromEntries(results.map((r) => [r.status, r.n]));
+  const band = tokenCondition(query.tokens);
+  const count = band ? `count(*) FILTER (WHERE ${band.sql})` : 'count(*)';
+  const { results } = await db()
+    .prepare(`SELECT status, ${count} AS n, min(${SHOWN_TOKENS}) AS lo, max(${SHOWN_TOKENS}) AS hi FROM servers ${whereSql} GROUP BY status`)
+    // The FILTER clause stands before the WHERE in the SQL, so its values bind first.
+    .bind(...(band?.binds ?? []), ...binds)
+    .all<{ status: string; n: number; lo: number | null; hi: number | null }>();
+  return Object.fromEntries(results.map((r) => [r.status, { n: r.n, lo: r.lo, hi: r.hi }]));
 }
 
 export async function listServers(query: ListQuery): Promise<ListResult> {
