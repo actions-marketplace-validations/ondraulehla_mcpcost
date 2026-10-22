@@ -55,11 +55,23 @@ function limitResponse(url: URL, message: string): Response {
  */
 const BLOCKED_AGENTS = /ShapBot|SemrushBot|DataForSeoBot|AhrefsBot|MJ12bot|DotBot|PetalBot|Bytespider|BLEXBot|serpstatbot|ZoominfoBot|Barkrowler|ImagesiftBot/i;
 
+/**
+ * Networks that scraped the list on the night of 2026-10-22: Chrome user agents from hosting addresses
+ * that ignore robots.txt and nofollow and follow the host link of every server page through every status,
+ * sort and page of /servers, about 3 000 list variants in 90 minutes. A list variant from them gets a 403
+ * before any database read; the server pages stay open. A WAF rule on the zone would stop them before the Worker.
+ */
+const LIST_SCRAPER_NETWORKS = /RapidSeedbox|Alibaba/i;
+
 export const onRequest = defineMiddleware(async (context, next) => {
   const { request } = context;
   const url = new URL(request.url);
   if (BLOCKED_AGENTS.test(request.headers.get('user-agent') ?? '')) {
     return new Response('This crawler is not welcome here. See /robots.txt.', { status: 403, headers: { 'cache-control': 'no-store' } });
+  }
+  const network = (request as unknown as { cf?: { asOrganization?: string } }).cf?.asOrganization ?? '';
+  if (((url.pathname === '/servers' && url.search) || url.pathname.startsWith('/api/servers')) && LIST_SCRAPER_NETWORKS.test(network)) {
+    return new Response('Scraping the list variants is not welcome here. See /robots.txt; the data is in the repository.', { status: 403, headers: { 'cache-control': 'no-store' } });
   }
   // The workers.dev address and the old mcp-pulse.ulehla.dev name stay as aliases and send everyone to the real one.
   if (url.hostname.endsWith('.workers.dev') || (url.hostname.endsWith('.ulehla.dev') && url.hostname !== CANONICAL_HOST)) {

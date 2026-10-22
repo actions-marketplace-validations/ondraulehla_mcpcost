@@ -1,7 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import Pager from '../components/Pager.astro';
-import { latestRun, listServers, countByStatus, tokenBand, SORTS, DEFAULT_SORT, MAX_NUMBERED_PAGE, decodeCursor, encodeCursor, ACCESS_STATUSES, SETUP_STATUSES, type SortKey } from '../lib/db';
+import { latestRun, listServers, countByStatus, sortPlan, tokenBand, SORTS, DEFAULT_SORT, MAX_NUMBERED_PAGE, MATCH_CAP, SMALL_LIST, decodeCursor, encodeCursor, ACCESS_STATUSES, SETUP_STATUSES, type SortKey } from '../lib/db';
 import { bucket, label, ms, num, tokens, STATUS_LABEL } from '../lib/format';
 import { GATED_STATUSES } from '../../../packages/mcpcost/src/types.ts';
 
@@ -11,6 +11,9 @@ const q = (p.get('q') ?? '').trim().slice(0, 80);
 const defaultView = [...p.keys()].length === 0;
 const statusParam = p.get('status') ?? '';
 const status = statusParam === 'all' ? '' : defaultView ? 'ok' : statusParam;
+/** The list as a URL that names its status, so the page and sort links of the default view stay on alive servers. */
+const listUrl = new URL(Astro.url);
+if (defaultView) listUrl.searchParams.set('status', 'ok');
 const host = p.get('host') ?? '';
 const protocol = p.get('protocol') ?? '';
 const transport = p.get('transport') ?? '';
@@ -26,7 +29,7 @@ const tokensParam = (() => {
   return band.hi !== null && band.hi < band.lo ? `${hi}-${lo}` : `${lo}-${hi}`;
 })();
 const range = tokenBand(tokensParam);
-const sort = (Object.keys(SORTS).includes(p.get('sort') ?? '') ? p.get('sort') : DEFAULT_SORT) as SortKey;
+const askedSort = (Object.keys(SORTS).includes(p.get('sort') ?? '') ? p.get('sort') : DEFAULT_SORT) as SortKey;
 // Pages 1 to MAX_NUMBERED_PAGE come by number; beyond that `c` is a cursor, `d=prev` goes back, `p` is the page label.
 const cursor = decodeCursor(p.get('c'));
 const back = p.get('d') === 'prev';
@@ -34,14 +37,20 @@ const requestedPage = cursor ? Math.max(1, Number(p.get('p') ?? '1') || 1) : Mat
 
 // A filtered list has no counts in the run summary; one query grouped by status gives the segment counts, the cause counts and the total.
 // The unfiltered list never asks: that query reads the whole table, and the summary answers (its token bounds from 2026-10-22 on).
-const needsCount = Boolean(q || host || protocol || transport || tokensParam || SORTS[sort].where);
-const [{ rows, hasNext, hasPrev, perPage, page, nextCursor, prevCursor }, run, counted] = await Promise.all([
-  listServers({ q, status, host, protocol, transport, tokens: tokensParam, sort, page: requestedPage, cursor, back }),
-  latestRun(),
-  needsCount ? countByStatus({ q, host, protocol, transport, tokens: tokensParam, sort }) : Promise.resolve(null)
+// A sort alone asks nothing either: the summary's counts are the list's, give or take the rows the sort leaves out.
+const needsCount = Boolean(q || host || protocol || transport || tokensParam);
+const run = await latestRun();
+// A sort with no index on a big list would read the whole table on every page; the list keeps the Tokens order then.
+const plannedSort = sortPlan({ q, host, status, sort: askedSort }, run).key;
+const [{ rows, sort, hasNext, hasPrev, perPage, page, nextCursor, prevCursor }, countResult] = await Promise.all([
+  listServers({ q, status, host, protocol, transport, tokens: tokensParam, sort: plannedSort, page: requestedPage, cursor, back, run }),
+  needsCount ? countByStatus({ q, host, protocol, transport, tokens: tokensParam, sort: plannedSort }) : Promise.resolve(null)
 ]);
+/** The counts of a filtered list; null when a search stopped at MATCH_CAP matches, so the counts would be partial. */
+const counted = countResult && !countResult.capped ? countResult.counts : null;
+const capped = Boolean(countResult?.capped);
 function pageHref(n: number, c: { value: string | number | null; name: string } | null, direction?: 'prev'): string {
-  const u = new URL(Astro.url);
+  const u = new URL(listUrl);
   for (const k of ['page', 'c', 'd', 'p']) u.searchParams.delete(k);
   if (c && n > MAX_NUMBERED_PAGE) {
     u.searchParams.set('c', encodeCursor(c));
@@ -56,7 +65,7 @@ const nextHref = hasNext ? pageHref(page + 1, nextCursor) : null;
 const prevHref = hasPrev ? pageHref(page - 1, prevCursor, 'prev') : null;
 
 /** Servers per status under the other filters: counted when a filter is on, else from the run summary with no query. */
-const byStatus: Record<string, number> | null = counted ? Object.fromEntries(Object.entries(counted).map(([k, v]) => [k, v.n])) : (run?.byStatus ?? null);
+const byStatus: Record<string, number> | null = counted ? Object.fromEntries(Object.entries(counted).map(([k, v]) => [k, v.n])) : needsCount ? null : (run?.byStatus ?? null);
 const sum = (set: ReadonlySet<string>) => (byStatus ? [...set].reduce((a, s) => a + (byStatus[s] ?? 0), 0) : 0);
 const allCount = byStatus ? Object.values(byStatus).reduce((a, n) => a + n, 0) : 0;
 const gatedCount = sum(GATED_STATUSES);
@@ -76,8 +85,8 @@ const causes: Array<{ key: string; label: string; count: number }> =
         .filter((c) => c.count > 0)
         .sort((a, b) => b.count - a.count);
 
-// The total of the list: the count of its status under the other filters.
-const total = counts
+// The total of the list: the count of its status under the other filters. A sort that leaves rows out (no init time, no protocol) has no exact total.
+const total = counts && !(SORTS[sort].where && !counted)
   ? status === ''
     ? counts.all
     : status === 'gated'
@@ -145,7 +154,7 @@ const columns: Array<{ label: string; first: SortKey; second: SortKey; num?: boo
   { label: 'Host', first: 'host', second: 'host-desc' }
 ];
 function sortHref(key: SortKey): string {
-  const u = new URL(Astro.url);
+  const u = new URL(listUrl);
   u.searchParams.set('sort', key);
   u.searchParams.delete('page');
   return u.pathname + u.search;
@@ -160,10 +169,16 @@ const title = host ? `Servers on ${host}` : defaultView ? 'MCP server list, rank
 const description = defaultView
   ? 'Every remote and package MCP server in the official registry: alive or down, tool count and the context tokens its tool list costs, ranked. Filter by host, protocol, transport and token range.'
   : undefined;
+/**
+ * A sort this list can afford: on a big list one with no index would read the whole table on every page, so its header
+ * is no link. A search that stopped at MATCH_CAP links no other sort or status either: every variant reads the cap again,
+ * and the scrapers of 2026-10-22 followed every one. The form still changes them.
+ */
+const affordable = (key: SortKey) => !capped && sortPlan({ q, host, status, sort: key }, run).key === key;
 // Every sort, filter and page is its own database read, so crawlers index only the first page of the default view.
 const robots = filtered || page > 1 || sort !== DEFAULT_SORT ? 'noindex, follow' : undefined;
 /** Everything but the sort, as hidden fields for the small sort form on narrow screens. */
-const hiddenForSort = [...p.entries()].filter(([k]) => !['sort', 'page', 'c', 'd', 'p'].includes(k));
+const hiddenForSort = [...listUrl.searchParams.entries()].filter(([k]) => !['sort', 'page', 'c', 'd', 'p'].includes(k));
 const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${num(rows.length)}${hasNext ? '+' : ''} servers on this page` : 'no servers';
 ---
 
@@ -182,7 +197,7 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
 
   <nav class="segments" aria-label="Result">
     {BUCKETS.map((b) => (
-      <a class={`seg ${b}${activeBucket === b ? ' active' : ''}`} href={bucketHref(b)} rel="nofollow" aria-current={activeBucket === b ? 'true' : undefined}>
+      <a class={`seg ${b}${activeBucket === b ? ' active' : ''}`} href={capped ? undefined : bucketHref(b)} rel="nofollow" aria-current={activeBucket === b ? 'true' : undefined}>
         <span class="seg-label">{b === 'ok' ? 'Alive' : b === 'access' ? 'Needs auth' : b === 'setup' ? 'Needs setup' : b === 'down' ? 'Down' : 'All'}</span>
         {counts && <span class="seg-count">{num(counts[b])}</span>}
       </a>
@@ -244,6 +259,13 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
     </div>
   )}
 
+  {sort !== askedSort && (
+    <p class="small muted list-note">Sorting by {SORTS[askedSort].label} reads the whole list, so it works on a search, a host or a list of up to {num(SMALL_LIST)} servers. This list keeps the order by tokens.</p>
+  )}
+  {capped && (
+    <p class="small muted list-note">More than {num(MATCH_CAP)} servers match, so the list ranks the first {num(MATCH_CAP)} of them and shows no counts. Add a word or a filter to narrow it.</p>
+  )}
+
   <div class="count-line">
     <p class="small muted">
       {countLine}{host && <> on {host}</>}{pages !== null && <> · page {page} of {num(pages)}</>}
@@ -274,7 +296,11 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
             const next = sort === c.first ? c.second : c.first;
             return (
               <th class={c.num ? 'num' : ''} aria-sort={isActive ? (arrow(sort) === '▲' ? 'ascending' : 'descending') : undefined}>
-                <a class={`sort${isActive ? ' active' : ''}`} href={sortHref(next)} rel="nofollow" title={`Sort by ${SORTS[next].label}`}>{c.label}{isActive && <span class="arrow">{arrow(sort)}</span>}</a>
+                {affordable(next) ? (
+                  <a class={`sort${isActive ? ' active' : ''}`} href={sortHref(next)} rel="nofollow" title={`Sort by ${SORTS[next].label}`}>{c.label}{isActive && <span class="arrow">{arrow(sort)}</span>}</a>
+                ) : (
+                  <span class={`sort${isActive ? ' active' : ''}`} title={capped ? `Narrow the search to sort by ${SORTS[next].label}` : `Sorting by ${SORTS[next].label} works on a search, a host or a list of up to ${num(SMALL_LIST)} servers`}>{c.label}{isActive && <span class="arrow">{arrow(sort)}</span>}</span>
+                )}
               </th>
             );
           })}
@@ -304,7 +330,7 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
     </table>
   </div>
 
-  <Pager page={page} pages={pages} hasNext={hasNext} hasPrev={hasPrev} nextHref={nextHref} prevHref={prevHref} maxNumbered={MAX_NUMBERED_PAGE} url={Astro.url} position="bottom" />
+  <Pager page={page} pages={pages} hasNext={hasNext} hasPrev={hasPrev} nextHref={nextHref} prevHref={prevHref} maxNumbered={MAX_NUMBERED_PAGE} url={listUrl} position="bottom" />
 </Layout>
 
 <style>
@@ -360,6 +386,8 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
   .count-line p { margin: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .brief-pager { display: inline-flex; gap: 4px; }
   .brief-pager .pbtn { min-width: 28px; height: 28px; padding: 0 6px; font-size: 0.9rem; }
+  th span.sort { color: var(--ink-faint); cursor: default; }
+  .list-note { margin: 10px 0 0; }
   .sort-mobile { display: none; align-items: center; gap: 6px; }
   .sort-mobile label { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 0.66rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-faint); }
   .sort-mobile select { max-width: 180px; font-size: 0.85rem; }
