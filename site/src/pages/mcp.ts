@@ -51,7 +51,7 @@ function build(): McpServer {
     'search_servers',
     {
       title: 'Search the registry board',
-      description: 'Find servers by words in name, title, description or host, with optional filters, sorted by exact Claude token cost by default. Returns up to 20 servers per page; page numbers go to 20, after that pass the `next` cursor from the previous answer.',
+      description: 'Find servers by words in name, title, description or host, with optional filters, sorted by exact Claude token cost by default. Returns up to 20 servers per page; page numbers go to 20, after that pass the `next` cursor from the previous answer. Sorting by the estimate, latency, protocol or registry date needs a query or a small status; on a bigger list the answer keeps the token order and says so in `sort`.',
       inputSchema: {
         query: z.string().optional().describe('Words to match, three or more characters each'),
         status: z.enum(['ok', 'auth', 'payment', 'newer_protocol', 'down']).optional().describe('ok = answers and lists tools'),
@@ -61,8 +61,8 @@ function build(): McpServer {
       }
     },
     async ({ query, status, sort, page, cursor }) => {
-      const { rows, hasNext, nextCursor } = await listServers({ q: query, status, sort: sort ?? 'claude', page: page ?? 1, perPage: 20, cursor: decodeCursor(cursor) });
-      const out = { page: cursor ? undefined : (page ?? 1), hasNext, next: hasNext && nextCursor ? encodeCursor(nextCursor) : null, servers: rows.map((r) => ({ name: r.name, title: r.title, host: r.host, status: r.status, toolCount: r.tool_count, claudeTokens: r.claude_tokens, toolsTokens: r.tools_tokens, protocolVersion: r.protocol_version, page: `${SITE}/s/${r.name}` })) };
+      const { rows, sort: used, hasNext, nextCursor } = await listServers({ q: query, status, sort: sort ?? 'claude', page: page ?? 1, perPage: 20, cursor: decodeCursor(cursor) });
+      const out = { page: cursor ? undefined : (page ?? 1), sort: used, hasNext, next: hasNext && nextCursor ? encodeCursor(nextCursor) : null, servers: rows.map((r) => ({ name: r.name, title: r.title, host: r.host, status: r.status, toolCount: r.tool_count, claudeTokens: r.claude_tokens, toolsTokens: r.tools_tokens, protocolVersion: r.protocol_version, page: `${SITE}/s/${r.name}` })) };
       return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }], structuredContent: out };
     }
   );
