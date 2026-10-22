@@ -238,6 +238,15 @@ export async function getSiblings(hash: string, except: string, limit = 12): Pro
 /** The number the board shows: the exact count when there is one, else the estimate. Two indexes in schema.sql hold this expression. */
 export const SHOWN_TOKENS = 'coalesce(claude_tokens, tools_tokens)';
 
+/**
+ * "Not NULL" as a condition the sort's index can seek to. On a column SQLite seeks past the NULL entries;
+ * on the indexed expression it does not and reads every NULL row first, about 20 000 in the All list.
+ * A token count is never negative, so ">= 0" says the same and seeks.
+ */
+function notNull(col: string): string {
+  return col === SHOWN_TOKENS ? `${col} >= 0` : `${col} IS NOT NULL`;
+}
+
 type Dir = 'ASC' | 'DESC';
 interface SortSpec {
   /** The sort column or expression, or null when the sort is by name alone. */
@@ -259,7 +268,7 @@ const sortSpec = (col: string | null, dir: Dir, nameDir: Dir, where: string, lab
 export const SORTS = {
   // The Tokens column: the number the board shows, so a server with an estimate only ranks by that estimate.
   claude: sortSpec(SHOWN_TOKENS, 'DESC', 'ASC', '', 'tokens: most', 'shown_tokens'),
-  'claude-asc': sortSpec(SHOWN_TOKENS, 'ASC', 'DESC', `${SHOWN_TOKENS} IS NOT NULL`, 'tokens: fewest', 'shown_tokens'),
+  'claude-asc': sortSpec(SHOWN_TOKENS, 'ASC', 'DESC', notNull(SHOWN_TOKENS), 'tokens: fewest', 'shown_tokens'),
   tokens: sortSpec('tools_tokens', 'DESC', 'ASC', '', 'estimate: largest'),
   'tokens-asc': sortSpec('tools_tokens', 'ASC', 'DESC', 'tools_tokens IS NOT NULL', 'estimate: smallest'),
   tools: sortSpec('tool_count', 'DESC', 'ASC', '', 'tools: most'),
@@ -310,26 +319,30 @@ export function decodeCursor(text: string | null | undefined): Cursor | null {
 }
 
 /**
- * The rows after (or, going back, before) a cursor in this sort. SQLite puts
- * NULL first in ASC and last in DESC; the ascending sorts exclude NULL through
- * their `where`, the descending ones keep it at the end.
+ * The rows after (or, going back, before) a cursor in this sort, as conditions the
+ * sort's index can seek to, so a page reads its own rows and not every row above it.
+ * An OR across the value and the name tie-break cannot seek: the read started at the
+ * top of the list, and following the next links to the end of the alive list read
+ * 2.8 million rows. The value range comes first and the tie-break filters only the
+ * rows of the cursor's own value. SQLite puts NULL first in ASC and last in DESC;
+ * the ascending sorts exclude NULL through their `where`, and the NULL tail of a
+ * descending one is a second condition, read when the first runs out. The tail is
+ * ordered by name alone: on the indexed expression SQLite does not see that the
+ * value is the same NULL throughout and sorted the whole tail for every page.
  */
-function cursorCondition(sort: SortSpec, cursor: Cursor, back: boolean): { sql: string; binds: unknown[] } {
+function cursorConditions(sort: SortSpec, cursor: Cursor, back: boolean): Array<{ sql: string; binds: unknown[]; order?: string }> {
   const after = (d: Dir) => (back ? d === 'ASC' : d === 'DESC') ? '<' : '>';
   const nameOp = after(sort.nameDir);
-  if (!sort.col) return { sql: `name ${after(sort.dir)} ?`, binds: [cursor.name] };
-  const op = after(sort.dir);
+  if (!sort.col) return [{ sql: `name ${after(sort.dir)} ?`, binds: [cursor.name] }];
+  const byName = `name ${back === (sort.nameDir === 'ASC') ? 'DESC' : 'ASC'}`;
   if (cursor.value === null) {
-    // Inside the NULL tail of a descending sort: by name within it; going back, the non-null rows come first.
-    return back
-      ? { sql: `(${sort.col} IS NOT NULL OR (${sort.col} IS NULL AND name ${nameOp} ?))`, binds: [cursor.name] }
-      : { sql: `(${sort.col} IS NULL AND name ${nameOp} ?)`, binds: [cursor.name] };
+    // Inside the NULL tail of a descending sort: by name within it; going back, the non-null rows come next.
+    const tail = { sql: `${sort.col} IS NULL AND name ${nameOp} ?`, binds: [cursor.name], order: byName };
+    return back ? [tail, { sql: notNull(sort.col), binds: [] }] : [tail];
   }
-  const nullTail = sort.dir === 'DESC' && !back ? ` OR ${sort.col} IS NULL` : '';
-  return {
-    sql: `(${sort.col} ${op} ?${nullTail} OR (${sort.col} = ? AND name ${nameOp} ?))`,
-    binds: [cursor.value, cursor.value, cursor.name]
-  };
+  const op = after(sort.dir);
+  const page = { sql: `${sort.col} ${op}= ? AND (${sort.col} ${op} ? OR name ${nameOp} ?)`, binds: [cursor.value, cursor.value, cursor.name] };
+  return sort.dir === 'DESC' && !back ? [page, { sql: `${sort.col} IS NULL`, binds: [], order: byName }] : [page];
 }
 
 /** The gated statuses split in two: the server wants a key or a payment, or it wants setup (env, args, network, a newer protocol). */
@@ -337,14 +350,14 @@ export const ACCESS_STATUSES: ReadonlySet<string> = new Set(['auth', 'payment'])
 export const SETUP_STATUSES: ReadonlySet<string> = new Set([...GATED_STATUSES].filter((s) => !ACCESS_STATUSES.has(s)));
 
 /**
- * Page numbers go this far by OFFSET, which reads every row it skips: at most
- * 50 000 rows for one request, one percent of the daily read budget. Every list
- * on the board has fewer pages than this, so every page has a number; the cursor
- * path below stays for a list that would grow past it. Crawlers do not walk the
- * numbers: the links carry rel=nofollow, robots.txt keeps them off /servers?, and
- * the scrapers that ignore both are blocked before the Worker.
+ * Page numbers go this far by OFFSET, which reads every row it skips: page n reads
+ * about 50 n rows. With a number for every page, one client that walked the alive
+ * list page by page read 6.2 million rows, more than the free tier's five million a
+ * day, and the pager linked the last pages from the first. rel=nofollow and robots.txt
+ * bind only the crawlers that honour them. Beyond this page the list moves by cursor,
+ * 51 rows a page.
  */
-export const MAX_NUMBERED_PAGE = 1000;
+export const MAX_NUMBERED_PAGE = 20;
 
 export interface ListQuery {
   q?: string;
@@ -425,7 +438,7 @@ function tokenCondition(text: string | undefined): { sql: string; binds: number[
 }
 
 /** The filter part of a list query, shared by the page and its count. */
-function listWhere(query: ListQuery): { where: string[]; binds: unknown[] } {
+function listWhere(query: ListQuery, sort: SortSpec = SORTS[query.sort ?? DEFAULT_SORT] ?? SORTS[DEFAULT_SORT]): { where: string[]; binds: unknown[] } {
   const where: string[] = [];
   const binds: unknown[] = [];
   const match = query.q ? ftsQuery(query.q) : null;
@@ -471,7 +484,6 @@ function listWhere(query: ListQuery): { where: string[]; binds: unknown[] } {
     where.push(band.sql);
     binds.push(...band.binds);
   }
-  const sort = SORTS[query.sort ?? DEFAULT_SORT] ?? SORTS[DEFAULT_SORT];
   if (sort.where) where.push(sort.where);
   return { where, binds };
 }
@@ -502,44 +514,51 @@ export async function countByStatus(query: Omit<ListQuery, 'status'>): Promise<R
   return Object.fromEntries(results.map((r) => [r.status, { n: r.n, lo: r.lo, hi: r.hi }]));
 }
 
-/** Whether migration 007 has built the index on the shown number, asked once in ten minutes per isolate. */
-let shownIndexed: { value: boolean; expires: number } | null = null;
-async function shownIndexExists(): Promise<boolean> {
+/** Which indexes on the shown number exist: migration 007 builds the one with the status, 008 the one without. Asked once in ten minutes per isolate. */
+let shownIndexed: { status: boolean; all: boolean; expires: number } | null = null;
+async function shownIndexes(): Promise<{ status: boolean; all: boolean }> {
   const now = Date.now();
-  if (shownIndexed && shownIndexed.expires > now) return shownIndexed.value;
-  const row = await db().prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'index' AND name = 'servers_status_shown'").first<{ n: number }>();
-  shownIndexed = { value: (row?.n ?? 0) > 0, expires: now + 600_000 };
-  return shownIndexed.value;
+  if (shownIndexed && shownIndexed.expires > now) return shownIndexed;
+  const { results } = await db().prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('servers_status_shown', 'servers_shown')").all<{ name: string }>();
+  const names = new Set(results.map((r) => r.name));
+  shownIndexed = { status: names.has('servers_status_shown'), all: names.has('servers_shown'), expires: now + 600_000 };
+  return shownIndexed;
 }
 
 /**
- * Until the index on the shown number exists, the Tokens sort reads the index on claude_tokens instead:
- * sorting by an expression without its index reads the whole table on every page, and a day of that
- * spends the free tier's five million reads.
+ * The Tokens sort reads the index on the shown number that serves the list: a list of one status or a few
+ * reads servers_status_shown (migration 007), "down" and every status read servers_shown (008). Until that
+ * index exists the sort reads claude_tokens, whose index each migration drops only with its replacement:
+ * sorting by an expression without its index reads the whole table, about 89 000 rows a page, and some
+ * sixty such pages spend the free tier's five million reads.
  */
-async function effectiveSort(spec: SortSpec): Promise<SortSpec> {
-  if (spec.col !== SHOWN_TOKENS || (await shownIndexExists())) return spec;
+async function effectiveSort(spec: SortSpec, status: string | undefined): Promise<SortSpec> {
+  if (spec.col !== SHOWN_TOKENS) return spec;
+  const indexed = await shownIndexes();
+  if (status && status !== 'down' ? indexed.status : indexed.all) return spec;
   return { ...spec, col: 'claude_tokens', key: 'claude_tokens', where: spec.where.replace(SHOWN_TOKENS, 'claude_tokens') };
 }
 
 export async function listServers(query: ListQuery): Promise<ListResult> {
-  const { where, binds } = listWhere(query);
-  const sort = await effectiveSort(SORTS[query.sort ?? DEFAULT_SORT] ?? SORTS[DEFAULT_SORT]);
+  const sort = await effectiveSort(SORTS[query.sort ?? DEFAULT_SORT] ?? SORTS[DEFAULT_SORT], query.status);
+  const { where, binds } = listWhere(query, sort);
   const perPage = Math.min(200, Math.max(10, query.perPage ?? 50));
   const cursor = query.cursor ?? null;
   const back = Boolean(cursor && query.back);
   const page = cursor ? Math.max(1, query.page ?? 1) : Math.min(MAX_NUMBERED_PAGE, Math.max(1, query.page ?? 1));
-  if (cursor) {
-    const c = cursorCondition(sort, cursor, back);
-    where.push(c.sql);
-    binds.push(...c.binds);
-  }
-  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const offset = cursor ? 0 : (page - 1) * perPage;
-  const { results } = await db()
-    .prepare(`SELECT ${LIST_COLUMNS} FROM servers ${whereSql} ORDER BY ${orderBy(sort, back)} LIMIT ? OFFSET ?`)
-    .bind(...binds, perPage + 1, offset)
-    .all<ListRow>();
+  const results: ListRow[] = [];
+  const conditions: Array<{ sql: string; binds: unknown[]; order?: string }> = cursor ? cursorConditions(sort, cursor, back) : [{ sql: '', binds: [] }];
+  for (const c of conditions) {
+    const all = c.sql ? [...where, c.sql] : where;
+    const whereSql = all.length ? `WHERE ${all.join(' AND ')}` : '';
+    const { results: part } = await db()
+      .prepare(`SELECT ${LIST_COLUMNS} FROM servers ${whereSql} ORDER BY ${c.order ?? orderBy(sort, back)} LIMIT ? OFFSET ?`)
+      .bind(...binds, ...c.binds, perPage + 1 - results.length, offset)
+      .all<ListRow>();
+    results.push(...part);
+    if (results.length > perPage) break;
+  }
   const more = results.length > perPage;
   const rows = results.slice(0, perPage);
   if (back) rows.reverse();

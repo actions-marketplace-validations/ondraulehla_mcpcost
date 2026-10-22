@@ -83,13 +83,14 @@ jobs:
         run: npx wrangler d1 execute mcp-pulse --remote --json --command "SELECT name, status FROM servers" > ../data/previous/d1-status.json || rm -f ../data/previous/d1-status.json
       - name: Build one missing token index inside today's write budget
         # Migrations 007 and 008 each build an index over every row, about 42 000 writes of the 100 000 a day.
-        # One a day, before the import, which then gets what the index leaves of the budget.
+        # One a day, before the import, which then gets what the index leaves of the budget. Each one drops the
+        # index on claude_tokens it replaces, so the site always has an index for the Tokens sort.
         if: ${{ inputs.sample == '' && env.CLOUDFLARE_API_TOKEN != '' }}
         working-directory: site
         run: |
           count() { npx wrangler d1 execute mcp-pulse --remote --json --command "$1" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].results[0].n))'; }
           rows=$(count "SELECT count(*) AS n FROM servers")
-          if [ "$(count "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='servers_claude'")" != "0" ]; then
+          if [ "$(count "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='servers_status_shown'")" = "0" ]; then
             npx wrangler d1 execute mcp-pulse --remote --file=migrations/007-shown-tokens.sql && echo "migration 007 applied, about $rows writes" && echo "INDEX_WRITES=$rows" >> "$GITHUB_ENV"
           elif [ "$(count "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='servers_shown'")" = "0" ]; then
             npx wrangler d1 execute mcp-pulse --remote --file=migrations/008-shown-tokens-all.sql && echo "migration 008 applied, about $rows writes" && echo "INDEX_WRITES=$rows" >> "$GITHUB_ENV"

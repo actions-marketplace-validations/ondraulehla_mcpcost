@@ -11,6 +11,9 @@ const q = (p.get('q') ?? '').trim().slice(0, 80);
 const defaultView = [...p.keys()].length === 0;
 const statusParam = p.get('status') ?? '';
 const status = statusParam === 'all' ? '' : defaultView ? 'ok' : statusParam;
+/** The list as a URL that names its status, so the page and sort links of the default view stay on alive servers. */
+const listUrl = new URL(Astro.url);
+if (defaultView) listUrl.searchParams.set('status', 'ok');
 const host = p.get('host') ?? '';
 const protocol = p.get('protocol') ?? '';
 const transport = p.get('transport') ?? '';
@@ -41,7 +44,7 @@ const [{ rows, hasNext, hasPrev, perPage, page, nextCursor, prevCursor }, run, c
   needsCount ? countByStatus({ q, host, protocol, transport, tokens: tokensParam, sort }) : Promise.resolve(null)
 ]);
 function pageHref(n: number, c: { value: string | number | null; name: string } | null, direction?: 'prev'): string {
-  const u = new URL(Astro.url);
+  const u = new URL(listUrl);
   for (const k of ['page', 'c', 'd', 'p']) u.searchParams.delete(k);
   if (c && n > MAX_NUMBERED_PAGE) {
     u.searchParams.set('c', encodeCursor(c));
@@ -145,7 +148,7 @@ const columns: Array<{ label: string; first: SortKey; second: SortKey; num?: boo
   { label: 'Host', first: 'host', second: 'host-desc' }
 ];
 function sortHref(key: SortKey): string {
-  const u = new URL(Astro.url);
+  const u = new URL(listUrl);
   u.searchParams.set('sort', key);
   u.searchParams.delete('page');
   return u.pathname + u.search;
@@ -163,7 +166,7 @@ const description = defaultView
 // Every sort, filter and page is its own database read, so crawlers index only the first page of the default view.
 const robots = filtered || page > 1 || sort !== DEFAULT_SORT ? 'noindex, follow' : undefined;
 /** Everything but the sort, as hidden fields for the small sort form on narrow screens. */
-const hiddenForSort = [...p.entries()].filter(([k]) => !['sort', 'page', 'c', 'd', 'p'].includes(k));
+const hiddenForSort = [...listUrl.searchParams.entries()].filter(([k]) => !['sort', 'page', 'c', 'd', 'p'].includes(k));
 const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${num(rows.length)}${hasNext ? '+' : ''} servers on this page` : 'no servers';
 ---
 
@@ -304,7 +307,7 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
     </table>
   </div>
 
-  <Pager page={page} pages={pages} hasNext={hasNext} hasPrev={hasPrev} nextHref={nextHref} prevHref={prevHref} maxNumbered={MAX_NUMBERED_PAGE} url={Astro.url} position="bottom" />
+  <Pager page={page} pages={pages} hasNext={hasNext} hasPrev={hasPrev} nextHref={nextHref} prevHref={prevHref} maxNumbered={MAX_NUMBERED_PAGE} url={listUrl} position="bottom" />
 </Layout>
 
 <style>
