@@ -211,6 +211,7 @@ const jsonld = {
     {exact && <><dt>Count</dt><dd>{tokens(server.claude_tokens)} tokens in {model}, exact, measured {date(server.claude_measured_at)}.{server.measured_with_credentials ? ' Measured with credentials, so this is what an authorized user gets.' : ''} With the Claude Code prefix <span class="mono">mcp__…__</span> on each tool name: {tokens(server.claude_tokens_cc ?? server.claude_tokens)}. The o200k_base estimate is {tokens(server.tools_tokens)}. Counted again when the tool definitions change. <a href="/methodology#tokens">Method</a>.</dd></>}
     {ok && server.gemini_tokens != null && <><dt>Gemini</dt><dd>{tokens(server.gemini_tokens)} tokens in {server.gemini_model}, exact, from the Gemini countTokens endpoint, measured {date(server.gemini_measured_at)}.</dd></>}
     {ok && server.gemini_tokens == null && server.gemini_error && <><dt>Gemini</dt><dd>The countTokens endpoint refused the tool schemas: <span class="mono">{server.gemini_error}</span>.</dd></>}
+    {server.auth_documentation && <><dt>Getting access</dt><dd><a href={server.auth_documentation} rel="noopener" class="break">{server.auth_documentation}</a> <span class="muted small">(the publisher's guide, from the server's OAuth metadata)</span></dd></>}
     {server.repo && <><dt>Repository</dt><dd><a href={server.repo} rel="noopener" class="break">{server.repo}</a></dd></>}
     {server.website && <><dt>Website</dt><dd><a href={server.website} rel="noopener" class="break">{server.website}</a></dd></>}
     {server.registry_status === 'tracked'

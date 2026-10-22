@@ -71,6 +71,8 @@ export interface ServerRow {
   status: string;
   httpStatus?: number;
   authScheme?: string;
+  /** The publisher's guide to getting access, from the OAuth protected-resource metadata. */
+  authDocumentation?: string;
   protocolVersion?: string;
   serverName?: string;
   serverVersion?: string;
@@ -170,6 +172,7 @@ const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
     status: res.status,
     httpStatus: res.httpStatus,
     authScheme: res.authScheme,
+    authDocumentation: res.authDocumentation,
     protocolVersion: res.protocolVersion,
     serverName: res.serverInfo?.name,
     serverVersion: res.serverInfo?.version,
