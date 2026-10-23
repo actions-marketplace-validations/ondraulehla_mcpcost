@@ -190,7 +190,16 @@ CLOUDFLARE_API_TOKEN=… node site/edge/rules.mjs --dry-run   # shows what it wo
 CLOUDFLARE_API_TOKEN=… node site/edge/rules.mjs
 ```
 
-The token needs `Zone: Zone WAF: Edit` and `Zone: Zone: Read` on the zone; the workflows' token has neither and is not used here. The middleware in `site/src/middleware.ts` keeps the same refusals as a second layer, for the workers.dev host the zone rules do not see.
+The Edge rules workflow (`.github/workflows/edge.yml`) runs the script when the file changes on main, or by hand, with the `CLOUDFLARE_ZONE_TOKEN` secret: a token with `Zone: Zone WAF: Edit` and `Zone: Zone: Read` on the zone. The probe's token has neither. The middleware in `site/src/middleware.ts` keeps the same refusals as a second layer, for the workers.dev host the zone rules do not see.
+
+### The watch
+
+`site/edge/watch.mjs` says who read the board in a window of time and what it cost: the Worker's requests and D1 rows per hour from the account's analytics, and the networks, agents and URL shapes behind them from the Worker's logs. The Watch the edge workflow (`.github/workflows/watch.yml`) runs it every hour over the hour before. A threshold crossed (5 000 Worker requests an hour, 800 an hour from one network whose agents do not name a crawler, a million D1 rows an hour; the `WATCH_*` variables) turns the run red and opens the issue labelled `edge-watch`, or adds the hour to the open one. The tables name the network; its ASN goes into `SCRAPER_ASNS` in `site/edge/rules.mjs`, and the Edge rules workflow blocks it before the Worker. With `Zone: Analytics: Read` on the zone token, the report also shows what the zone stopped before the Worker.
+
+```bash
+CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… node site/edge/watch.mjs                                   # the last hour
+CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… node site/edge/watch.mjs 2026-10-22T22:00:00Z 2026-10-23T06:00:00Z   # one night
+```
 
 ### The old host
 

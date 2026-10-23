@@ -51,11 +51,12 @@ const CUSTOM_RULES = [
  * Crawl-delay reads them one at a time, and one that does not is a matter for the custom rules.
  */
 // The Free plan's rate limiting may not read the query string, so the rule counts every request to the list
-// path, the first page included; six in ten seconds is still far above a reader.
+// path, the first page included; six in ten seconds is still far above a reader. Verified bots are not counted:
+// a search engine reads the list at its own pace, and the Worker caches what it reads.
 const RATE_RULE = {
   ref: 'mcpcost-list-pages-per-10s',
   description: 'mcpcost: more than 6 list pages in 10 seconds from one address is a script; blocked for 10 seconds',
-  expression: `(http.host eq "${HOST}" and (http.request.uri.path eq "/servers" or starts_with(http.request.uri.path, "/api/servers")))`,
+  expression: `(http.host eq "${HOST}" and (http.request.uri.path eq "/servers" or starts_with(http.request.uri.path, "/api/servers")) and not cf.client.bot)`,
   action: 'block',
   ratelimit: { characteristics: ['cf.colo.id', 'ip.src'], period: 10, requests_per_period: 6, mitigation_timeout: 10 }
 };
@@ -117,7 +118,13 @@ for (const rule of CUSTOM_RULES) {
     else console.log(`skipped ${rule.ref}: the zone does not accept cf.client.bot on this plan`);
   }
 }
-await upsert(zone, 'http_ratelimit', RATE_RULE);
+try {
+  await upsert(zone, 'http_ratelimit', RATE_RULE);
+} catch (e) {
+  // The plan may not allow cf.client.bot in a rate limiting rule; then every address is counted, verified bots too.
+  if (!/HTTP 400/.test(String(e))) throw e;
+  await upsert(zone, 'http_ratelimit', { ...RATE_RULE, expression: RATE_RULE.expression.replace(' and not cf.client.bot', '') });
+}
 const custom = await entrypoint(zone, 'http_request_firewall_custom');
 const rate = await entrypoint(zone, 'http_ratelimit');
 console.log(`\ncustom rules on the zone: ${(custom.rules ?? []).length} of 5; rate limiting rules: ${(rate.rules ?? []).length} of 1`);
