@@ -96,6 +96,9 @@ jobs:
             npx wrangler d1 execute mcp-pulse --remote --file=migrations/008-shown-tokens-all.sql && echo "migration 008 applied, about $rows writes" && echo "INDEX_WRITES=$rows" >> "$GITHUB_ENV"
           fi
       - name: Build the site data and the D1 import
+        # A sample run (a test of the key or the probe) ends here: its data are not imported, and build-data would
+        # refuse 50 servers against 16 000 alive last time as a broken run and paint the whole run red.
+        if: ${{ inputs.sample == '' }}
         run: |
           stdio=""; [ -f data/stdio/stdio-run.json ] && stdio="--stdio data/stdio/stdio-run.json"
           if [ -f data/previous/servers.json ]; then
