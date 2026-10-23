@@ -73,7 +73,8 @@ export const onRequest = defineMiddleware(async (context, next) => {
     return new Response('This crawler is not welcome here. See /robots.txt.', { status: 403, headers: { 'cache-control': 'no-store' } });
   }
   const network = (request as unknown as { cf?: { asOrganization?: string } }).cf?.asOrganization ?? '';
-  if (((url.pathname === '/servers' && url.search) || url.pathname.startsWith('/api/servers')) && LIST_SCRAPER_NETWORKS.test(network)) {
+  // The list API is not here: a script on one of these clouds is a reader, and the zone's rate limit holds it to a pace.
+  if (url.pathname === '/servers' && url.search && LIST_SCRAPER_NETWORKS.test(network)) {
     return new Response('Scraping the list variants is not welcome here. See /robots.txt; the data is in the repository.', { status: 403, headers: { 'cache-control': 'no-store' } });
   }
   // The workers.dev address and the old mcp-pulse.ulehla.dev name stay as aliases and send everyone to the real one.

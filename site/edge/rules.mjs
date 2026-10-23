@@ -26,8 +26,12 @@ const ON_HOST = `http.host in {${HOSTS.map((h) => `"${h}"`).join(' ')}}`;
  */
 const SCRAPER_ASNS = [32934, 45102, 37963, 25369];
 
-/** A list variant: /servers with a query string, or the list API. The pages crawlers may read (server pages, sitemaps, badges) are not here. */
-const LIST_VARIANT = `${ON_HOST} and ((http.request.uri.path eq "/servers" and http.request.uri.query ne "") or starts_with(http.request.uri.path, "/api/servers"))`;
+/**
+ * A list variant: /servers with a query string. The pages crawlers may read (server pages, sitemaps, badges) are not here,
+ * and neither is the list API: /api/servers.json is for scripts and agents, which cannot pass a challenge. The API stays
+ * under the rate limiting rule below, robots.txt disallows it for crawlers, and its answers are cached for three hours.
+ */
+const LIST_VARIANT = `${ON_HOST} and http.request.uri.path eq "/servers" and http.request.uri.query ne ""`;
 
 const CUSTOM_RULES = [
   {
