@@ -15,6 +15,9 @@ const token = process.env.CLOUDFLARE_API_TOKEN;
 const dry = process.argv.includes('--dry-run');
 const API = 'https://api.cloudflare.com/client/v4';
 const HOST = 'mcpcost.ulehla.dev';
+/** The old host is still a route of the Worker, and a scraper that learnt the old name walks it: the rules cover both. */
+const HOSTS = [HOST, 'mcp-pulse.ulehla.dev'];
+const ON_HOST = `http.host in {${HOSTS.map((h) => `"${h}"`).join(' ')}}`;
 
 /**
  * Hosting networks the scrapers came from, by autonomous system number:
@@ -24,15 +27,15 @@ const HOST = 'mcpcost.ulehla.dev';
 const SCRAPER_ASNS = [32934, 45102, 37963, 25369];
 
 /** A list variant: /servers with a query string, or the list API. The pages crawlers may read (server pages, sitemaps, badges) are not here. */
-const LIST_VARIANT = `http.host eq "${HOST}" and ((http.request.uri.path eq "/servers" and http.request.uri.query ne "") or starts_with(http.request.uri.path, "/api/servers"))`;
+const LIST_VARIANT = `${ON_HOST} and ((http.request.uri.path eq "/servers" and http.request.uri.query ne "") or starts_with(http.request.uri.path, "/api/servers"))`;
 
 const CUSTOM_RULES = [
   {
     ref: 'mcpcost-scraper-networks',
     // The whole host, not only the list: the same scrapers read 1 500 server pages and sitemaps an hour too.
-    // Meta's named crawlers come from the same network and are verified bots, so they pass.
+    // Meta's named crawlers come from the same network and are verified bots, so they pass; what they may read is the rule below.
     description: 'mcpcost: scraper networks (Meta cloud, Alibaba, RapidSeedbox) are blocked before the Worker, verified bots excepted',
-    expression: `(http.host eq "${HOST}" and ip.src.asnum in {${SCRAPER_ASNS.join(' ')}} and not cf.client.bot)`,
+    expression: `(${ON_HOST} and ip.src.asnum in {${SCRAPER_ASNS.join(' ')}} and not cf.client.bot)`,
     action: 'block'
   },
   {
@@ -40,6 +43,16 @@ const CUSTOM_RULES = [
     description: 'mcpcost: list variants from anything that is not a verified bot get a managed challenge; a browser passes it once, a scraper does not',
     expression: `(${LIST_VARIANT} and not cf.client.bot)`,
     action: 'managed_challenge'
+  },
+  {
+    ref: 'mcpcost-list-variants-verified-block',
+    // Meta's verified crawler (meta-externalagent behind a Chrome or Firefox agent string, from Meta's cloud) walked every
+    // list variant through every status, sort and page on 2026-10-23, 3 000 an hour, past the two rules above: a verified
+    // bot is in neither. robots.txt disallows the list variants for everyone, so a crawler that asks anyway gets nothing.
+    // Search engines honour robots.txt and never ask; the server pages, sitemaps and badges stay open to every verified bot.
+    description: 'mcpcost: list variants are disallowed in robots.txt; a verified crawler that asks for them anyway (Meta) is blocked before the Worker',
+    expression: `(${LIST_VARIANT} and cf.client.bot)`,
+    action: 'block'
   }
 ];
 
@@ -56,7 +69,7 @@ const CUSTOM_RULES = [
 const RATE_RULE = {
   ref: 'mcpcost-list-pages-per-10s',
   description: 'mcpcost: more than 6 list pages in 10 seconds from one address is a script; blocked for 10 seconds',
-  expression: `(http.host eq "${HOST}" and (http.request.uri.path eq "/servers" or starts_with(http.request.uri.path, "/api/servers")) and not cf.client.bot)`,
+  expression: `(${ON_HOST} and (http.request.uri.path eq "/servers" or starts_with(http.request.uri.path, "/api/servers")) and not cf.client.bot)`,
   action: 'block',
   ratelimit: { characteristics: ['cf.colo.id', 'ip.src'], period: 10, requests_per_period: 6, mitigation_timeout: 10 }
 };
@@ -114,7 +127,7 @@ for (const rule of CUSTOM_RULES) {
     // cf.client.bot (verified bots) is documented for paid plans. If the zone refuses it, the network rule goes in
     // without the exception (those networks send no verified bot the board needs) and the challenge rule is skipped.
     if (!rule.expression.includes('cf.client.bot') || !/HTTP 400/.test(String(e))) throw e;
-    if (rule.action === 'block') await upsert(zone, 'http_request_firewall_custom', { ...rule, expression: rule.expression.replace(' and not cf.client.bot', '') });
+    if (rule.action === 'block' && rule.expression.includes(' and not cf.client.bot')) await upsert(zone, 'http_request_firewall_custom', { ...rule, expression: rule.expression.replace(' and not cf.client.bot', '') });
     else console.log(`skipped ${rule.ref}: the zone does not accept cf.client.bot on this plan`);
   }
 }

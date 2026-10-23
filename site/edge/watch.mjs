@@ -115,6 +115,18 @@ async function events(since, until) {
   return { events: out, truncated };
 }
 
+/** The queries that read the most rows in the window, so a spike has a name. */
+async function d1TopQueries(since, until) {
+  const hour = new Date(Math.floor(since.getTime() / 3_600_000) * 3_600_000);
+  const d = await gql(
+    `query($acct: string!) { viewer { accounts(filter: {accountTag: $acct}) {
+      d1QueriesAdaptiveGroups(limit: 8, filter: {datetimeHour_geq: "${iso(hour)}", datetimeHour_leq: "${iso(until)}", databaseId: "${DB_ID}"}, orderBy: [sum_rowsRead_DESC]) {
+        sum { rowsRead } count avg { rowsRead } dimensions { query } } } } }`,
+    { acct }
+  );
+  return d.viewer.accounts[0]?.d1QueriesAdaptiveGroups ?? [];
+}
+
 /** The first object under this key, wherever the log puts it. */
 function under(obj, key) {
   if (!obj || typeof obj !== 'object') return undefined;
@@ -184,12 +196,13 @@ const say = (s = '') => {
 };
 
 const midnight = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate()));
-const [windowHours, dayHours, d1, logs, zone] = await Promise.all([
+const [windowHours, dayHours, d1, logs, zone, queries] = await Promise.all([
   workerHours(from, to),
   workerHours(midnight, to),
   d1Hours(midnight.toISOString().slice(0, 10)),
   events(from, to).catch((e) => ({ events: [], truncated: false, error: e.message })),
-  edge(from, to)
+  edge(from, to),
+  d1TopQueries(from, to).catch((e) => ({ error: e.message }))
 ]);
 
 const sum = (map, key) => [...map.values()].reduce((a, h) => a + h[key], 0);
@@ -215,6 +228,7 @@ say();
 
 const byNetwork = new Map();
 const byNetworkUnnamed = new Map();
+const byNetworkLists = new Map();
 const byAgent = new Map();
 const byShape = new Map();
 const byStatus = new Map();
@@ -233,7 +247,9 @@ for (const e of logs.events) {
   const k = kind(agent);
   bump(byNetwork, network);
   if (k !== 'named crawler') bump(byNetworkUnnamed, network);
-  bump(byAgent, `${k}: ${agent.slice(0, 90) || '-'}`);
+  if (/^\/servers\?|^\/api\/servers/.test(s)) bump(byNetworkLists, network);
+  // A crawler behind a browser's agent string names itself at the end; show both ends.
+  bump(byAgent, `${k}: ${agent.length > 100 ? `${agent.slice(0, 48)} … ${agent.slice(-48)}` : agent || '-'}`);
   bump(byShape, s);
   bump(byStatus, String(status));
   bump(byNetShape, `${network.slice(0, 30)} · ${k} · ${s.replace(/\?.*$/, '?…')} · ${status}`);
@@ -259,6 +275,15 @@ else {
   table('By response status', byStatus, 'status', 8);
   table('Network × agent kind × shape × status', byNetShape, 'who, what, how', 20);
 }
+if (queries.error) say(`The D1 query analytics could not be read: ${queries.error}`);
+else if (queries.length) {
+  say('## D1 queries by rows read, the hours of the window');
+  say();
+  say('| rows read | times | rows each | query |');
+  say('|---:|---:|---:|---|');
+  for (const q of queries) say(`| ${fmt(q.sum.rowsRead)} | ${fmt(q.count)} | ${fmt(q.avg.rowsRead)} | ${q.dimensions.query.replace(/\s+/g, ' ').replace(/\|/g, '\\|').slice(0, 150)} |`);
+  say();
+}
 if (zone.note) say(zone.note);
 else if (zone.stopped.length) {
   say('## Stopped before the Worker');
@@ -277,6 +302,9 @@ if (perHour(requests) > LIMITS.requests) alarms.push(`${fmt(perHour(requests))} 
 for (const [network, n] of sorted(byNetworkUnnamed)) {
   if (perHour(n) > LIMITS.network) alarms.push(`${fmt(perHour(n))} requests an hour from ${network} with agents that do not name a crawler, the threshold is ${fmt(LIMITS.network)}`);
 }
+for (const [network, n] of sorted(byNetworkLists)) {
+  if (perHour(n) > LIMITS.lists) alarms.push(`${fmt(perHour(n))} list variants an hour from ${network}; robots.txt disallows them for everyone, the threshold is ${fmt(LIMITS.lists)}`);
+}
 if (perHour(rowsRead) > LIMITS.rowsRead) alarms.push(`${fmt(perHour(rowsRead))} D1 rows read an hour, the threshold is ${fmt(LIMITS.rowsRead)}`);
 
 if (alarms.length) {
@@ -284,7 +312,7 @@ if (alarms.length) {
   say();
   for (const a of alarms) say(`- ${a}`);
   say();
-  say('Which networks and agents: the tables above. A hosting network with browser agents walking the list variants is a scraper; add its ASN to SCRAPER_ASNS in site/edge/rules.mjs and the Edge rules workflow blocks it before the Worker.');
+  say('Which networks and agents: the tables above. A hosting network with browser agents walking the list variants is a scraper; add its ASN to SCRAPER_ASNS in site/edge/rules.mjs and the Edge rules workflow blocks it before the Worker. A verified crawler on the list variants is blocked by the zone already; one that still shows here got through, so check the rules.');
   for (const a of alarms) console.log(`::error::${a}`);
 } else say('Nothing over the thresholds.');
 

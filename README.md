@@ -183,6 +183,7 @@ The Workers Free plan counts every request the Worker answers, a 403 as much as 
 
 - a custom rule that blocks those networks on the whole host, verified bots excepted
 - a custom rule that gives every list variant (`/servers?…`, `/api/servers`) from anything but a verified bot a managed challenge; a browser passes it once, a script does not
+- a custom rule that blocks a verified bot on the list variants: robots.txt disallows them for everyone, search engines never ask, and Meta's crawler (meta-externalagent behind a Chrome agent string) walked 3 000 of them an hour on 2026-10-23
 - the one rate limiting rule of the Free plan: more than six list variants in ten seconds from one address is blocked for ten seconds
 
 ```bash
@@ -194,7 +195,7 @@ The Edge rules workflow (`.github/workflows/edge.yml`) runs the script when the 
 
 ### The watch
 
-`site/edge/watch.mjs` says who read the board in a window of time and what it cost: the Worker's requests and D1 rows per hour from the account's analytics, and the networks, agents and URL shapes behind them from the Worker's logs. The Watch the edge workflow (`.github/workflows/watch.yml`) runs it every hour over the hour before. A threshold crossed (5 000 Worker requests an hour, 800 an hour from one network whose agents do not name a crawler, a million D1 rows an hour; the `WATCH_*` variables) turns the run red and opens the issue labelled `edge-watch`, or adds the hour to the open one. The tables name the network; its ASN goes into `SCRAPER_ASNS` in `site/edge/rules.mjs`, and the Edge rules workflow blocks it before the Worker. With `Zone: Analytics: Read` on the zone token, the report also shows what the zone stopped before the Worker.
+`site/edge/watch.mjs` says who read the board in a window of time and what it cost: the Worker's requests and D1 rows per hour from the account's analytics, and the networks, agents and URL shapes behind them from the Worker's logs. The Watch the edge workflow (`.github/workflows/watch.yml`) runs it every hour over the hour before. A threshold crossed (5 000 Worker requests an hour, 800 an hour from one network whose agents do not name a crawler, 300 list variants an hour from one network whatever it calls itself, a million D1 rows an hour; the `WATCH_*` variables) turns the run red and opens the issue labelled `edge-watch`, or adds the hour to the open one. The tables name the network; its ASN goes into `SCRAPER_ASNS` in `site/edge/rules.mjs`, and the Edge rules workflow blocks it before the Worker. The report also names the D1 queries that read the most rows in those hours. With `Zone: Analytics: Read` on the zone token, it shows what the zone stopped before the Worker as well.
 
 ```bash
 CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… node site/edge/watch.mjs                                   # the last hour

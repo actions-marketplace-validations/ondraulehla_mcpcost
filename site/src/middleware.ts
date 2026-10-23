@@ -56,12 +56,13 @@ function limitResponse(url: URL, message: string): Response {
 const BLOCKED_AGENTS = /ShapBot|SemrushBot|DataForSeoBot|AhrefsBot|MJ12bot|DotBot|PetalBot|Bytespider|BLEXBot|serpstatbot|ZoominfoBot|Barkrowler|ImagesiftBot/i;
 
 /**
- * Networks that scraped the list on the nights of 2026-10-22 and 23: Chrome user agents from hosting
- * addresses that ignore robots.txt and nofollow and follow the host link of every server page through every
- * status, sort and page of /servers, 3 000 list variants in 90 minutes the first night, 8 000 the second,
- * from Meta's cloud once RapidSeedbox was refused. A list variant from them gets a 403 before any database
- * read; the server pages stay open. Meta's own crawlers name themselves (facebookexternalhit, meta-externalagent)
- * and read the server pages, not the list. A WAF rule on the zone would stop them before the Worker.
+ * Networks that scraped the list on the nights of 2026-10-22 and 23: Chrome user agents from hosting addresses that
+ * ignore robots.txt and nofollow and follow the host link of every server page through every status, sort and page
+ * of /servers, 3 000 list variants in 90 minutes the first night, 8 000 the second. The one from Meta's cloud turned
+ * out to be Meta's own crawler, meta-externalagent, named at the end of a Chrome or Firefox agent string; Cloudflare
+ * counts it as a verified bot. A list variant from these networks gets a 403 before any database read; the server
+ * pages stay open. The zone's rules (site/edge/rules.mjs) stop the same requests before the Worker now; this is the
+ * second layer, for the workers.dev host the zone does not see.
  */
 const LIST_SCRAPER_NETWORKS = /RapidSeedbox|Alibaba|Meta Platforms/i;
 
