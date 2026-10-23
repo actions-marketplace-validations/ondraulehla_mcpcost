@@ -82,13 +82,14 @@ async function entrypoint(zone, phase) {
  */
 async function upsert(zone, phase, rule) {
   const set = await entrypoint(zone, phase);
-  const existing = (set.rules ?? []).find((r) => r.ref === rule.ref) ?? (phase === 'http_ratelimit' ? (set.rules ?? [])[0] : undefined);
+  const existing = (set.rules ?? []).find((r) => r.ref === rule.ref || r.description === rule.description) ?? (phase === 'http_ratelimit' ? (set.rules ?? [])[0] : undefined);
   const body = JSON.stringify({ ...rule, enabled: true });
   if (dry) {
     console.log(`${existing ? `update (${existing.description ?? existing.ref ?? existing.id})` : 'add'} ${phase} ${rule.ref}\n  ${rule.expression}\n  ${rule.action}${rule.ratelimit ? ' ' + JSON.stringify(rule.ratelimit) : ''}`);
     return;
   }
-  if (existing) await cf(`/zones/${zone}/rulesets/${set.id}/rules/${existing.id}`, { method: 'PATCH', body });
+  // An update must not carry a ref: the API keeps the rule's own, and a rule written by hand has none.
+  if (existing) await cf(`/zones/${zone}/rulesets/${set.id}/rules/${existing.id}`, { method: 'PATCH', body: JSON.stringify({ ...rule, ref: undefined, enabled: true }) });
   else await cf(`/zones/${zone}/rulesets/${set.id}/rules`, { method: 'POST', body });
   console.log(`${existing ? 'updated' : 'added'} ${phase} ${rule.ref}`);
 }
