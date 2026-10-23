@@ -75,13 +75,17 @@ async function entrypoint(zone, phase) {
   }
 }
 
-/** Adds the rule with this ref, or updates the one that has it. */
+/**
+ * Adds the rule with this ref, or updates the one that has it. The Free plan allows one rate limiting
+ * rule, so in that phase a rule of another ref is the one to update: the zone had "one client at most
+ * 60 requests in 10 seconds", which the scrapers at one request a second per address never reached.
+ */
 async function upsert(zone, phase, rule) {
   const set = await entrypoint(zone, phase);
-  const existing = (set.rules ?? []).find((r) => r.ref === rule.ref);
+  const existing = (set.rules ?? []).find((r) => r.ref === rule.ref) ?? (phase === 'http_ratelimit' ? (set.rules ?? [])[0] : undefined);
   const body = JSON.stringify({ ...rule, enabled: true });
   if (dry) {
-    console.log(`${existing ? 'update' : 'add'} ${phase} ${rule.ref}\n  ${rule.expression}\n  ${rule.action}${rule.ratelimit ? ' ' + JSON.stringify(rule.ratelimit) : ''}`);
+    console.log(`${existing ? `update (${existing.description ?? existing.ref ?? existing.id})` : 'add'} ${phase} ${rule.ref}\n  ${rule.expression}\n  ${rule.action}${rule.ratelimit ? ' ' + JSON.stringify(rule.ratelimit) : ''}`);
     return;
   }
   if (existing) await cf(`/zones/${zone}/rulesets/${set.id}/rules/${existing.id}`, { method: 'PATCH', body });
