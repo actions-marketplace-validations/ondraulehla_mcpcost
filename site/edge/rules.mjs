@@ -50,10 +50,12 @@ const CUSTOM_RULES = [
  * by address, and blocks. The server pages and the sitemaps stay out of it: a crawler that honours
  * Crawl-delay reads them one at a time, and one that does not is a matter for the custom rules.
  */
+// The Free plan's rate limiting may not read the query string, so the rule counts every request to the list
+// path, the first page included; six in ten seconds is still far above a reader.
 const RATE_RULE = {
-  ref: 'mcpcost-list-variants-per-10s',
-  description: 'mcpcost: more than 6 list variants in 10 seconds from one address is a script; blocked for 10 seconds',
-  expression: `(${LIST_VARIANT})`,
+  ref: 'mcpcost-list-pages-per-10s',
+  description: 'mcpcost: more than 6 list pages in 10 seconds from one address is a script; blocked for 10 seconds',
+  expression: `(http.host eq "${HOST}" and (http.request.uri.path eq "/servers" or starts_with(http.request.uri.path, "/api/servers")))`,
   action: 'block',
   ratelimit: { characteristics: ['cf.colo.id', 'ip.src'], period: 10, requests_per_period: 6, mitigation_timeout: 10 }
 };
