@@ -177,6 +177,21 @@ The alert mails need a sending domain: either Cloudflare Email Sending (Workers 
 
 Deploying needs a Cloudflare account with a D1 database named `mcpcost` (`wrangler d1 create mcpcost`, then put the id in `site/wrangler.jsonc`). The workflows expect the repository secrets `CLOUDFLARE_API_TOKEN` (Workers Scripts: Edit, D1: Edit) and `CLOUDFLARE_ACCOUNT_ID`. Both workflows apply `site/schema.sql` and the pending files in `site/migrations/` on every run. The two indexes on the shown token count (migrations 007 and 008) are the exception: each build writes a row per server, so the probe workflow applies one a day before the import and gives the import the rest of the write budget. A new database needs them applied by hand once.
 
+### The edge rules
+
+The Workers Free plan counts every request the Worker answers, a 403 as much as a page. On 2026-10-22 and 23 scrapers with Chrome user agents on hosting addresses (Meta's cloud, Alibaba Cloud, RapidSeedbox) made 4 000 list variants an hour and spent the account's 100 000 requests a day, although the Worker refused them. What stops them must run before the Worker: `site/edge/rules.mjs` writes the zone's WAF rules through the API, idempotently.
+
+- a custom rule that blocks those networks on the whole host, verified bots excepted
+- a custom rule that gives every list variant (`/servers?…`, `/api/servers`) from anything but a verified bot a managed challenge; a browser passes it once, a script does not
+- the one rate limiting rule of the Free plan: more than six list variants in ten seconds from one address is blocked for ten seconds
+
+```bash
+CLOUDFLARE_API_TOKEN=… node site/edge/rules.mjs --dry-run   # shows what it would write
+CLOUDFLARE_API_TOKEN=… node site/edge/rules.mjs
+```
+
+The token needs `Zone: Zone WAF: Edit` and `Zone: Zone: Read` on the zone; the workflows' token has neither and is not used here. The middleware in `site/src/middleware.ts` keeps the same refusals as a second layer, for the workers.dev host the zone rules do not see.
+
 ### The old host
 
 The site was mcp-pulse.ulehla.dev until 2026-10-15. The old host stays a route of the Worker, and the middleware in `site/src/middleware.ts` answers every request on it with a 301 to mcpcost.ulehla.dev.

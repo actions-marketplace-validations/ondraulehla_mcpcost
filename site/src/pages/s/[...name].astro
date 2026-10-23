@@ -13,7 +13,8 @@ const [history, siblings, run] = await Promise.all([
   server.toolset_hash ? getSiblings(server.toolset_hash, name) : Promise.resolve([]),
   latestRun()
 ]);
-Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=10800');
+// A day at the edge: the data change once a day, and a crawl that reads every server page costs the Worker one request per page per colo, not one every three hours.
+Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=86400');
 
 const capabilities = server.capabilities ? (JSON.parse(server.capabilities) as string[]) : [];
 const topTools = server.top_tools ? (JSON.parse(server.top_tools) as Array<{ name: string; tokens: number }>) : [];

@@ -48,5 +48,5 @@ export const GET: APIRoute = async ({ params, site }) => {
 ${entries.join('\n')}
 </feed>
 `;
-  return new Response(xml, { headers: { 'content-type': 'application/atom+xml; charset=utf-8', 'cache-control': 'public, max-age=3600, s-maxage=10800' } });
+  return new Response(xml, { headers: { 'content-type': 'application/atom+xml; charset=utf-8', 'cache-control': 'public, max-age=3600, s-maxage=86400' } });
 };

@@ -43,6 +43,6 @@ export const GET: APIRoute = async ({ params, site }) => {
       probedAt: server.probed_at,
       history: history.map((h) => ({ probedAt: h.probed_at, status: h.status, initMs: h.init_ms, toolCount: h.tool_count, toolsTokens: h.tools_tokens, claudeTokens: h.claude_tokens }))
     },
-    { headers: { 'cache-control': 'public, max-age=300, s-maxage=3600', 'access-control-allow-origin': '*' } }
+    { headers: { 'cache-control': 'public, max-age=300, s-maxage=86400', 'access-control-allow-origin': '*' } }
   );
 };
