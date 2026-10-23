@@ -13,9 +13,13 @@ const [history, siblings, run] = await Promise.all([
   server.toolset_hash ? getSiblings(server.toolset_hash, name) : Promise.resolve([]),
   latestRun()
 ]);
-Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=10800');
+// A day at the edge: the data change once a day, and a crawl that reads every server page costs the Worker one request per page per colo, not one every three hours.
+Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=86400');
 
 const capabilities = server.capabilities ? (JSON.parse(server.capabilities) as string[]) : [];
+/** The OAuth metadata of a server that needs auth, as the probe read it; see AuthMetadata in the package. */
+const access = (server.auth_metadata ? JSON.parse(server.auth_metadata) : null) as { authorizationServers?: string[]; scopesSupported?: string[]; authorizationServerMetadata?: boolean; dynamicRegistration?: boolean; pkce?: boolean; grantTypes?: string[] } | null;
+const authHost = (() => { try { return access?.authorizationServers?.[0] ? new URL(access.authorizationServers[0]).host : null; } catch { return null; } })();
 const topTools = server.top_tools ? (JSON.parse(server.top_tools) as Array<{ name: string; tokens: number }>) : [];
 const site = Astro.site?.toString().replace(/\/$/, '') ?? '';
 const badgeMd = `[![mcpcost](${site}/badge/${name}.svg)](${site}/s/${name})`;
@@ -211,7 +215,21 @@ const jsonld = {
     {exact && <><dt>Count</dt><dd>{tokens(server.claude_tokens)} tokens in {model}, exact, measured {date(server.claude_measured_at)}.{server.measured_with_credentials ? ' Measured with credentials, so this is what an authorized user gets.' : ''} With the Claude Code prefix <span class="mono">mcp__…__</span> on each tool name: {tokens(server.claude_tokens_cc ?? server.claude_tokens)}. The o200k_base estimate is {tokens(server.tools_tokens)}. Counted again when the tool definitions change. <a href="/methodology#tokens">Method</a>.</dd></>}
     {ok && server.gemini_tokens != null && <><dt>Gemini</dt><dd>{tokens(server.gemini_tokens)} tokens in {server.gemini_model}, exact, from the Gemini countTokens endpoint, measured {date(server.gemini_measured_at)}.</dd></>}
     {ok && server.gemini_tokens == null && server.gemini_error && <><dt>Gemini</dt><dd>The countTokens endpoint refused the tool schemas: <span class="mono">{server.gemini_error}</span>.</dd></>}
-    {server.auth_documentation && <><dt>Getting access</dt><dd><a href={server.auth_documentation} rel="noopener" class="break">{server.auth_documentation}</a> <span class="muted small">(the publisher's guide, from the server's OAuth metadata)</span></dd></>}
+    {server.status === 'auth' && (server.auth_kind || server.auth_documentation) && (
+      <>
+        <dt>Getting access</dt>
+        <dd>
+          {server.auth_kind === 'oauth-dcr' && <>OAuth with dynamic client registration. A client such as Claude Code, Cursor or <span class="mono">npx mcpcost auth {server.url}</span> registers itself and opens the consent page; the publisher has nothing to set up for you.</>}
+          {server.auth_kind === 'oauth' && <>OAuth without dynamic client registration{access?.authorizationServerMetadata === false ? ' (the authorization server did not answer the metadata request)' : ''}. Ask the publisher for a client id first; with it, a client can run the consent.</>}
+          {server.auth_kind === 'token' && <>A key or token from the publisher, sent in the Authorization header ({server.auth_scheme}). The server publishes no OAuth metadata. Store the key once: <span class="mono">npx mcpcost auth {server.url} --header "Authorization: {server.auth_scheme} …"</span>.</>}
+          {server.auth_kind === 'unknown' && <>The server answers HTTP {server.http_status} with no WWW-Authenticate header and no OAuth metadata, so the publisher's documentation is the only guide.</>}
+          {server.auth_documentation && <> <a href={server.auth_documentation} rel="noopener" class="break">The publisher's guide to getting access</a>.</>}
+          {authHost && <><br /><span class="muted small">Authorization server <span class="mono">{authHost}</span>{access?.pkce ? ', PKCE S256' : ''}{access?.grantTypes?.length ? <>, grants <span class="mono">{access.grantTypes.join(', ')}</span></> : null}.</span></>}
+          {access?.scopesSupported?.length ? <><br /><span class="muted small">Scopes <span class="mono">{access.scopesSupported.join(' ')}</span>.</span></> : null}
+          {server.auth_kind && <><br /><span class="muted small">Read from the server's public OAuth metadata, without a token. <a href="/methodology#access">Method</a>.</span></>}
+        </dd>
+      </>
+    )}
     {server.repo && <><dt>Repository</dt><dd><a href={server.repo} rel="noopener" class="break">{server.repo}</a></dd></>}
     {server.website && <><dt>Website</dt><dd><a href={server.website} rel="noopener" class="break">{server.website}</a></dd></>}
     {server.registry_status === 'tracked'

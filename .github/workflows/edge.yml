@@ -1,0 +1,34 @@
+name: Edge rules
+# Writes the zone's WAF and rate limiting rules from site/edge/rules.mjs. Idempotent; runs when the file changes or by hand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/edge/rules.mjs'
+      - '.github/workflows/edge.yml'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Only print what would change'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_ZONE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Say when the zone token is missing
+        if: ${{ env.CLOUDFLARE_API_TOKEN == '' }}
+        run: |
+          echo "::error::CLOUDFLARE_ZONE_TOKEN is not set. It needs Zone: Zone WAF: Edit and Zone: Zone: Read on ulehla.dev; see README, The edge rules."
+          exit 1
+      - name: Write the rules
+        run: node site/edge/rules.mjs ${{ inputs.dry_run && '--dry-run' || '' }}

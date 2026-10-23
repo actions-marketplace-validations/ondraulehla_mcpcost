@@ -1,0 +1,58 @@
+name: Watch the edge
+# Every hour: who read the board, what it cost, and whether a scraper got past the zone's rules.
+# A threshold crossed turns the run red and opens (or adds to) the issue labelled edge-watch.
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+    inputs:
+      from:
+        description: 'Start of the window, ISO 8601 UTC (default: an hour before the end)'
+        required: false
+      to:
+        description: 'End of the window, ISO 8601 UTC (default: two minutes ago)'
+        required: false
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: watch
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_ZONE_TOKEN: ${{ secrets.CLOUDFLARE_ZONE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Look at the last hour
+        id: watch
+        continue-on-error: true
+        env:
+          WATCH_REPORT_FILE: ${{ runner.temp }}/watch.md
+        run: node site/edge/watch.mjs "${{ inputs.from }}" "${{ inputs.to }}"
+      - name: Open or update the edge-watch issue
+        if: ${{ steps.watch.outcome == 'failure' && steps.watch.outputs.alarm != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ALARM: ${{ steps.watch.outputs.alarm }}
+        run: |
+          report="${{ runner.temp }}/watch.md"
+          { echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; echo; cat "$report"; } > "${{ runner.temp }}/issue.md"
+          open=$(gh issue list --label edge-watch --state open --json number --jq '.[0].number // empty')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body-file "${{ runner.temp }}/issue.md"
+            echo "added to issue #$open"
+          else
+            gh label create edge-watch --color d93f0b --description 'The edge watch found a scraper or a spike' 2>/dev/null || true
+            gh issue create --title "Edge watch: $ALARM" --label edge-watch --body-file "${{ runner.temp }}/issue.md"
+          fi
+      - name: Fail the run when a threshold was crossed or Cloudflare could not be asked
+        if: ${{ steps.watch.outcome == 'failure' }}
+        run: exit 1

@@ -10,7 +10,7 @@ mcpcost probes every remote server in the [official MCP registry](https://regist
 
 - whether it answers `initialize` and `tools/list`, and how fast
 - the protocol version it negotiates
-- whether it needs auth, and which scheme (from `WWW-Authenticate`)
+- whether it needs auth, which scheme (from `WWW-Authenticate`), and how a client gets in: OAuth with dynamic client registration, OAuth with a client id from the publisher, or a key, read from the server's public OAuth metadata
 - whether it asks for payment (HTTP 402)
 - how many tools it has and how many tokens their definitions cost
 
@@ -83,7 +83,7 @@ The plugin adds one skill, `/mcpcost:measure`, which runs `npx mcpcost` on your 
 
 ## For agents and scripts
 
-- JSON: `/api/s/<name>.json`, `/api/servers.json?q=…&status=ok&sort=tokens`, `/api/check.json?url=…`, `/api/summary.json`
+- JSON: `/api/s/<name>.json`, `/api/servers.json?q=…&status=ok&sort=tokens`, `/api/check.json?url=…`, `/api/summary.json`. The list API takes at most 6 requests in 10 seconds from one address; its answers are cached for three hours.
 - MCP server over Streamable HTTP, no auth: `https://mcpcost.ulehla.dev/mcp` with the tools `lookup_server`, `search_servers`, `check_server`, `registry_summary`. The manifest for the registry is `site/server.json`.
 - `/llms.txt` lists all of it. `/tokens` answers the general question: how many context tokens does an MCP server cost.
 
@@ -152,6 +152,7 @@ registry ──▶ probe/run.ts ──▶ data/raw/probe-run.json
 - **Estimate.** Each tool is serialised as compact JSON with `name`, `description` and `input_schema`, and counted with the `o200k_base` tokenizer. The exact count is about 1.9 times the estimate at the median. The estimate needs no key and is the same for every server.
 - **Same tool set.** A hash of the sorted tool names and schema sizes marks servers that serve identical tools under different names.
 - **Timeouts.** 15 seconds per request. At most one probe runs against a host at a time.
+- **Getting access.** For a server that answers 401 or 403, the probe reads the OAuth protected-resource metadata (RFC 9728) and the first authorization server's metadata (RFC 8414, then OpenID discovery): authorization servers, scopes, the publisher's guide, dynamic client registration (RFC 7591), PKCE, grant types. The server page shows it as "Getting access", the JSON API as `authKind` and `authMetadata`. Two to four small requests, no token, no consent; the probe result does not change.
 - **Identification.** Every request carries the User-Agent `mcpcost/<version> (+https://github.com/ondraulehla/mcpcost)`. To exclude a server, open an issue with its registry name.
 
 ## Run it
@@ -176,6 +177,31 @@ npm run dev
 The alert mails need a sending domain: either Cloudflare Email Sending (Workers Paid plan, then the `send_email` binding in `site/wrangler.jsonc`) or Resend (verify the domain there and `npx wrangler secret put RESEND_API_KEY`). Without one, the watch form says that the confirmation mail could not be sent.
 
 Deploying needs a Cloudflare account with a D1 database named `mcpcost` (`wrangler d1 create mcpcost`, then put the id in `site/wrangler.jsonc`). The workflows expect the repository secrets `CLOUDFLARE_API_TOKEN` (Workers Scripts: Edit, D1: Edit) and `CLOUDFLARE_ACCOUNT_ID`. Both workflows apply `site/schema.sql` and the pending files in `site/migrations/` on every run. The two indexes on the shown token count (migrations 007 and 008) are the exception: each build writes a row per server, so the probe workflow applies one a day before the import and gives the import the rest of the write budget. A new database needs them applied by hand once.
+
+### The edge rules
+
+The Workers Free plan counts every request the Worker answers, a 403 as much as a page. On 2026-10-22 and 23 scrapers with Chrome user agents on hosting addresses (Meta's cloud, Alibaba Cloud, RapidSeedbox) made 4 000 list variants an hour and spent the account's 100 000 requests a day, although the Worker refused them. What stops them must run before the Worker: `site/edge/rules.mjs` writes the zone's WAF rules through the API, idempotently.
+
+- a custom rule that blocks those networks on the whole host, verified bots excepted
+- a custom rule that gives every list variant (`/servers?…`) from anything but a verified bot a managed challenge; a browser passes it once, a script does not. The list API (`/api/servers.json`) is not in it: scripts and agents cannot pass a challenge, so the API stays open under the rate limiting rule
+- a custom rule that blocks a verified bot on the list variants: robots.txt disallows them for everyone, search engines never ask, and Meta's crawler (meta-externalagent behind a Chrome agent string) walked 3 000 of them an hour on 2026-10-23
+- the one rate limiting rule of the Free plan: more than six list variants in ten seconds from one address is blocked for ten seconds
+
+```bash
+CLOUDFLARE_API_TOKEN=… node site/edge/rules.mjs --dry-run   # shows what it would write
+CLOUDFLARE_API_TOKEN=… node site/edge/rules.mjs
+```
+
+The Edge rules workflow (`.github/workflows/edge.yml`) runs the script when the file changes on main, or by hand, with the `CLOUDFLARE_ZONE_TOKEN` secret: a token with `Zone: Zone WAF: Edit` and `Zone: Zone: Read` on the zone. The probe's token has neither. The middleware in `site/src/middleware.ts` keeps the same refusals as a second layer, for the workers.dev host the zone rules do not see.
+
+### The watch
+
+`site/edge/watch.mjs` says who read the board in a window of time and what it cost: the Worker's requests and D1 rows per hour from the account's analytics, and the networks, agents and URL shapes behind them from the Worker's logs. The Watch the edge workflow (`.github/workflows/watch.yml`) runs it every hour over the hour before. A threshold crossed (5 000 Worker requests an hour, 800 an hour from one network whose agents do not name a crawler, 300 list variants an hour from one network whatever it calls itself, a million D1 rows an hour; the `WATCH_*` variables) turns the run red and opens the issue labelled `edge-watch`, or adds the hour to the open one. The tables name the network; its ASN goes into `SCRAPER_ASNS` in `site/edge/rules.mjs`, and the Edge rules workflow blocks it before the Worker. The report also names the D1 queries that read the most rows in those hours. With `Zone: Analytics: Read` on the zone token, it shows what the zone stopped before the Worker as well.
+
+```bash
+CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… node site/edge/watch.mjs                                   # the last hour
+CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… node site/edge/watch.mjs 2026-10-22T22:00:00Z 2026-10-23T06:00:00Z   # one night
+```
 
 ### The old host
 

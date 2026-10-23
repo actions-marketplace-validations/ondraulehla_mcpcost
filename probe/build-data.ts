@@ -73,6 +73,10 @@ export interface ServerRow {
   authScheme?: string;
   /** The publisher's guide to getting access, from the OAuth protected-resource metadata. */
   authDocumentation?: string;
+  /** How a client gets in: oauth-dcr, oauth, token or unknown. See AuthKind in the package. */
+  authKind?: string;
+  /** What the OAuth metadata says: authorization servers, scopes, dynamic registration, PKCE, grant types. */
+  authMetadata?: Record<string, unknown>;
   protocolVersion?: string;
   serverName?: string;
   serverVersion?: string;
@@ -173,6 +177,8 @@ const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
     httpStatus: res.httpStatus,
     authScheme: res.authScheme,
     authDocumentation: res.authDocumentation,
+    authKind: res.status === 'auth' ? res.authKind : undefined,
+    authMetadata: res.authMetadata,
     protocolVersion: res.protocolVersion,
     serverName: res.serverInfo?.name,
     serverVersion: res.serverInfo?.version,
@@ -363,6 +369,7 @@ const summary = {
   duplicateServers: ok.length - uniqueToolsets,
   protocols: count(ok, (r) => r.protocolVersion),
   authSchemes: count(rows.filter((r) => r.status === 'auth'), (r) => r.authScheme ?? 'none'),
+  authKinds: count(rows.filter((r) => r.status === 'auth'), (r) => r.authKind ?? 'unknown'),
   transports: count(rows, (r) => r.transport),
   toolsTokens: { median: quantile(tokens, 0.5), p90: quantile(tokens, 0.9), p99: quantile(tokens, 0.99), max: Math.max(0, ...tokens), total: tokens.reduce((a, b) => a + b, 0) },
   claudeTokens: counted.length

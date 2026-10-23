@@ -22,6 +22,18 @@ export const STATUS_LABEL: Record<string, string> = {
   crashed: 'crashed on start'
 };
 
+/** How a client gets into a server that needs auth, in the words the server page and the statistics use. */
+export const AUTH_KIND_LABEL: Record<string, string> = {
+  'oauth-dcr': 'OAuth, clients register themselves',
+  oauth: 'OAuth, the publisher issues the client id',
+  token: 'a key or token from the publisher',
+  unknown: 'no WWW-Authenticate header, no OAuth metadata'
+};
+
+export function authKindLabel(kind: string | null | undefined): string {
+  return AUTH_KIND_LABEL[kind ?? 'unknown'] ?? kind ?? 'unknown';
+}
+
 /** Three buckets for colours and filters. */
 export function bucket(status: string): 'up' | 'gated' | 'down' {
   if (status === 'ok') return 'up';

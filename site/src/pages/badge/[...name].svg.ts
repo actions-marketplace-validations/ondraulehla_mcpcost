@@ -46,7 +46,7 @@ export const GET: APIRoute = async ({ params }) => {
     status: 200,
     headers: {
       'content-type': 'image/svg+xml; charset=utf-8',
-      'cache-control': server ? 'public, max-age=3600, s-maxage=21600' : 'public, max-age=300',
+      'cache-control': server ? 'public, max-age=3600, s-maxage=86400' : 'public, max-age=300',
       'access-control-allow-origin': '*'
     }
   });

@@ -96,6 +96,9 @@ jobs:
             npx wrangler d1 execute mcp-pulse --remote --file=migrations/008-shown-tokens-all.sql && echo "migration 008 applied, about $rows writes" && echo "INDEX_WRITES=$rows" >> "$GITHUB_ENV"
           fi
       - name: Build the site data and the D1 import
+        # A sample run (a test of the key or the probe) ends here: its data are not imported, and build-data would
+        # refuse 50 servers against 16 000 alive last time as a broken run and paint the whole run red.
+        if: ${{ inputs.sample == '' }}
         run: |
           stdio=""; [ -f data/stdio/stdio-run.json ] && stdio="--stdio data/stdio/stdio-run.json"
           if [ -f data/previous/servers.json ]; then
@@ -142,6 +145,7 @@ jobs:
           if [ "$(has measured_with_credentials)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/004-credentials.sql; echo "migration 004 applied"; fi
           if [ "$(has derived_package)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/005-derived.sql; echo "migration 005 applied"; fi
           if [ "$(has auth_documentation)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/009-auth-documentation.sql; echo "migration 009 applied"; fi
+          if [ "$(has auth_kind)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/010-auth-kind.sql; echo "migration 010 applied"; fi
           idx=$(npx wrangler d1 execute mcp-pulse --remote --json --command "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='servers_init_name'" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].results[0].n))')
           if [ "$idx" != "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/006-fewer-indexes.sql; echo "migration 006 applied"; fi
       - name: Import into D1

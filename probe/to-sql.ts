@@ -100,7 +100,7 @@ const serverColumns = [
   'claude_model', 'claude_tokens', 'claude_tokens_cc', 'claude_measured_at', 'claude_error',
   'gemini_model', 'gemini_tokens', 'gemini_measured_at', 'gemini_error', 'measured_with_credentials',
   'derived_package', 'derived_registry', 'derived_status', 'derived_probed_at', 'derived_tool_count', 'derived_tools_tokens', 'derived_claude_tokens', 'derived_error',
-  'auth_documentation'
+  'auth_documentation', 'auth_kind', 'auth_metadata'
 ];
 function serverValues(s: ServerRow): Value[] {
   return [
@@ -110,7 +110,7 @@ function serverValues(s: ServerRow): Value[] {
     s.claudeModel, s.claudeTokens, s.claudeTokensCc, s.claudeMeasuredAt, s.claudeError,
     s.geminiModel, s.geminiTokens, s.geminiMeasuredAt, s.geminiError, s.measuredWithCredentials ? 1 : 0,
     s.derivedPackage?.name, s.derivedPackage?.registry, s.derivedPackage?.status, s.derivedPackage?.probedAt, s.derivedPackage?.toolCount, s.derivedPackage?.toolsTokens, s.derivedPackage?.claudeTokens, s.derivedPackage?.error,
-    s.authDocumentation
+    s.authDocumentation, s.authKind, s.authMetadata ? JSON.stringify(s.authMetadata) : null
   ];
 }
 const previousRows = new Map((previous ?? []).map((s) => [s.name, s]));

@@ -19,6 +19,10 @@ export interface ServerRecord {
   auth_scheme: string | null;
   /** The publisher's guide to getting access, from the OAuth protected-resource metadata. */
   auth_documentation: string | null;
+  /** How a client gets in: oauth-dcr, oauth, token or unknown. Null before migration 010 ran a probe. */
+  auth_kind: string | null;
+  /** The OAuth metadata behind it, as JSON: authorizationServers, scopesSupported, dynamicRegistration, pkce, grantTypes. */
+  auth_metadata: string | null;
   protocol_version: string | null;
   server_name: string | null;
   server_version: string | null;
@@ -97,6 +101,8 @@ export interface RunSummary {
   duplicateServers: number;
   protocols: Record<string, number>;
   authSchemes: Record<string, number>;
+  /** Servers that need auth by how a client gets in; present once a run had the metadata reader. */
+  authKinds?: Record<string, number>;
   transports: Record<string, number>;
   /** o200k_base estimate. */
   toolsTokens: TokenStats;
@@ -668,6 +674,9 @@ export async function listServers(query: ListQuery): Promise<ListResult> {
       // D1 allows five SELECTs in one UNION, so the statuses go in groups of five, and the groups in a UNION of their own.
       const groups: string[] = [];
       for (let i = 0; i < statuses.length; i += 5) groups.push(statuses.slice(i, i + 5).map(() => part).join(' UNION ALL '));
+      // Each status reads up to the page's end, since any one of them could hold the whole page: a numbered page
+      // deep in a list of thirteen statuses reads thirteen times its offset. The numbers stop at MAX_NUMBERED_PAGE
+      // and the cursor beyond them has no offset, so this is at most 13 × 1 000 rows, once per list and page.
       sql = `${groups.length === 1 ? groups[0] : groups.map((g) => `SELECT * FROM (${g})`).join(' UNION ALL ')} ORDER BY ${mergedOrderBy(sort, back, c.order)} LIMIT ? OFFSET ?`;
       binds = [...statuses.flatMap((s) => [s, ...restBinds, offset + want]), want, offset];
     } else {
