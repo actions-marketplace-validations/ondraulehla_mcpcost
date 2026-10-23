@@ -224,7 +224,9 @@ for (const e of logs.events) {
   const url = typeof request.url === 'string' ? request.url : under(e, 'url');
   if (typeof url !== 'string') continue;
   const agent = (under(request, 'user-agent') ?? under(e, 'user-agent') ?? '').toString().replace(/\s+/g, ' ');
-  const network = (under(request, 'asOrganization') ?? under(e, 'asOrganization') ?? '-').toString();
+  const asn = under(request, 'asn') ?? under(e, 'asn');
+  // The organisation and the number: the number is what a rule in rules.mjs takes.
+  const network = `${(under(request, 'asOrganization') ?? under(e, 'asOrganization') ?? '-').toString()}${asn ? ` (AS${asn})` : ''}`;
   const response = under(e, 'response');
   const status = response && typeof response === 'object' ? (response.status ?? '-') : '-';
   const s = shape(url);
@@ -251,7 +253,7 @@ if (logs.error) say(`The Worker's logs could not be read: ${logs.error}`);
 else {
   say(`## What the Worker's logs say (${fmt(logs.events.length)} events${logs.truncated ? ', a busy ten minutes was cut at 2 000, so the counts below are low' : ''})`);
   say();
-  table('By network', byNetwork, 'network (AS organisation)');
+  table('By network', byNetwork, 'network (AS organisation, number)');
   table('By agent', byAgent, 'kind: agent');
   table('By URL shape', byShape, 'shape', 15);
   table('By response status', byStatus, 'status', 8);
