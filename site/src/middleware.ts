@@ -56,12 +56,14 @@ function limitResponse(url: URL, message: string): Response {
 const BLOCKED_AGENTS = /ShapBot|SemrushBot|DataForSeoBot|AhrefsBot|MJ12bot|DotBot|PetalBot|Bytespider|BLEXBot|serpstatbot|ZoominfoBot|Barkrowler|ImagesiftBot/i;
 
 /**
- * Networks that scraped the list on the night of 2026-10-22: Chrome user agents from hosting addresses
- * that ignore robots.txt and nofollow and follow the host link of every server page through every status,
- * sort and page of /servers, about 3 000 list variants in 90 minutes. A list variant from them gets a 403
- * before any database read; the server pages stay open. A WAF rule on the zone would stop them before the Worker.
+ * Networks that scraped the list on the nights of 2026-10-22 and 23: Chrome user agents from hosting
+ * addresses that ignore robots.txt and nofollow and follow the host link of every server page through every
+ * status, sort and page of /servers, 3 000 list variants in 90 minutes the first night, 8 000 the second,
+ * from Meta's cloud once RapidSeedbox was refused. A list variant from them gets a 403 before any database
+ * read; the server pages stay open. Meta's own crawlers name themselves (facebookexternalhit, meta-externalagent)
+ * and read the server pages, not the list. A WAF rule on the zone would stop them before the Worker.
  */
-const LIST_SCRAPER_NETWORKS = /RapidSeedbox|Alibaba/i;
+const LIST_SCRAPER_NETWORKS = /RapidSeedbox|Alibaba|Meta Platforms/i;
 
 export const onRequest = defineMiddleware(async (context, next) => {
   const { request } = context;

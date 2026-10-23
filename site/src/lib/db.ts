@@ -668,6 +668,9 @@ export async function listServers(query: ListQuery): Promise<ListResult> {
       // D1 allows five SELECTs in one UNION, so the statuses go in groups of five, and the groups in a UNION of their own.
       const groups: string[] = [];
       for (let i = 0; i < statuses.length; i += 5) groups.push(statuses.slice(i, i + 5).map(() => part).join(' UNION ALL '));
+      // Each status reads up to the page's end, since any one of them could hold the whole page: a numbered page
+      // deep in a list of thirteen statuses reads thirteen times its offset. The numbers stop at MAX_NUMBERED_PAGE
+      // and the cursor beyond them has no offset, so this is at most 13 × 1 000 rows, once per list and page.
       sql = `${groups.length === 1 ? groups[0] : groups.map((g) => `SELECT * FROM (${g})`).join(' UNION ALL ')} ORDER BY ${mergedOrderBy(sort, back, c.order)} LIMIT ? OFFSET ?`;
       binds = [...statuses.flatMap((s) => [s, ...restBinds, offset + want]), want, offset];
     } else {
