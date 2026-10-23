@@ -273,7 +273,11 @@ function statusText(r: Row): string {
   const s = r.result?.status;
   if (!s) return '';
   if (s === 'ok') return r.withCredentials ? 'alive (credentials)' : 'alive';
-  if (s === 'auth') return `needs auth${r.result?.authScheme ? ` (${r.result.authScheme})` : ''}${r.withCredentials ? ', stored credentials refused' : ''}`;
+  if (s === 'auth') {
+    const how: Partial<Record<string, string>> = { 'oauth-dcr': 'OAuth, clients register themselves', oauth: 'OAuth, client id from the publisher', token: 'key from the publisher' };
+    const detail = [r.result?.authScheme, how[r.result?.authKind ?? '']].filter(Boolean).join(', ');
+    return `needs auth${detail ? ` (${detail})` : ''}${r.withCredentials ? ', stored credentials refused' : ''}`;
+  }
   if (s === 'payment') return 'payment required';
   if (s === 'newer_protocol') return 'newer protocol than this SDK';
   if (s === 'not_found') return r.kind === 'stdio' ? 'command not found' : 'not found';

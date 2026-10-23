@@ -9,7 +9,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { jsonSchemaValidator, JsonSchemaValidator, JsonSchemaValidatorResult } from '@modelcontextprotocol/sdk/validation/types.js';
-import type { ProbeResult, ProbeStatus, RemoteTransport } from './types.js';
+import type { AuthKind, AuthMetadata, ProbeResult, ProbeStatus, RemoteTransport } from './types.js';
 
 export const VERSION = '0.3.1';
 export const USER_AGENT = `mcpcost/${VERSION} (mcpcost; +https://github.com/ondraulehla/mcpcost)`;
@@ -99,33 +99,88 @@ export async function probeRemoteRaw(remote: { url: string; type: RemoteTranspor
         if (m) result.authResourceMetadata = m[1];
       }
       if (result.status === 'auth') {
-        result.authDocumentation = await resourceDocumentation(url, result.authResourceMetadata, baseFetch, Math.min(timeoutMs, 10_000));
+        const access = await readAuthMetadata(url, result.authResourceMetadata, baseFetch, Math.min(timeoutMs, 10_000));
+        if (access.documentation) result.authDocumentation = access.documentation;
+        if (access.metadata) result.authMetadata = access.metadata;
+        result.authKind = access.metadata ? (access.metadata.dynamicRegistration ? 'oauth-dcr' : 'oauth') : result.authScheme ? 'token' : 'unknown';
       }
     }
   }
   return { result, tools };
 }
 
+/** Reads one small JSON document with the probe's identity, or nothing: the metadata is a bonus, not a result. */
+async function readJson(candidate: string, baseFetch: typeof fetch, timeoutMs: number): Promise<Record<string, unknown> | undefined> {
+  try {
+    const res = await baseFetch(candidate, { headers: { accept: 'application/json', 'user-agent': USER_AGENT }, signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return undefined;
+    const doc = (await res.json()) as unknown;
+    return doc && typeof doc === 'object' && !Array.isArray(doc) ? (doc as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const httpUrl = (v: unknown, max = 500): string | undefined => (typeof v === 'string' && /^https?:\/\//i.test(v.trim()) && v.trim().length <= max ? v.trim() : undefined);
+const shortStrings = (v: unknown, max: number): string[] | undefined => {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 200).slice(0, max);
+  return out.length ? out : undefined;
+};
+
 /**
- * The `resource_documentation` of the server's OAuth protected-resource metadata (RFC 9728): the
- * publisher's own guide to getting access. The WWW-Authenticate header names the metadata URL; without
- * it, the well-known path with the resource path, then the bare one, as the SDK's discovery does.
+ * What a server that needs auth publishes about getting in. First the OAuth protected-resource metadata
+ * (RFC 9728): the URL from WWW-Authenticate, else the well-known path with the resource path, then the bare
+ * one, as the SDK's discovery does. Then, when it names an authorization server, that server's metadata
+ * (RFC 8414, then OpenID discovery, in the SDK's order), for the one fact a client needs most: whether it
+ * can register itself. Two to four small requests, never a token, never a consent.
  */
-async function resourceDocumentation(url: URL, fromHeader: string | undefined, baseFetch: typeof fetch, timeoutMs: number): Promise<string | undefined> {
+async function readAuthMetadata(url: URL, fromHeader: string | undefined, baseFetch: typeof fetch, timeoutMs: number): Promise<{ documentation?: string; metadata?: AuthMetadata }> {
   const candidates = fromHeader
     ? [fromHeader]
     : [...(url.pathname !== '/' ? [`${url.origin}/.well-known/oauth-protected-resource${url.pathname}`] : []), `${url.origin}/.well-known/oauth-protected-resource`];
+  let prm: Record<string, unknown> | undefined;
   for (const candidate of candidates) {
-    try {
-      const res = await baseFetch(candidate, { headers: { accept: 'application/json', 'user-agent': USER_AGENT }, signal: AbortSignal.timeout(timeoutMs) });
-      if (!res.ok) continue;
-      const doc = (await res.json()) as { resource_documentation?: unknown };
-      const value = typeof doc.resource_documentation === 'string' ? doc.resource_documentation.trim() : '';
-      if (/^https?:\/\//i.test(value) && value.length <= 500) return value;
-      return undefined;
-    } catch {
-      // The next candidate, or nothing: the documentation is a bonus, not a result.
+    prm = await readJson(candidate, baseFetch, timeoutMs);
+    if (prm) break;
+  }
+  if (!prm) return {};
+  const metadata: AuthMetadata = {};
+  const servers = shortStrings(prm.authorization_servers, 3)?.map((v) => httpUrl(v)).filter((v): v is string => !!v);
+  if (servers?.length) metadata.authorizationServers = servers;
+  const scopes = shortStrings(prm.scopes_supported, 20);
+  if (scopes) metadata.scopesSupported = scopes;
+  if (typeof prm.resource_name === 'string' && prm.resource_name.trim()) metadata.resourceName = prm.resource_name.trim().slice(0, 120);
+  const documentation = httpUrl(prm.resource_documentation);
+
+  const issuer = servers?.[0];
+  if (issuer) {
+    const as = await authorizationServerMetadata(issuer, baseFetch, timeoutMs);
+    metadata.authorizationServerMetadata = !!as;
+    if (as) {
+      metadata.dynamicRegistration = !!httpUrl(as.registration_endpoint);
+      metadata.pkce = Array.isArray(as.code_challenge_methods_supported) && as.code_challenge_methods_supported.includes('S256');
+      metadata.grantTypes = shortStrings(as.grant_types_supported, 5) ?? ['authorization_code'];
     }
+  }
+  return { documentation, metadata };
+}
+
+/** The authorization server's metadata, at the well-known paths the SDK tries, in its order. */
+async function authorizationServerMetadata(issuer: string, baseFetch: typeof fetch, timeoutMs: number): Promise<Record<string, unknown> | undefined> {
+  let u: URL;
+  try {
+    u = new URL(issuer);
+  } catch {
+    return undefined;
+  }
+  const path = u.pathname.replace(/\/$/, '');
+  const candidates = path
+    ? [`${u.origin}/.well-known/oauth-authorization-server${path}`, `${u.origin}/.well-known/openid-configuration${path}`, `${u.origin}${path}/.well-known/openid-configuration`]
+    : [`${u.origin}/.well-known/oauth-authorization-server`, `${u.origin}/.well-known/openid-configuration`];
+  for (const candidate of candidates) {
+    const doc = await readJson(candidate, baseFetch, timeoutMs);
+    if (doc) return doc;
   }
   return undefined;
 }

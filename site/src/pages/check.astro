@@ -1,7 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import { getServer, findByUrl, serversOnHost } from '../lib/db';
-import { bucket, label, ms, num, modelName } from '../lib/format';
+import { bucket, label, ms, num, modelName, authKindLabel } from '../lib/format';
 import { probeRemoteRaw } from '../../../packages/mcpcost/src/core.ts';
 import { payloadBytes, toolPayload, BYTES_PER_TOKEN } from '../../../packages/mcpcost/src/payload.ts';
 import { liveClaudeCount, type LiveClaudeCount } from '../lib/claude';
@@ -80,7 +80,8 @@ const site = Astro.site?.toString().replace(/\/$/, '') ?? '';
       <h2 id="result-h" class="panel-title">Result <small class="mono">{view.url}</small></h2>
       <p style="margin:0">
         <span class={`tag big ${bucket(view.result.status)}`}>{label(view.result.status)}</span>
-        <span class="muted small"> {view.result.httpStatus && <>HTTP {view.result.httpStatus}</>}{view.result.authScheme && <> · {view.result.authScheme}</>}</span>
+        <span class="muted small"> {view.result.httpStatus && <>HTTP {view.result.httpStatus}</>}{view.result.authScheme && <> · {view.result.authScheme}</>}{view.result.authKind && <> · {authKindLabel(view.result.authKind)}</>}</span>
+        {view.result.authDocumentation && <><br /><span class="muted small">The publisher's guide to getting access: <a href={view.result.authDocumentation} rel="noopener" class="break">{view.result.authDocumentation}</a></span></>}
       </p>
       {view.result.status === 'ok' && (
         <>

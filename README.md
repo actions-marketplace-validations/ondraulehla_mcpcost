@@ -10,7 +10,7 @@ mcpcost probes every remote server in the [official MCP registry](https://regist
 
 - whether it answers `initialize` and `tools/list`, and how fast
 - the protocol version it negotiates
-- whether it needs auth, and which scheme (from `WWW-Authenticate`)
+- whether it needs auth, which scheme (from `WWW-Authenticate`), and how a client gets in: OAuth with dynamic client registration, OAuth with a client id from the publisher, or a key, read from the server's public OAuth metadata
 - whether it asks for payment (HTTP 402)
 - how many tools it has and how many tokens their definitions cost
 
@@ -152,6 +152,7 @@ registry ──▶ probe/run.ts ──▶ data/raw/probe-run.json
 - **Estimate.** Each tool is serialised as compact JSON with `name`, `description` and `input_schema`, and counted with the `o200k_base` tokenizer. The exact count is about 1.9 times the estimate at the median. The estimate needs no key and is the same for every server.
 - **Same tool set.** A hash of the sorted tool names and schema sizes marks servers that serve identical tools under different names.
 - **Timeouts.** 15 seconds per request. At most one probe runs against a host at a time.
+- **Getting access.** For a server that answers 401 or 403, the probe reads the OAuth protected-resource metadata (RFC 9728) and the first authorization server's metadata (RFC 8414, then OpenID discovery): authorization servers, scopes, the publisher's guide, dynamic client registration (RFC 7591), PKCE, grant types. The server page shows it as "Getting access", the JSON API as `authKind` and `authMetadata`. Two to four small requests, no token, no consent; the probe result does not change.
 - **Identification.** Every request carries the User-Agent `mcpcost/<version> (+https://github.com/ondraulehla/mcpcost)`. To exclude a server, open an issue with its registry name.
 
 ## Run it

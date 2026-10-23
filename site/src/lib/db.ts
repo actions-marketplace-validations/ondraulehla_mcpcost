@@ -19,6 +19,10 @@ export interface ServerRecord {
   auth_scheme: string | null;
   /** The publisher's guide to getting access, from the OAuth protected-resource metadata. */
   auth_documentation: string | null;
+  /** How a client gets in: oauth-dcr, oauth, token or unknown. Null before migration 010 ran a probe. */
+  auth_kind: string | null;
+  /** The OAuth metadata behind it, as JSON: authorizationServers, scopesSupported, dynamicRegistration, pkce, grantTypes. */
+  auth_metadata: string | null;
   protocol_version: string | null;
   server_name: string | null;
   server_version: string | null;
@@ -97,6 +101,8 @@ export interface RunSummary {
   duplicateServers: number;
   protocols: Record<string, number>;
   authSchemes: Record<string, number>;
+  /** Servers that need auth by how a client gets in; present once a run had the metadata reader. */
+  authKinds?: Record<string, number>;
   transports: Record<string, number>;
   /** o200k_base estimate. */
   toolsTokens: TokenStats;

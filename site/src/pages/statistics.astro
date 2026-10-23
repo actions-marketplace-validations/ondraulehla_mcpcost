@@ -5,7 +5,7 @@ import Stack from '../components/charts/Stack.astro';
 import Trend from '../components/charts/Trend.astro';
 import Histogram from '../components/charts/Histogram.astro';
 import { latestRun, listHosts, recentRuns } from '../lib/db';
-import { bucket, label, num, pct, date, ms, modelName } from '../lib/format';
+import { bucket, label, num, pct, date, ms, modelName, authKindLabel } from '../lib/format';
 
 const runs = await recentRuns(30);
 const run = runs[0] ?? null;
@@ -106,6 +106,14 @@ const heavyMax = Math.max(1, ...topHeavy.map((h) => h.claudeTokens ?? h.toolsTok
         <h2 id="auth-h" class="panel-title">Auth schemes, servers that need auth</h2>
         <Bars id="auth" items={Object.entries(run.authSchemes).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([v, n]) => ({ label: v === 'none' ? 'no WWW-Authenticate header' : v, value: n }))} columns={['WWW-Authenticate', 'Servers']} />
       </section>
+
+      {run.authKinds && (
+        <section class="panel" aria-labelledby="access-h">
+          <h2 id="access-h" class="panel-title">How a client gets in, servers that need auth</h2>
+          <p class="muted small">Read from the public OAuth metadata of each server (RFC 9728 and RFC 8414), never from a token. A server whose authorization server registers clients itself connects from Claude Code, Cursor or <span class="mono">npx mcpcost auth</span> with no setup.</p>
+          <Bars id="access" items={Object.entries(run.authKinds).sort((a, b) => b[1] - a[1]).map(([v, n]) => ({ label: authKindLabel(v), value: n, note: pct(n, Object.values(run.authKinds!).reduce((a, b) => a + b, 0)) }))} columns={['Access', 'Servers']} />
+        </section>
+      )}
 
       <section class="panel" aria-labelledby="transports-h">
         <h2 id="transports-h" class="panel-title">Transports</h2>

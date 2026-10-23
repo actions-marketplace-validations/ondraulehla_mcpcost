@@ -35,7 +35,7 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
     <h2 id="results-h" class="panel-title">Results</h2>
   <dl class="facts">
     <dt>alive</dt><dd><code>initialize</code> and <code>tools/list</code> were successful.</dd>
-    <dt>needs auth</dt><dd>HTTP 401 or 403. We record the <code>WWW-Authenticate</code> scheme when the server sends one. The server is reachable, but it does not talk to clients without credentials.</dd>
+    <dt>needs auth</dt><dd id="access">HTTP 401 or 403. We record the <code>WWW-Authenticate</code> scheme when the server sends one. The server is reachable, but it does not talk to clients without credentials. We then read what the server publishes about getting in, never a token: the OAuth protected-resource metadata (RFC 9728, the URL from <code>WWW-Authenticate</code> or the well-known path) gives the authorization servers, the scopes and the publisher's guide; the first authorization server's metadata (RFC 8414, then OpenID discovery) says whether clients can register themselves (RFC 7591) and whether PKCE S256 is supported. The server page sums it up as one of four kinds: OAuth where clients register themselves, OAuth where the publisher issues the client id, a key or token from the publisher, or nothing published. Two to four small requests, 10 seconds each; the probe result does not depend on them.</dd>
     <dt>paid (402)</dt><dd>HTTP 402 Payment Required.</dd>
     <dt>newer protocol</dt><dd>The server answers with a protocol version that the current SDK does not support. The server is reachable.</dd>
     <dt>not found</dt><dd>HTTP 404, 405 or 410 on the MCP endpoint.</dd>

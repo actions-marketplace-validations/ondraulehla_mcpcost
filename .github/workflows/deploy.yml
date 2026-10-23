@@ -48,6 +48,7 @@ jobs:
           if [ "$(has measured_with_credentials)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/004-credentials.sql; echo "migration 004 applied"; fi
           if [ "$(has derived_package)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/005-derived.sql; echo "migration 005 applied"; fi
           if [ "$(has auth_documentation)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/009-auth-documentation.sql; echo "migration 009 applied"; fi
+          if [ "$(has auth_kind)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/010-auth-kind.sql; echo "migration 010 applied"; fi
           idx=$(npx wrangler d1 execute mcp-pulse --remote --json --command "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='servers_init_name'" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].results[0].n))')
           if [ "$idx" != "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/006-fewer-indexes.sql; echo "migration 006 applied"; fi
       - name: Deploy

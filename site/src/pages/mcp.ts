@@ -36,6 +36,7 @@ function build(): McpServer {
       if (!s) return { content: [{ type: 'text', text: `No registry server matches ${nameOrUrl}. Use check_server to probe a URL live.` }], isError: true };
       const out = {
         name: s.name, title: s.title, url: s.url, status: s.status, statusLabel: label(s.status), httpStatus: s.http_status, authScheme: s.auth_scheme,
+        authKind: s.auth_kind, authDocumentation: s.auth_documentation, authMetadata: s.auth_metadata ? JSON.parse(s.auth_metadata) : null,
         protocolVersion: s.protocol_version, toolCount: s.tool_count,
         claudeTokens: s.claude_tokens, claudeTokensClaudeCode: s.claude_tokens_cc, claudeModel: s.claude_model, claudeError: s.claude_error,
         toolsTokens: s.tools_tokens, toolsTokensNote: 'o200k_base estimate; claudeTokens is exact',
@@ -87,6 +88,7 @@ function build(): McpServer {
       const claude = result.status === 'ok' ? await liveClaudeCount(tools, u.hostname) : null;
       const out = {
         url: result.url, status: result.status, statusLabel: label(result.status), httpStatus: result.httpStatus, authScheme: result.authScheme,
+        authKind: result.authKind, authDocumentation: result.authDocumentation, authMetadata: result.authMetadata,
         protocolVersion: result.protocolVersion, serverInfo: result.serverInfo, toolCount: result.toolCount, toolsBytes: bytes,
         claudeTokens: claude?.tokens, claudeTokensClaudeCode: claude?.tokensClaudeCode, claudeModel: claude?.model, claudeError: claude?.error,
         toolsTokensEstimate: Math.round(bytes / BYTES_PER_TOKEN), estimateNote: 'estimated from schema size at the registry median of 4.42 bytes per token; exact o200k: npx mcpcost --url <url>',

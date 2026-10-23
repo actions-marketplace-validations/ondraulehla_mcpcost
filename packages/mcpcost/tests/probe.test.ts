@@ -107,6 +107,66 @@ describe('probeRemote classification with a fake fetch', () => {
     expect(r.authDocumentation).toBeUndefined();
   });
 
+  it('says oauth-dcr when the authorization server registers clients, and keeps scopes and the server', async () => {
+    const fakeFetch: typeof fetch = async (input) => {
+      const u = String(input instanceof Request ? input.url : input);
+      if (u === 'https://fixture.example/.well-known/oauth-protected-resource/mcp') return new Response('{"resource":"https://fixture.example/mcp","authorization_servers":["https://auth.example/tenant"],"scopes_supported":["read","write"],"resource_name":"Fixture"}', { status: 200 });
+      if (u === 'https://auth.example/.well-known/oauth-authorization-server/tenant') return new Response('{"issuer":"https://auth.example/tenant","registration_endpoint":"https://auth.example/tenant/register","code_challenge_methods_supported":["S256"],"grant_types_supported":["authorization_code","refresh_token"]}', { status: 200 });
+      return new Response('', { status: 401, headers: { 'www-authenticate': 'Bearer error="invalid_token"' } });
+    };
+    const r = await probeRemote(target, { fetch: fakeFetch });
+    expect(r.status).toBe('auth');
+    expect(r.authKind).toBe('oauth-dcr');
+    expect(r.authMetadata).toEqual({
+      authorizationServers: ['https://auth.example/tenant'],
+      scopesSupported: ['read', 'write'],
+      resourceName: 'Fixture',
+      authorizationServerMetadata: true,
+      dynamicRegistration: true,
+      pkce: true,
+      grantTypes: ['authorization_code', 'refresh_token']
+    });
+  });
+
+  it('says oauth when the authorization server has no registration endpoint, and falls back to OpenID discovery', async () => {
+    const seen: string[] = [];
+    const fakeFetch: typeof fetch = async (input) => {
+      const u = String(input instanceof Request ? input.url : input);
+      seen.push(u);
+      if (u === 'https://fixture.example/.well-known/oauth-protected-resource/mcp') return new Response('{"authorization_servers":["https://auth.example"]}', { status: 200 });
+      if (u === 'https://auth.example/.well-known/openid-configuration') return new Response('{"issuer":"https://auth.example","authorization_endpoint":"https://auth.example/authorize"}', { status: 200 });
+      if (u.startsWith('https://auth.example/.well-known/')) return new Response('', { status: 404 });
+      return new Response('', { status: 401, headers: { 'www-authenticate': 'Bearer' } });
+    };
+    const r = await probeRemote(target, { fetch: fakeFetch });
+    expect(r.authKind).toBe('oauth');
+    expect(r.authMetadata?.dynamicRegistration).toBe(false);
+    expect(r.authMetadata?.pkce).toBe(false);
+    expect(r.authMetadata?.grantTypes).toEqual(['authorization_code']);
+    expect(seen.indexOf('https://auth.example/.well-known/oauth-authorization-server')).toBeLessThan(seen.indexOf('https://auth.example/.well-known/openid-configuration'));
+  });
+
+  it('says oauth, not a throw, when the authorization server metadata is unreachable', async () => {
+    const fakeFetch: typeof fetch = async (input) => {
+      const u = String(input instanceof Request ? input.url : input);
+      if (u === 'https://fixture.example/.well-known/oauth-protected-resource/mcp') return new Response('{"authorization_servers":["https://auth.example"]}', { status: 200 });
+      if (u.startsWith('https://auth.example/')) throw new TypeError('fetch failed');
+      return new Response('', { status: 401, headers: { 'www-authenticate': 'Bearer' } });
+    };
+    const r = await probeRemote(target, { fetch: fakeFetch });
+    expect(r.authKind).toBe('oauth');
+    expect(r.authMetadata).toEqual({ authorizationServers: ['https://auth.example'], authorizationServerMetadata: false });
+  });
+
+  it('says token for a Bearer challenge with no metadata, and unknown for a bare 403', async () => {
+    const bearer = await probeRemote(target, { fetch: respond(401, { 'www-authenticate': 'Bearer realm="api"' }) });
+    expect(bearer.authKind).toBe('token');
+    expect(bearer.authMetadata).toBeUndefined();
+    const bare = await probeRemote(target, { fetch: respond(403) });
+    expect(bare.status).toBe('auth');
+    expect(bare.authKind).toBe('unknown');
+  });
+
   it.each([
     [402, 'payment'],
     [403, 'auth'],

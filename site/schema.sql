@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS servers (
   auth_scheme TEXT,
   -- The publisher's guide to getting access: resource_documentation of the OAuth protected-resource metadata (migration 009).
   auth_documentation TEXT,
+  -- How a client gets in (oauth-dcr, oauth, token, unknown) and the OAuth metadata behind it, as JSON (migration 010).
+  auth_kind TEXT,
+  auth_metadata TEXT,
   protocol_version TEXT,
   server_name TEXT,
   server_version TEXT,
