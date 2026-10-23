@@ -4,6 +4,8 @@ on:
     branches: [main]
     paths:
       - 'site/**'
+      # The edge scripts run in their own workflows and change nothing the Worker serves.
+      - '!site/edge/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/deploy.yml'

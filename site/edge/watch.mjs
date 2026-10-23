@@ -25,6 +25,7 @@ const DB_ID = 'f1984775-849a-4277-805e-537ea5ad7611';
 const LIMITS = {
   requests: Number(process.env.WATCH_REQUESTS_PER_HOUR ?? 5000), // Worker requests from everyone
   network: Number(process.env.WATCH_NETWORK_REQUESTS_PER_HOUR ?? 800), // requests from one network that does not name itself a crawler
+  lists: Number(process.env.WATCH_LIST_REQUESTS_PER_HOUR ?? 300), // list variants from one network, whatever it calls itself: robots.txt disallows them for everyone
   rowsRead: Number(process.env.WATCH_ROWS_READ_PER_HOUR ?? 1_000_000) // D1 rows read
 };
 
@@ -206,8 +207,10 @@ const [windowHours, dayHours, d1, logs, zone, queries] = await Promise.all([
 ]);
 
 const sum = (map, key) => [...map.values()].reduce((a, h) => a + h[key], 0);
-const inWindow = (hour) => Date.parse(hour) >= from.getTime() - 3_600_000 && Date.parse(hour) < to.getTime();
+// D1's analytics come by the hour: the window takes every hour it touches, whole, and its rate is per hour touched.
+const inWindow = (hour) => Date.parse(hour) >= from.getTime() - (from.getTime() % 3_600_000) && Date.parse(hour) < to.getTime();
 const d1Window = new Map([...d1].filter(([h]) => inWindow(h)));
+const d1PerHour = (n) => Math.round(n / Math.max(hours, d1Window.size, 1));
 const requests = sum(windowHours, 'requests');
 const rowsRead = sum(d1Window, 'rowsRead');
 
@@ -217,8 +220,8 @@ say('| | in the window | per hour | since 00:00 UTC |');
 say('|---|---:|---:|---:|');
 say(`| Worker requests | ${fmt(requests)} | ${fmt(perHour(requests))} | ${fmt(sum(dayHours, 'requests'))} |`);
 say(`| Worker errors | ${fmt(sum(windowHours, 'errors'))} | ${fmt(perHour(sum(windowHours, 'errors')))} | ${fmt(sum(dayHours, 'errors'))} |`);
-say(`| D1 rows read | ${fmt(rowsRead)} | ${fmt(perHour(rowsRead))} | ${fmt(sum(d1, 'rowsRead'))} |`);
-say(`| D1 rows written | ${fmt(sum(d1Window, 'rowsWritten'))} | ${fmt(perHour(sum(d1Window, 'rowsWritten')))} | ${fmt(sum(d1, 'rowsWritten'))} |`);
+say(`| D1 rows read | ${fmt(rowsRead)} | ${fmt(d1PerHour(rowsRead))} | ${fmt(sum(d1, 'rowsRead'))} |`);
+say(`| D1 rows written | ${fmt(sum(d1Window, 'rowsWritten'))} | ${fmt(d1PerHour(sum(d1Window, 'rowsWritten')))} | ${fmt(sum(d1, 'rowsWritten'))} |`);
 if (zone.total !== undefined) {
   const stopped = zone.stopped.reduce((a, r) => a + r.count, 0);
   say(`| Requests at the edge | ${fmt(zone.total)} | ${fmt(perHour(zone.total))} | |`);
@@ -305,7 +308,7 @@ for (const [network, n] of sorted(byNetworkUnnamed)) {
 for (const [network, n] of sorted(byNetworkLists)) {
   if (perHour(n) > LIMITS.lists) alarms.push(`${fmt(perHour(n))} list variants an hour from ${network}; robots.txt disallows them for everyone, the threshold is ${fmt(LIMITS.lists)}`);
 }
-if (perHour(rowsRead) > LIMITS.rowsRead) alarms.push(`${fmt(perHour(rowsRead))} D1 rows read an hour, the threshold is ${fmt(LIMITS.rowsRead)}`);
+if (d1PerHour(rowsRead) > LIMITS.rowsRead) alarms.push(`${fmt(d1PerHour(rowsRead))} D1 rows read an hour, the threshold is ${fmt(LIMITS.rowsRead)}`);
 
 if (alarms.length) {
   say('## Over the threshold');
