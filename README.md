@@ -182,6 +182,7 @@ Deploying needs a Cloudflare account with a D1 database named `mcpcost` (`wrangl
 
 The Workers Free plan counts every request the Worker answers, a 403 as much as a page. On 2026-10-22 and 23 scrapers with Chrome user agents on hosting addresses (Meta's cloud, Alibaba Cloud, RapidSeedbox) made 4 000 list variants an hour and spent the account's 100 000 requests a day, although the Worker refused them. What stops them must run before the Worker: `site/edge/rules.mjs` writes the zone's WAF rules through the API, idempotently.
 
+- a custom rule that blocks Meta's training crawler, `meta-externalagent`, on the whole host: a verified bot that ignores robots.txt, made 28 000 of the Worker's 31 000 requests in the twelve hours to 2026-10-24 05:42 UTC, and sends no readers (the link preview `facebookexternalhit` is not blocked)
 - a custom rule that blocks those networks on the whole host, verified bots excepted
 - a custom rule that gives every list variant (`/servers?…`) from anything but a verified bot a managed challenge; a browser passes it once, a script does not. The list API (`/api/servers.json`) is not in it: scripts and agents cannot pass a challenge, so the API stays open under the rate limiting rule
 - a custom rule that blocks a verified bot on the list variants: robots.txt disallows them for everyone, search engines never ask, and Meta's crawler (meta-externalagent behind a Chrome agent string) walked 3 000 of them an hour on 2026-10-23

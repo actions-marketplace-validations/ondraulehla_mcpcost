@@ -9,6 +9,10 @@ User-agent: PetalBot
 User-agent: Bytespider
 Disallow: /
 
+# Meta's training crawler read every page, every feed and every disallowed /check link, 28 000 requests in twelve hours. Blocked at the edge too.
+User-agent: meta-externalagent
+Disallow: /
+
 User-agent: *
 Allow: /
 Crawl-delay: 2

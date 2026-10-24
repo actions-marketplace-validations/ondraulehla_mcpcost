@@ -33,7 +33,21 @@ const SCRAPER_ASNS = [32934, 45102, 37963, 25369];
  */
 const LIST_VARIANT = `${ON_HOST} and http.request.uri.path eq "/servers" and http.request.uri.query ne ""`;
 
+/**
+ * Meta's training crawler. It names itself at the end of a Chrome agent string, Cloudflare counts it as a
+ * verified bot, and in the twelve hours to 2026-10-24 05:42 UTC it made 28 000 of the Worker's 31 000 requests:
+ * every server page, every server's feed, 5 800 /check links that robots.txt disallows, and 1 600 pages that
+ * do not exist. It sends no readers. facebookexternalhit, the link preview for a shared URL, is not this.
+ */
+const META_CRAWLER = 'meta-externalagent';
+
 const CUSTOM_RULES = [
+  {
+    ref: 'mcpcost-meta-crawler',
+    description: 'mcpcost: Meta\'s training crawler (meta-externalagent) is blocked on the whole host; it ignores robots.txt and sends no readers',
+    expression: `(${ON_HOST} and http.user_agent contains "${META_CRAWLER}")`,
+    action: 'block'
+  },
   {
     ref: 'mcpcost-scraper-networks',
     // The whole host, not only the list: the same scrapers read 1 500 server pages and sitemaps an hour too.
