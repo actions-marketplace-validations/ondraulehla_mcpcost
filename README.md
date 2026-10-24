@@ -85,7 +85,7 @@ The plugin adds one skill, `/mcpcost:measure`, which runs `npx mcpcost` on your 
 ## For agents and scripts
 
 - JSON: `/api/s/<name>.json`, `/api/servers.json?q=…&status=ok&sort=tokens`, `/api/check.json?url=…`, `/api/summary.json`. The list API takes at most 6 requests in 10 seconds from one address; its answers are cached for three hours.
-- MCP server over Streamable HTTP, no auth: `https://mcpcost.ulehla.dev/mcp` with the tools `lookup_server`, `search_servers`, `check_server`, `registry_summary`. The manifest for the registry is `site/server.json`.
+- MCP server over Streamable HTTP, no auth: `https://mcpcost.ulehla.dev/mcp` with the tools `lookup_server`, `search_servers`, `compare_servers`, `check_server`, `registry_summary`. The manifest for the registry is `site/server.json`.
 - `/llms.txt` lists all of it. `/tokens` answers the general question: how many context tokens does an MCP server cost.
 
 Each server on the board gets a page and a badge:

@@ -23,6 +23,6 @@ Token counts: claudeTokens is exact. It comes from the Anthropic count_tokens en
 - JSON, live probe: https://mcpcost.ulehla.dev/api/check.json?url=<https url>
 - JSON, run summary: https://mcpcost.ulehla.dev/api/summary.json
 - JSON, servers tracked outside the registry: https://mcpcost.ulehla.dev/api/tracked.json
-- MCP server (Streamable HTTP, no auth): https://mcpcost.ulehla.dev/mcp with tools lookup_server, search_servers, check_server, registry_summary
+- MCP server (Streamable HTTP, no auth): https://mcpcost.ulehla.dev/mcp with tools lookup_server, search_servers, compare_servers (two to five side by side, as JSON, Markdown or CSV), check_server, registry_summary
 - CLI for your own config: npx mcpcost (https://www.npmjs.com/package/mcpcost)
 - Source and raw data: https://github.com/ondraulehla/mcpcost (MIT)

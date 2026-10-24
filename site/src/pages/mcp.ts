@@ -7,6 +7,7 @@ import { label } from '../lib/format';
 import { probeRemoteRaw } from '../../../packages/mcpcost/src/core.ts';
 import { payloadBytes, BYTES_PER_TOKEN } from '../../../packages/mcpcost/src/payload.ts';
 import { liveClaudeCount } from '../lib/claude';
+import { compare, formatComparison, unknownRow, type CompareRow } from '../../../packages/mcpcost/src/compare.ts';
 
 const SITE = 'https://mcpcost.ulehla.dev';
 
@@ -28,7 +29,7 @@ const SERVER_ROW = {
 };
 
 /**
- * mcpcost as an MCP server: three tools over the same data as the board.
+ * mcpcost as an MCP server: five tools over the same data as the board.
  * Stateless, one server instance per request, JSON responses.
  */
 function build(): McpServer {
@@ -36,7 +37,7 @@ function build(): McpServer {
     { name: 'mcpcost', version: '0.2.0' },
     {
       instructions:
-        'Health and token cost of every remote server in the official MCP registry, and of its npm and PyPI package servers, probed daily. Use lookup_server for a registry name or URL, search_servers to find servers, check_server to probe a URL that is not in the registry. claudeTokens is the exact count from the Anthropic count_tokens endpoint (claudeTokensClaudeCode with the mcp__<server>__ prefix); toolsTokens is an o200k_base estimate over each tool definition.'
+        'Health and token cost of every remote server in the official MCP registry, and of its npm and PyPI package servers, probed daily. Use lookup_server for a registry name or URL, search_servers to find servers, compare_servers to put two to five next to each other, check_server to probe a URL that is not in the registry. claudeTokens is the exact count from the Anthropic count_tokens endpoint (claudeTokensClaudeCode with the mcp__<server>__ prefix); toolsTokens is an o200k_base estimate over each tool definition.'
     }
   );
 
@@ -166,6 +167,63 @@ function build(): McpServer {
         tools: tools.map((t) => t.name), latencyMs: result.latencyMs, error: result.error
       };
       return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }], structuredContent: out };
+    }
+  );
+
+  server.registerTool(
+    'compare_servers',
+    {
+      title: 'Compare servers side by side',
+      description:
+        "Puts two to five registry servers next to each other from the board's latest daily probe: status, how a client gets in, tool count, token cost (exact in Claude when counted, else the estimate), share of a 200k window and initialize latency, with the cheapest, the most expensive and the spread. Use it to choose between servers that do the same job; use lookup_server for the full record of one server, search_servers to find candidates, and check_server for a URL that is not in the registry. Instant, no connection to the servers. A name the board does not know gets a row with status \"unknown\" and the comparison goes on. format picks the text layout (JSON, a Markdown table, or CSV to paste into a spreadsheet); the structured content is always JSON.",
+      annotations: READ_ONLY,
+      inputSchema: {
+        servers: z.array(z.string()).min(2).max(5).describe("Two to five registry names (io.github.owner/name) or the servers' https URLs as the registry lists them"),
+        format: z.enum(['json', 'markdown', 'csv']).optional().describe('The layout of the text content: json (default), markdown (a table with a summary line), or csv (a header row, then one row per server)')
+      },
+      outputSchema: {
+        servers: z.array(z.object({
+          name: z.string().describe('The registry name, or what was given when the board does not know it'),
+          host: nullableStr('The endpoint host'),
+          status: z.string().describe('The probe status, or "unknown" when the board has no such server'),
+          statusLabel: nullableStr('The status in words'),
+          authKind: nullableStr('oauth-dcr, oauth, token or unknown, for a server that needs auth'),
+          toolCount: nullableInt('How many tools'),
+          claudeTokens: nullableInt('Exact Claude count'),
+          toolsTokens: nullableInt('o200k_base estimate'),
+          tokens: nullableInt('The number compared: the exact count when it exists, else the estimate'),
+          exact: z.boolean().describe('Whether tokens is the exact count'),
+          shareOf200k: z.number().nullable().optional().describe('Percent of a 200k window'),
+          initMs: nullableInt('initialize latency, milliseconds'),
+          protocolVersion: nullableStr('The negotiated protocol version'),
+          probedAt: nullableStr('ISO 8601 time of the probe'),
+          page: nullableStr("The server's page on the board"),
+          error: nullableStr('Why there is no data, for example "not on the board"')
+        })).describe('One row per requested server, in the order given'),
+        measured: z.number().int().describe('How many rows have a token number'),
+        cheapest: z.string().nullable().describe('The server with the fewest tokens, when two or more rows are measured'),
+        mostExpensive: z.string().nullable(),
+        tokenSpread: z.number().int().nullable().describe('Tokens between the most expensive and the cheapest'),
+        format: z.enum(['json', 'markdown', 'csv'])
+      }
+    },
+    async ({ servers, format }) => {
+      const rows: CompareRow[] = await Promise.all(
+        servers.map(async (id) => {
+          const name = /^https?:\/\//.test(id) ? await findByUrl(id) : id;
+          const s = name ? await getServer(name) : null;
+          if (!s) return unknownRow(id);
+          const tokens = s.claude_tokens ?? s.tools_tokens;
+          return {
+            name: s.name, host: s.host, status: s.status, statusLabel: label(s.status), authKind: s.auth_kind,
+            toolCount: s.tool_count, claudeTokens: s.claude_tokens, toolsTokens: s.tools_tokens, tokens, exact: s.claude_tokens != null,
+            shareOf200k: tokens != null ? Number(((tokens / 200_000) * 100).toFixed(2)) : null,
+            initMs: s.init_ms, protocolVersion: s.protocol_version, probedAt: s.probed_at, page: `${SITE}/s/${s.name}`
+          };
+        })
+      );
+      const out = compare(rows, format ?? 'json');
+      return { content: [{ type: 'text', text: formatComparison(out) }], structuredContent: out as unknown as Record<string, unknown> };
     }
   );
 
