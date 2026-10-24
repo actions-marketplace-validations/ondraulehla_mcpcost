@@ -12,6 +12,8 @@ export interface Report {
   from: string;
   /** The dataset: a static file of the site, gzip of a JSON document, CC BY 4.0. */
   dataset: { path: string; size: string };
+  /** The same run as re-check evidence for the registry, in the shape agreed in modelcontextprotocol/registry#1715. */
+  evidence?: { path: string; size: string };
 }
 
 export const REPORTS: Report[] = [
@@ -20,7 +22,8 @@ export const REPORTS: Report[] = [
     title: 'The state of the MCP registry, October 2026',
     run: '2026-10-24',
     from: '2026-10-03',
-    dataset: { path: '/data/mcpcost-2026-10.json.gz', size: '1.2 MB' }
+    dataset: { path: '/data/mcpcost-2026-10.json.gz', size: '1.2 MB' },
+    evidence: { path: '/data/mcpcost-evidence-2026-10.json.gz', size: '1.6 MB' }
   }
 ];
 
