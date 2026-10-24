@@ -10,6 +10,23 @@ import { liveClaudeCount } from '../lib/claude';
 
 const SITE = 'https://mcpcost.ulehla.dev';
 
+/** Every tool reads and reports; none changes a server or the board. check_server reaches the network. */
+const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
+const STATUS = z.string().describe('ok (answered initialize and tools/list), auth (needs credentials), payment (402), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed');
+const nullableInt = (what: string) => z.number().int().nullable().optional().describe(what);
+const nullableStr = (what: string) => z.string().nullable().optional().describe(what);
+const SERVER_ROW = {
+  name: z.string().describe('The registry name, io.github.owner/name'),
+  title: nullableStr('The title the registry gives'),
+  host: z.string().describe('The endpoint host'),
+  status: STATUS,
+  toolCount: nullableInt('How many tools tools/list returned'),
+  claudeTokens: nullableInt('Exact count from the Anthropic count_tokens endpoint, names as published'),
+  toolsTokens: nullableInt('o200k_base estimate over the compact JSON of the tool definitions; the exact count is about 1.9 times this at the median'),
+  protocolVersion: nullableStr('The MCP protocol version the server negotiated'),
+  page: z.string().describe("The server's page on the board")
+};
+
 /**
  * mcpcost as an MCP server: three tools over the same data as the board.
  * Stateless, one server instance per request, JSON responses.
@@ -27,8 +44,28 @@ function build(): McpServer {
     'lookup_server',
     {
       title: 'Look up a registry server',
-      description: 'Latest probe of one server from the official MCP registry: status, protocol, tool count, exact token cost of its tool definitions in Claude, latency. Accepts the registry name (io.github.owner/name) or the server URL.',
-      inputSchema: { nameOrUrl: z.string().describe('Registry name or https URL of the server') }
+      description:
+        "Reads the board's latest daily probe of one server in the official MCP registry: status, how a client gets access, the exact Claude token cost of its tool definitions, tool count, latency and the most expensive tools. Instant, no connection to the server. Use it when the server is in the registry; use search_servers when you do not know its name, and check_server to probe a URL that is not in the registry. A name or URL that is not on the board returns isError with a short message.",
+      annotations: READ_ONLY,
+      inputSchema: { nameOrUrl: z.string().describe("The registry name, for example io.github.owner/name, or the server's https URL as the registry lists it. The name is exact; the URL must match the registry entry.") },
+      outputSchema: {
+        ...SERVER_ROW,
+        url: z.string().describe('The endpoint the board probes'),
+        statusLabel: z.string().describe('The status in words, as the board shows it'),
+        httpStatus: nullableInt('The HTTP status of the first response'),
+        authScheme: nullableStr('The WWW-Authenticate scheme of a server that needs auth'),
+        authKind: nullableStr('How a client gets in: oauth-dcr (clients register themselves), oauth (client id from the publisher), token (a key in the Authorization header), unknown'),
+        authDocumentation: nullableStr("The publisher's guide to getting access"),
+        authMetadata: z.record(z.string(), z.unknown()).nullable().optional().describe('authorizationServers, scopesSupported, dynamicRegistration, pkce, grantTypes, from the OAuth metadata'),
+        claudeTokensClaudeCode: nullableInt('The exact count with the Claude Code prefix mcp__<server>__ on each tool name'),
+        claudeModel: nullableStr('The model the exact count is for'),
+        claudeError: nullableStr('Why the Anthropic endpoint refused to count'),
+        toolsTokensNote: z.string().optional(),
+        shareOf200k: z.number().nullable().optional().describe('Percent of a 200k window, exact when claudeTokens is present'),
+        latencyMs: z.object({ initialize: nullableInt('milliseconds'), toolsList: nullableInt('milliseconds') }).optional(),
+        topTools: z.array(z.object({ name: z.string(), tokens: z.number() })).nullable().optional().describe('The five most expensive tools: name and o200k_base tokens'),
+        probedAt: z.string().describe('ISO 8601 time of the probe')
+      }
     },
     async ({ nameOrUrl }) => {
       const name = /^https?:\/\//.test(nameOrUrl) ? await findByUrl(nameOrUrl) : nameOrUrl;
@@ -52,13 +89,22 @@ function build(): McpServer {
     'search_servers',
     {
       title: 'Search the registry board',
-      description: 'Find servers by words in name, title, description or host, with optional filters, sorted by exact Claude token cost by default. Returns up to 20 servers per page; page numbers go to 20, after that pass the `next` cursor from the previous answer. Sorting by the estimate, latency, protocol or registry date needs a query or a small status; on a bigger list the answer keeps the token order and says so in `sort`.',
+      description:
+        'Finds servers on the board by words in their name, title, description or host, with optional filters, sorted by exact Claude token cost (highest first) by default. Use it to discover servers or to compare costs; use lookup_server once you have a name. Returns up to 20 servers per page with name, host, status, tool count and tokens. Page numbers go to 20; after that pass the `next` value of the previous answer as `cursor`. Sorting by the estimate, latency, protocol or registry date needs a query or a small status; on a bigger list the answer keeps the token order and says so in `sort`.',
+      annotations: READ_ONLY,
       inputSchema: {
-        query: z.string().optional().describe('Words to match, three or more characters each'),
-        status: z.enum(['ok', 'auth', 'payment', 'newer_protocol', 'down']).optional().describe('ok = answers and lists tools'),
-        sort: z.enum(Object.keys(SORTS) as [SortKey, ...SortKey[]]).optional(),
-        page: z.number().int().min(1).max(MAX_NUMBERED_PAGE).optional(),
-        cursor: z.string().optional().describe('The `next` value of a previous answer, to continue from there')
+        query: z.string().optional().describe('Words to match, three or more characters each, as prefixes: "git copilot" finds the GitHub Copilot servers. Omit for the whole list.'),
+        status: z.enum(['ok', 'auth', 'payment', 'newer_protocol', 'down']).optional().describe('ok = answers and lists tools; auth = needs credentials; payment = 402; newer_protocol = a protocol newer than the SDK; down = every other failure. Omit for all.'),
+        sort: z.enum(Object.keys(SORTS) as [SortKey, ...SortKey[]]).optional().describe('claude = exact Claude tokens, highest first (default); claude-asc = lowest first; tokens = the o200k_base estimate; tools = tool count; latency = initialize time; name; updated = registry date'),
+        page: z.number().int().min(1).max(MAX_NUMBERED_PAGE).optional().describe(`Page number, 1 to ${MAX_NUMBERED_PAGE}, twenty servers each; default 1. Not with cursor.`),
+        cursor: z.string().optional().describe('The `next` value of a previous answer, to continue from there; replaces page')
+      },
+      outputSchema: {
+        page: z.number().int().optional().describe('The page number, absent when a cursor was used'),
+        sort: z.string().describe('The sort that was applied'),
+        hasNext: z.boolean(),
+        next: z.string().nullable().optional().describe('The cursor for the next page, when hasNext'),
+        servers: z.array(z.object(SERVER_ROW))
       }
     },
     async ({ query, status, sort, page, cursor }) => {
@@ -72,8 +118,33 @@ function build(): McpServer {
     'check_server',
     {
       title: 'Probe a server live',
-      description: 'Connects to an MCP server URL now (initialize and tools/list, no credentials, 10 s timeout) and reports status, protocol, tools and the token cost of the tool definitions: exact in Claude when the counter is available, else an estimate from the schema size. For registry servers prefer lookup_server.',
-      inputSchema: { url: z.string().url().describe('https URL of the MCP endpoint') }
+      description:
+        'Connects to an MCP server URL now (initialize and tools/list, 10 s timeout) and reports status, protocol, how a client gets access, tool names and the token cost of the tool definitions: exact in Claude when the counter is available, else an estimate from the schema size. Use it for a URL that is not in the official registry, or to see the state this minute; for a registry server prefer lookup_server, which is instant. Sends no credentials: a server that needs them comes back with status "auth", not an error. A URL that is not https, or a server that does not answer, returns its failure as status and error.',
+      annotations: READ_ONLY,
+      inputSchema: { url: z.string().url().describe('The https URL of the MCP endpoint, Streamable HTTP (…/mcp) or SSE (…/sse)') },
+      outputSchema: {
+        url: z.string(),
+        status: STATUS,
+        statusLabel: z.string().describe('The status in words'),
+        httpStatus: z.number().int().optional().describe('The HTTP status of the first response'),
+        authScheme: z.string().optional().describe('The WWW-Authenticate scheme of a server that needs auth'),
+        authKind: z.string().optional().describe('How a client gets in: oauth-dcr, oauth, token or unknown'),
+        authDocumentation: z.string().optional().describe("The publisher's guide to getting access"),
+        authMetadata: z.record(z.string(), z.unknown()).optional().describe('authorizationServers, scopesSupported, dynamicRegistration, pkce, grantTypes'),
+        protocolVersion: z.string().optional(),
+        serverInfo: z.record(z.string(), z.unknown()).optional().describe('name, version and title from initialize'),
+        toolCount: z.number().int().optional(),
+        toolsBytes: z.number().int().describe('Bytes of the compact JSON of every tool definition'),
+        claudeTokens: z.number().int().optional().describe('Exact count from the Anthropic count_tokens endpoint'),
+        claudeTokensClaudeCode: z.number().int().optional().describe('The exact count with the Claude Code prefix on each tool name'),
+        claudeModel: z.string().optional(),
+        claudeError: z.string().optional(),
+        toolsTokensEstimate: z.number().int().describe('Tokens estimated from the schema size at the registry median of 4.42 bytes per token'),
+        estimateNote: z.string(),
+        tools: z.array(z.string()).describe('The tool names, in the order the server lists them'),
+        latencyMs: z.object({ initialize: z.number().optional(), toolsList: z.number().optional() }),
+        error: z.string().optional().describe('The first line of the failure, when status is not ok')
+      }
     },
     async ({ url }) => {
       const u = new URL(url);
@@ -100,10 +171,32 @@ function build(): McpServer {
 
   server.registerTool(
     'registry_summary',
-    { title: 'Registry summary', description: 'Aggregates of the latest daily run: how many servers answer, token cost percentiles, protocol versions, heaviest servers.', inputSchema: {} },
+    {
+      title: 'Registry summary',
+      description:
+        'Aggregates of the latest daily run over the whole official MCP registry: how many servers answer and why the rest do not, token cost percentiles and the exact-to-estimate ratio, how servers authenticate, protocol versions, transports, the heaviest servers and the biggest publishers. Use it for the state of the registry as a whole; use lookup_server or search_servers for one server. No input; the answer is a few kilobytes of JSON.',
+      annotations: READ_ONLY,
+      inputSchema: {},
+      outputSchema: {
+        probedAt: z.string().describe('ISO 8601 time of the run'),
+        registryEntries: z.number().int().optional().describe('Entries in the registry'),
+        registryWithRemote: z.number().int().optional().describe('Entries with a remote endpoint'),
+        probed: z.number().int().optional().describe('Servers probed in this run'),
+        ok: z.number().int().optional().describe('Servers that answered initialize and tools/list'),
+        byStatus: z.record(z.string(), z.number()).optional().describe('Servers per status'),
+        authSchemes: z.record(z.string(), z.number()).optional().describe('Servers that need auth, per WWW-Authenticate scheme'),
+        authKinds: z.record(z.string(), z.number()).optional().describe('Servers that need auth, per kind of access: oauth-dcr, oauth, token, unknown'),
+        protocols: z.record(z.string(), z.number()).optional().describe('Alive servers per negotiated protocol version'),
+        transports: z.record(z.string(), z.number()).optional(),
+        toolsTokens: z.record(z.string(), z.unknown()).optional().describe('o200k_base estimate: median, p90, p99, max, total'),
+        claudeTokens: z.record(z.string(), z.unknown()).optional().describe('Exact Claude counts: model, counted, refused, median, p90, p99, max, histogram, ratioToEstimate'),
+        toolCount: z.record(z.string(), z.unknown()).optional().describe('median, p90, max')
+      }
+    },
     async () => {
       const run = await latestRun();
-      return { content: [{ type: 'text', text: JSON.stringify(run, null, 2) }], structuredContent: run ?? undefined };
+      if (!run) return { content: [{ type: 'text', text: 'The board has no run yet.' }], isError: true };
+      return { content: [{ type: 'text', text: JSON.stringify(run, null, 2) }], structuredContent: run as unknown as Record<string, unknown> };
     }
   );
   return server;
