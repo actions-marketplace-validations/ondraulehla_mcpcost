@@ -52,6 +52,13 @@ const TOKEN_FIELDS = {
   topTools: { type: 'array', description: 'The ten most expensive tools: name and o200k_base tokens', items: { type: 'object', properties: { name: { type: 'string' }, tokens: { type: 'integer' } } } }
 } as const;
 
+/** The board's JSON says null for a value it does not have; a schema that forbids null would reject every gated server. */
+function nullableProps<T extends Record<string, { type: string } & Record<string, unknown>>>(props: T): Record<keyof T, Record<string, unknown>> {
+  const out = {} as Record<keyof T, Record<string, unknown>>;
+  for (const k of Object.keys(props) as Array<keyof T>) out[k] = { ...props[k], type: [props[k].type, 'null'] };
+  return out;
+}
+
 const TOOLS = [
   {
     name: 'measure_server',
@@ -106,7 +113,7 @@ const TOOLS = [
     },
     outputSchema: {
       type: 'object',
-      properties: {
+      properties: nullableProps({
         name: { type: 'string', description: 'The registry name' },
         title: { type: 'string' },
         url: { type: 'string', description: 'The endpoint the board probes' },
@@ -127,7 +134,7 @@ const TOOLS = [
         topTools: { type: 'array', description: 'The five most expensive tools: name and o200k_base tokens' },
         probedAt: { type: 'string', description: 'ISO 8601 time of the probe' },
         page: { type: 'string', description: 'The server\'s page on the board' }
-      }
+      })
     }
   },
   {
@@ -147,7 +154,7 @@ const TOOLS = [
     },
     outputSchema: {
       type: 'object',
-      properties: {
+      properties: nullableProps({
         page: { type: 'integer' },
         perPage: { type: 'integer' },
         sort: { type: 'string', description: 'The sort that was applied; a big unfiltered list keeps the token order' },
@@ -158,7 +165,7 @@ const TOOLS = [
           type: 'array',
           items: {
             type: 'object',
-            properties: {
+            properties: nullableProps({
               name: { type: 'string', description: 'The registry name; the page on the board is https://mcpcost.ulehla.dev/s/<name>' },
               title: { type: 'string' },
               host: { type: 'string' },
@@ -173,10 +180,10 @@ const TOOLS = [
               claude_tokens: { type: 'integer', description: 'Exact Claude count, names as published' },
               claude_tokens_cc: { type: 'integer', description: 'Exact Claude count with the Claude Code prefix' },
               shown_tokens: { type: 'integer', description: 'The number the board shows: exact when it exists, else the estimate' }
-            }
+            })
           }
         }
-      }
+      })
     }
   }
 ] as const;

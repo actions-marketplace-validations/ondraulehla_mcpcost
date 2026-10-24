@@ -72,7 +72,7 @@ function build(): McpServer {
       const s = name ? await getServer(name) : null;
       if (!s) return { content: [{ type: 'text', text: `No registry server matches ${nameOrUrl}. Use check_server to probe a URL live.` }], isError: true };
       const out = {
-        name: s.name, title: s.title, url: s.url, status: s.status, statusLabel: label(s.status), httpStatus: s.http_status, authScheme: s.auth_scheme,
+        name: s.name, title: s.title, url: s.url, host: s.host, status: s.status, statusLabel: label(s.status), httpStatus: s.http_status, authScheme: s.auth_scheme,
         authKind: s.auth_kind, authDocumentation: s.auth_documentation, authMetadata: s.auth_metadata ? JSON.parse(s.auth_metadata) : null,
         protocolVersion: s.protocol_version, toolCount: s.tool_count,
         claudeTokens: s.claude_tokens, claudeTokensClaudeCode: s.claude_tokens_cc, claudeModel: s.claude_model, claudeError: s.claude_error,
