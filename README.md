@@ -78,13 +78,14 @@ The plugin adds one skill, `/mcpcost:measure`, which runs `npx mcpcost` on your 
 - **Statistics**: results by cause, token cost and tool count percentiles, the heaviest tool sets, protocol versions, auth schemes, transports, biggest publishers
 - **Servers**: full-text search over name, title, description and host (word prefixes, so `git copilot` finds the GitHub Copilot servers), filters by result, protocol and transport, seven sorts, and every filter is a plain URL you can share
 - **Server page**: status, latency, protocol, capabilities, the most expensive tools, servers with the same tool set, history, the badge, and e-mail alerts: a mail when the server stops answering, comes back, or its tool set or token cost changes
+- **Compare**: two to five servers side by side, status, access, tools, exact tokens, share of a 200k window, latency, with the cheapest and the spread; `/compare?s=<name>&s=<name>`, linked from every server page
 - **Track**: a server that is not in the registry can be tracked from the check page; the daily probe then measures it under the name `url/<host>/<path>`
 - **Hosts**: the 500 biggest publishers with how many distinct tool sets they actually serve
 - **Report**: one page a month, *The state of the MCP registry*, read from the daily runs, with a CC BY 4.0 dataset of every server
 
 ## For agents and scripts
 
-- JSON: `/api/s/<name>.json`, `/api/servers.json?q=…&status=ok&sort=tokens`, `/api/check.json?url=…`, `/api/summary.json`. The list API takes at most 6 requests in 10 seconds from one address; its answers are cached for three hours.
+- JSON: `/api/s/<name>.json`, `/api/lookup.json?url=…` (the board's row for an endpoint URL, no probe), `/api/servers.json?q=…&status=ok&sort=tokens`, `/api/check.json?url=…`, `/api/summary.json`. The list API takes at most 6 requests in 10 seconds from one address; its answers are cached for three hours.
 - MCP server over Streamable HTTP, no auth: `https://mcpcost.ulehla.dev/mcp` with the tools `lookup_server`, `search_servers`, `compare_servers`, `check_server`, `registry_summary`. The manifest for the registry is `site/server.json`.
 - `/llms.txt` lists all of it. `/tokens` answers the general question: how many context tokens does an MCP server cost.
 

@@ -20,6 +20,8 @@ Token counts: claudeTokens is exact. It comes from the Anthropic count_tokens en
 ## Machine access
 - JSON, one server: https://mcpcost.ulehla.dev/api/s/<registry name>.json
 - JSON, search: https://mcpcost.ulehla.dev/api/servers.json?q=<words>&status=ok&sort=claude&page=1 (at most 6 requests in 10 seconds from one address; answers are cached for three hours, so repeat a query freely)
+- JSON, the board's row for an endpoint URL, no probe: https://mcpcost.ulehla.dev/api/lookup.json?url=<https url> (302 to the server's JSON, 404 when the board does not know the URL)
+- Compare two to five servers side by side: https://mcpcost.ulehla.dev/compare?s=<name>&s=<name>
 - JSON, live probe: https://mcpcost.ulehla.dev/api/check.json?url=<https url>
 - JSON, run summary: https://mcpcost.ulehla.dev/api/summary.json
 - JSON, servers tracked outside the registry: https://mcpcost.ulehla.dev/api/tracked.json

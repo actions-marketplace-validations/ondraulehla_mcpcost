@@ -21,6 +21,7 @@ Crawl-delay: 2
 Disallow: /servers?
 Disallow: /api/
 Disallow: /check?
+Disallow: /compare?
 Disallow: /watch
 Disallow: /track
 Sitemap: https://mcpcost.ulehla.dev/sitemap.xml

@@ -1,7 +1,7 @@
 /**
  * mcpcost as an MCP server over stdio: the same measurements as the CLI, for
  * an agent that wants to know what a server costs before it is added to a
- * config. Two tools work offline (they probe the server themselves); three ask
+ * config. Two tools work offline (they probe the server themselves); four ask
  * the public board for registry data.
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -14,6 +14,9 @@ import type { ProbeResult } from './types.js';
 import { compare, formatComparison, rowFromBoard, unknownRow, COMPARE_FORMATS, type CompareFormat } from './compare.js';
 
 const BOARD = 'https://mcpcost.ulehla.dev';
+
+/** The board's JSON for a registry name, or for an endpoint URL through the lookup redirect; neither contacts the server. */
+const boardRowUrl = (nameOrUrl: string) => (/^https?:\/\//.test(nameOrUrl) ? `${BOARD}/api/lookup.json?url=${encodeURIComponent(nameOrUrl)}` : `${BOARD}/api/s/${nameOrUrl}.json`);
 
 function compact(r: ProbeResult, window: number) {
   return {
@@ -105,11 +108,11 @@ const TOOLS = [
     name: 'lookup_server',
     title: 'Look up a registry server on the board',
     description:
-      'Reads the public board\'s latest daily probe of one server in the official MCP registry: status, how a client gets access, the exact Claude token cost of its tool definitions, tool count, latency and the history of changes. With a registry name the answer is instant and no connection is made; with a URL the board probes the server live (10 s) and says whether it is in the registry. Use it when the server is in the registry; use search_servers when you do not know its name, and measure_server to probe a URL or a local command here. A name that is not on the board returns isError with a short message.',
+      'Reads the public board\'s latest daily probe of one server in the official MCP registry: status, how a client gets access, the exact Claude token cost of its tool definitions, tool count, latency and the history of changes. Instant, no connection to the server, with a registry name or with the endpoint URL as the registry lists it. Use it when the server is in the registry; use search_servers when you do not know its name, and measure_server to probe a URL or a local command here and now. A name or URL that is not on the board returns isError with a short message that points to measure_server.',
     annotations: READ_ONLY,
     inputSchema: {
       type: 'object',
-      properties: { nameOrUrl: { type: 'string', description: 'The registry name, for example io.github.owner/name (exact, instant), or an https URL of an MCP endpoint (probed live by the board)' } },
+      properties: { nameOrUrl: { type: 'string', description: 'The registry name, for example io.github.owner/name, or the https URL of the endpoint as the registry lists it; both are looked up on the board, nothing is contacted' } },
       required: ['nameOrUrl']
     },
     outputSchema: {
@@ -142,7 +145,7 @@ const TOOLS = [
     name: 'search_servers',
     title: 'Search the board',
     description:
-      'Finds servers on the public board by words in their name, title, description or host, with optional filters, sorted by exact Claude token cost (highest first) by default. Use it to discover servers or to compare costs; use lookup_server once you have a name. Returns up to twenty servers per page with name, host, status, tool count and tokens; `hasNext` says whether a next page exists.',
+      'Finds servers on the public board by words in their name, title, description or host, with optional filters, sorted by exact Claude token cost (highest first) by default. With no query and no filter it ranks the whole board, so page 1 is the most expensive servers in the registry and sort=claude-asc the cheapest. Use it to discover servers or to rank them by cost; use lookup_server once you have a name, compare_servers for a few side by side, registry_summary for the totals. Returns up to twenty servers per page with name, host, status, tool count and tokens; `hasNext` says whether a next page exists.',
     annotations: READ_ONLY,
     inputSchema: {
       type: 'object',
@@ -191,7 +194,7 @@ const TOOLS = [
     name: 'compare_servers',
     title: 'Compare servers side by side',
     description:
-      'Puts two to five servers next to each other from the board\'s latest daily probe: status, how a client gets in, tool count, token cost (exact in Claude when counted, else the estimate), share of a 200k window and initialize latency, with the cheapest, the most expensive and the spread. Use it to choose between servers that do the same job; use lookup_server for the full record of one server, search_servers to find candidates, and measure_server to measure a server that is not in the registry. A registry name is instant; a URL is probed live by the board (10 s). A name the board does not know gets a row with status "unknown" and the comparison goes on. format picks the text layout (JSON, a Markdown table, or CSV to paste into a spreadsheet); the structured content is always JSON.',
+      'Puts two to five servers next to each other from the board\'s latest daily probe: status, how a client gets in, tool count, token cost (exact in Claude when counted, else the estimate), share of a 200k window and initialize latency, with the cheapest, the most expensive and the spread. Use it to choose between servers that do the same job; use lookup_server for the full record of one server, search_servers to find candidates, and measure_server to measure a server that is not in the registry. Instant, no connection to the servers, with registry names or endpoint URLs as the registry lists them. A name the board does not know gets a row with status "unknown" and the comparison goes on. format picks the text layout (JSON, a Markdown table, or CSV to paste into a spreadsheet); the structured content is always JSON.',
     annotations: READ_ONLY,
     inputSchema: {
       type: 'object',
@@ -234,6 +237,32 @@ const TOOLS = [
         mostExpensive: { type: ['string', 'null'] },
         tokenSpread: { type: ['integer', 'null'], description: 'Tokens between the most expensive and the cheapest' },
         format: { type: 'string', enum: ['json', 'markdown', 'csv'] }
+      }
+    }
+  },
+  {
+    name: 'registry_summary',
+    title: 'The whole registry in numbers',
+    description:
+      'Aggregates of the board\'s latest daily run over the whole official MCP registry: how many servers answer and why the rest do not, token cost percentiles and the exact-to-estimate ratio, how servers authenticate, protocol versions, transports, the heaviest servers and the biggest publishers. Use it for the state of the registry as a whole, or as the baseline a single server is compared against; use search_servers for a ranked list and lookup_server for one server. Instant, no input, a few kilobytes of JSON.',
+    annotations: READ_ONLY,
+    inputSchema: { type: 'object', properties: {} },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        probedAt: { type: 'string', description: 'ISO 8601 time of the run' },
+        registryEntries: { type: 'integer', description: 'Entries in the registry' },
+        registryWithRemote: { type: 'integer', description: 'Entries with a remote endpoint' },
+        probed: { type: 'integer', description: 'Servers probed in this run' },
+        ok: { type: 'integer', description: 'Servers that answered initialize and tools/list' },
+        byStatus: { type: 'object', description: 'Servers per status', additionalProperties: { type: 'integer' } },
+        authSchemes: { type: 'object', description: 'Servers that need auth, per WWW-Authenticate scheme', additionalProperties: { type: 'integer' } },
+        authKinds: { type: 'object', description: 'Servers that need auth, per kind of access: oauth-dcr, oauth, token, unknown', additionalProperties: { type: 'integer' } },
+        protocols: { type: 'object', description: 'Alive servers per negotiated protocol version', additionalProperties: { type: 'integer' } },
+        transports: { type: 'object', additionalProperties: { type: 'integer' } },
+        toolsTokens: { type: 'object', description: 'o200k_base estimate: median, p90, p99, max, total' },
+        claudeTokens: { type: 'object', description: 'Exact Claude counts: model, counted, refused, median, p90, p99, max, histogram, ratioToEstimate' },
+        toolCount: { type: 'object', description: 'median, p90, max' }
       }
     }
   }
@@ -285,8 +314,7 @@ async function call(name: string, a: Args) {
     case 'lookup_server': {
       const nameOrUrl = str(a, 'nameOrUrl');
       if (!nameOrUrl) return fail('Give nameOrUrl.');
-      const url = /^https?:\/\//.test(nameOrUrl) ? `${BOARD}/api/check.json?url=${encodeURIComponent(nameOrUrl)}` : `${BOARD}/api/s/${nameOrUrl}.json`;
-      const res = await fetch(url, { headers: { accept: 'application/json', 'user-agent': `mcpcost/${VERSION}` } });
+      const res = await fetch(boardRowUrl(nameOrUrl), { headers: { accept: 'application/json', 'user-agent': `mcpcost/${VERSION}` } });
       if (!res.ok) return fail(`The board has no server ${nameOrUrl} (HTTP ${res.status}). Use measure_server to probe it now.`);
       return text(await res.json());
     }
@@ -309,9 +337,8 @@ async function call(name: string, a: Args) {
       const format = (COMPARE_FORMATS as readonly string[]).includes(str(a, 'format') ?? 'json') ? ((str(a, 'format') ?? 'json') as CompareFormat) : 'json';
       const rows = await Promise.all(
         ids.map(async (id) => {
-          const url = /^https?:\/\//.test(id) ? `${BOARD}/api/check.json?url=${encodeURIComponent(id)}` : `${BOARD}/api/s/${id}.json`;
           try {
-            const res = await fetch(url, { headers: { accept: 'application/json', 'user-agent': `mcpcost/${VERSION}` } });
+            const res = await fetch(boardRowUrl(id), { headers: { accept: 'application/json', 'user-agent': `mcpcost/${VERSION}` } });
             if (!res.ok) return unknownRow(id, res.status === 404 ? 'not on the board' : `the board answered HTTP ${res.status}`);
             return rowFromBoard((await res.json()) as Record<string, unknown>, id);
           } catch (e) {
@@ -321,6 +348,12 @@ async function call(name: string, a: Args) {
       );
       const out = compare(rows, format);
       return { content: [{ type: 'text' as const, text: formatComparison(out) }], structuredContent: out as unknown as Record<string, unknown> };
+    }
+    case 'registry_summary': {
+      const res = await fetch(`${BOARD}/api/summary.json`, { headers: { accept: 'application/json', 'user-agent': `mcpcost/${VERSION}` } });
+      if (!res.ok) return fail(`The board did not answer (HTTP ${res.status}).`);
+      const j = (await res.json()) as Record<string, unknown>;
+      return text((j.summary ?? j) as Record<string, unknown>);
     }
     default:
       return fail(`Unknown tool ${name}`);
@@ -333,7 +366,7 @@ export function buildServer(): Server {
     {
       capabilities: { tools: {} },
       instructions:
-        'Measures what MCP servers cost in context tokens. measure_server probes one server (remote URL or local command) now. measure_config measures every server in a config file. lookup_server, search_servers and compare_servers read the public board at mcpcost.ulehla.dev, which probes the whole registry daily. Token numbers are o200k_base estimates; with ANTHROPIC_API_KEY set, claudeTokens is the exact count from the free count_tokens endpoint.'
+        'Measures what MCP servers cost in context tokens. measure_server probes one server (remote URL or local command) now. measure_config measures every server in a config file. lookup_server, search_servers, compare_servers and registry_summary read the public board at mcpcost.ulehla.dev, which probes the whole registry daily; none of them contacts a server. Token numbers are o200k_base estimates; with ANTHROPIC_API_KEY set, claudeTokens is the exact count from the free count_tokens endpoint.'
     }
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS.map((t) => ({ ...t })) }));

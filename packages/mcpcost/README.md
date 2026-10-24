@@ -11,7 +11,7 @@ Every MCP server you configure hands your agent its tool definitions at the star
 ```
 $ npx mcpcost --config .mcp.json --tools 3
 
-mcpcost 0.3.3 · tool definitions your agent loads before the first prompt
+mcpcost 0.3.4 · tool definitions your agent loads before the first prompt
   .mcp.json
 
   server      source     result               tools  tokens  of 200k
@@ -63,7 +63,7 @@ mcpcost --stdio "<command args>"  measure one local server (repeatable)
 { "mcpServers": { "mcpcost": { "command": "npx", "args": ["-y", "mcpcost", "mcp"] } } }
 ```
 
-`mcpcost mcp` serves the same measurements over stdio, so an agent can check a server before it is added to a config. Five tools: `measure_server` (a remote URL or a local command, probed now), `measure_config` (every server in a config file), `lookup_server`, `search_servers` and `compare_servers` (the public board, which probes the whole registry daily; the comparison puts two to five servers side by side, as JSON, a Markdown table or CSV). With `ANTHROPIC_API_KEY` in the environment the counts are exact. The repository's `Dockerfile` builds the same server for containers.
+`mcpcost mcp` serves the same measurements over stdio, so an agent can check a server before it is added to a config. Six tools: `measure_server` (a remote URL or a local command, probed now), `measure_config` (every server in a config file), and four that read the public board, which probes the whole registry daily, without contacting a server: `lookup_server`, `search_servers`, `compare_servers` (two to five side by side, as JSON, a Markdown table or CSV) and `registry_summary` (the whole registry in numbers). With `ANTHROPIC_API_KEY` in the environment the counts are exact. The repository's `Dockerfile` builds the same server for containers.
 
 ## How tokens are counted
 

@@ -7,7 +7,8 @@ import { label } from '../lib/format';
 import { probeRemoteRaw } from '../../../packages/mcpcost/src/core.ts';
 import { payloadBytes, BYTES_PER_TOKEN } from '../../../packages/mcpcost/src/payload.ts';
 import { liveClaudeCount } from '../lib/claude';
-import { compare, formatComparison, unknownRow, type CompareRow } from '../../../packages/mcpcost/src/compare.ts';
+import { formatComparison } from '../../../packages/mcpcost/src/compare.ts';
+import { compareOnBoard } from '../lib/compare';
 
 const SITE = 'https://mcpcost.ulehla.dev';
 
@@ -91,7 +92,7 @@ function build(): McpServer {
     {
       title: 'Search the registry board',
       description:
-        'Finds servers on the board by words in their name, title, description or host, with optional filters, sorted by exact Claude token cost (highest first) by default. Use it to discover servers or to compare costs; use lookup_server once you have a name. Returns up to 20 servers per page with name, host, status, tool count and tokens. Page numbers go to 20; after that pass the `next` value of the previous answer as `cursor`. Sorting by the estimate, latency, protocol or registry date needs a query or a small status; on a bigger list the answer keeps the token order and says so in `sort`.',
+        'Finds servers on the board by words in their name, title, description or host, with optional filters, sorted by exact Claude token cost (highest first) by default. With no query and no filter it ranks the whole board, so page 1 is the most expensive servers in the registry and sort=claude-asc the cheapest. Use it to discover servers or to rank them by cost; use lookup_server once you have a name, compare_servers for a few side by side, registry_summary for the totals. Returns up to 20 servers per page with name, host, status, tool count and tokens. Page numbers go to 20; after that pass the `next` value of the previous answer as `cursor`. Sorting by the estimate, latency, protocol or registry date needs a query or a small status; on a bigger list the answer keeps the token order and says so in `sort`.',
       annotations: READ_ONLY,
       inputSchema: {
         query: z.string().optional().describe('Words to match, three or more characters each, as prefixes: "git copilot" finds the GitHub Copilot servers. Omit for the whole list.'),
@@ -208,21 +209,7 @@ function build(): McpServer {
       }
     },
     async ({ servers, format }) => {
-      const rows: CompareRow[] = await Promise.all(
-        servers.map(async (id) => {
-          const name = /^https?:\/\//.test(id) ? await findByUrl(id) : id;
-          const s = name ? await getServer(name) : null;
-          if (!s) return unknownRow(id);
-          const tokens = s.claude_tokens ?? s.tools_tokens;
-          return {
-            name: s.name, host: s.host, status: s.status, statusLabel: label(s.status), authKind: s.auth_kind,
-            toolCount: s.tool_count, claudeTokens: s.claude_tokens, toolsTokens: s.tools_tokens, tokens, exact: s.claude_tokens != null,
-            shareOf200k: tokens != null ? Number(((tokens / 200_000) * 100).toFixed(2)) : null,
-            initMs: s.init_ms, protocolVersion: s.protocol_version, probedAt: s.probed_at, page: `${SITE}/s/${s.name}`
-          };
-        })
-      );
-      const out = compare(rows, format ?? 'json');
+      const out = await compareOnBoard(servers, format ?? 'json');
       return { content: [{ type: 'text', text: formatComparison(out) }], structuredContent: out as unknown as Record<string, unknown> };
     }
   );

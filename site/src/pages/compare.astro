@@ -1,0 +1,75 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { compareIds, compareOnBoard, COMPARE_MAX } from '../lib/compare';
+import { bucket, num, date, authKindLabel } from '../lib/format';
+
+/**
+ * Two to five servers side by side, from the latest daily probe: one point read per name. The same
+ * comparison the MCP tool compare_servers gives, as a page you can link to.
+ */
+const ids = compareIds(Astro.url.searchParams.getAll('s'));
+const comparison = ids.length >= 2 ? await compareOnBoard(ids) : null;
+Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=86400');
+const slots = [...ids, ...Array(Math.max(0, COMPARE_MAX - ids.length)).fill('')].slice(0, COMPARE_MAX);
+const title = comparison ? `${ids.join(' vs ')} · compare` : 'Compare servers';
+const description = comparison
+  ? `${ids.length} MCP servers side by side: status, access, tools, token cost in Claude, share of a 200k window, latency.`
+  : 'Put two to five MCP servers from the official registry side by side: status, how a client gets in, tools, exact token cost in Claude, share of a 200k window, latency.';
+const robots = ids.length ? 'noindex, follow' : undefined;
+const mcpArgs = JSON.stringify({ servers: ids, format: 'markdown' });
+---
+
+<Layout title={title} description={description} robots={robots}>
+  <p class="kicker mono">compare</p>
+  <h1 class="poster">Servers side by side</h1>
+  <p class="lede">Two to five registry names, or endpoint URLs as the registry lists them. The numbers are the board's latest daily probe; nothing is contacted.</p>
+
+  <form class="checkform compare-form" method="get" action="/compare" style="margin-top:1.5rem">
+    {slots.map((v, i) => <input type="text" name="s" value={v} placeholder={i < 2 ? `server ${i + 1}, for example io.github.owner/name` : 'optional'} autocomplete="off" aria-label={`Server ${i + 1}`} required={i < 2} />)}
+    <button type="submit">Compare</button>
+  </form>
+
+  {ids.length === 1 && <p class="frame pad">Add at least one more server.</p>}
+
+  {comparison && (
+    <section class="panel" aria-labelledby="cmp-h">
+      <h2 id="cmp-h" class="panel-title">{comparison.measured} of {comparison.servers.length} measured</h2>
+      <div class="frame">
+        <table>
+          <thead><tr><th>Server</th><th>Status</th><th>Access</th><th class="num">Tools</th><th class="num">Tokens</th><th class="num">Of 200k</th><th class="num">Initialize</th><th>Protocol</th><th>Probed</th></tr></thead>
+          <tbody>
+            {comparison.servers.map((r) => (
+              <tr>
+                <td>{r.page ? <a href={r.page.replace('https://mcpcost.ulehla.dev', '')} class="mono">{r.name}</a> : <span class="mono">{r.name}</span>}{r.host && <><br /><span class="faint mono small">{r.host}</span></>}</td>
+                <td><span class={`tag ${r.status === 'unknown' ? 'down' : bucket(r.status)}`}>{r.status === 'unknown' ? 'not on the board' : r.statusLabel}</span></td>
+                <td class="small">{r.authKind ? authKindLabel(r.authKind) : ''}</td>
+                <td class="num">{r.toolCount == null ? '' : num(r.toolCount)}</td>
+                <td class="num">{r.tokens == null ? '' : `${r.exact ? '' : '≈ '}${num(r.tokens)}`}</td>
+                <td class="num">{r.shareOf200k == null ? '' : `${r.shareOf200k} %`}</td>
+                <td class="num">{r.initMs == null ? '' : `${num(r.initMs)} ms`}</td>
+                <td class="mono small">{r.protocolVersion ?? ''}</td>
+                <td class="small">{date(r.probedAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {comparison.cheapest
+        ? <p>Cheapest: <a href={`/s/${comparison.cheapest}`} class="mono">{comparison.cheapest}</a>. Most expensive: <a href={`/s/${comparison.mostExpensive}`} class="mono">{comparison.mostExpensive}</a>. Spread: {num(comparison.tokenSpread)} tokens. <span class="muted">A number with ≈ is the o200k_base estimate; the others are exact Claude counts.</span></p>
+        : <p class="muted">The spread needs two servers with a token number.</p>}
+      <p class="muted small">The same comparison for an agent: the tool <code>compare_servers</code> of <code>https://mcpcost.ulehla.dev/mcp</code> with <code>{mcpArgs}</code>, also as CSV with <code>"format": "csv"</code>.</p>
+    </section>
+  )}
+
+  {!comparison && (
+    <section class="panel">
+      <p class="muted">Try <a href="/compare?s=io.github.github/github-mcp-server&s=io.github.microsoft/playwright-mcp">two well-known servers</a>, or open any server page and follow "compare with other servers".</p>
+    </section>
+  )}
+</Layout>
+
+<style>
+  .compare-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .compare-form button { grid-column: 1 / -1; }
+  @media (max-width: 640px) { .compare-form { grid-template-columns: 1fr; } }
+</style>
