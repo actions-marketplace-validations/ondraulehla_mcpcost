@@ -15,6 +15,7 @@ on:
 permissions:
   contents: read
   issues: write
+  actions: read # the window step reads when the previous scheduled run was
 concurrency:
   group: watch
 jobs:
@@ -40,7 +41,8 @@ jobs:
         run: |
           from="${{ inputs.from }}"
           if [ -z "$from" ] && [ "${{ github.event_name }}" = "schedule" ]; then
-            prev=$(gh run list --workflow watch.yml --event schedule --status completed --limit 1 --json createdAt --jq '.[0].createdAt // empty')
+            # Without the previous run (the first schedule, or an API error) the window is the last hour, as before.
+            prev=$(gh run list --workflow watch.yml --event schedule --status completed --limit 1 --json createdAt --jq '.[0].createdAt // empty' || true)
             floor=$(date -u -d '24 hours ago' +%FT%TZ)
             if [ -n "$prev" ]; then
               from=$(date -u -d "$prev 3 minutes ago" +%FT%TZ)
