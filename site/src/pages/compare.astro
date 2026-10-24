@@ -21,6 +21,8 @@ const robots = ids.length ? 'noindex, follow' : undefined;
 const mcpArgs = JSON.stringify({ servers: ids, format: 'markdown' });
 
 const rows = comparison?.servers ?? [];
+/** A registry name breaks after its slash, not inside a word. */
+const parts = (name: string) => name.split('/');
 const byName = (n: string | null) => rows.find((r) => r.name === n);
 const cheapest = byName(comparison?.cheapest ?? null);
 const dearest = byName(comparison?.mostExpensive ?? null);
@@ -55,8 +57,8 @@ const why = (r: CompareRow): string => (r.status === 'unknown' ? 'not on the boa
   {comparison && (
     <>
       <div class="stats cmp-stats">
-        <div class="stat"><b>{cheapest ? num(cheapest.tokens) : '—'}</b><span>{cheapest ? <>tokens, the cheapest: <a href={`/s/${cheapest.name}`} class="mono">{cheapest.name}</a></> : 'cheapest: needs two measured servers'}</span></div>
-        <div class="stat"><b>{dearest ? num(dearest.tokens) : '—'}</b><span>{dearest ? <>tokens, the most expensive: <a href={`/s/${dearest.name}`} class="mono">{dearest.name}</a></> : 'most expensive: needs two measured servers'}</span></div>
+        <div class="stat"><b>{cheapest ? num(cheapest.tokens) : '—'}</b><span>{cheapest ? <>tokens, the cheapest: <a href={`/s/${cheapest.name}`} class="mono">{parts(cheapest.name).map((p, i) => <>{i > 0 && <>/<wbr /></>}{p}</>)}</a></> : 'cheapest: needs two measured servers'}</span></div>
+        <div class="stat"><b>{dearest ? num(dearest.tokens) : '—'}</b><span>{dearest ? <>tokens, the most expensive: <a href={`/s/${dearest.name}`} class="mono">{parts(dearest.name).map((p, i) => <>{i > 0 && <>/<wbr /></>}{p}</>)}</a></> : 'most expensive: needs two measured servers'}</span></div>
         <div class="stat"><b>{comparison.tokenSpread != null ? num(comparison.tokenSpread) : '—'}</b><span>tokens between them</span></div>
         <div class="stat"><b>{comparison.measured} of {rows.length}</b><span>have a token count</span></div>
       </div>
@@ -68,7 +70,7 @@ const why = (r: CompareRow): string => (r.status === 'unknown' ? 'not on the boa
               <th scope="col" class="cmp-label"><span class="visually-hidden">Fact</span></th>
               {rows.map((r) => (
                 <th scope="col">
-                  {r.page ? <a href={r.page.replace('https://mcpcost.ulehla.dev', '')} class="name">{r.name}</a> : <span class="name">{r.name}</span>}
+                  {r.page ? <a href={r.page.replace('https://mcpcost.ulehla.dev', '')} class="name">{parts(r.name).map((p, i) => <>{i > 0 && <>/<wbr /></>}{p}</>)}</a> : <span class="name">{parts(r.name).map((p, i) => <>{i > 0 && <>/<wbr /></>}{p}</>)}</span>}
                   {r.host && <span class="host">{r.host}</span>}
                 </th>
               ))}
@@ -139,14 +141,14 @@ const why = (r: CompareRow): string => (r.status === 'unknown' ? 'not on the boa
   .cmp-actions button:hover, .cmp-actions button:focus-visible { color: var(--surface); background-size: 100% 100%; }
 
   .cmp-stats { margin-top: 1.5rem; }
-  .cmp-stats .stat span a { color: var(--ink); text-decoration-color: var(--line); overflow-wrap: anywhere; }
+  .cmp-stats .stat span a { color: var(--ink); text-decoration-color: var(--line); overflow-wrap: break-word; }
 
   .cmp-frame { margin-top: 1px; }
   table.cmp { min-width: calc(11rem + var(--cols) * 11rem); table-layout: fixed; }
   table.cmp col { width: auto; }
   table.cmp th, table.cmp td { padding: 0.8rem 1rem; }
   table.cmp thead th { vertical-align: top; text-transform: none; letter-spacing: 0; font-family: var(--font-sans); white-space: normal; }
-  table.cmp thead th .name { display: block; font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600; letter-spacing: 0; color: var(--ink); overflow-wrap: anywhere; text-decoration: none; }
+  table.cmp thead th .name { display: block; font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600; letter-spacing: 0; color: var(--ink); overflow-wrap: break-word; text-decoration: none; }
   table.cmp thead th a.name:hover { color: var(--accent); }
   table.cmp thead th .host { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.72rem; font-weight: 400; color: var(--ink-faint); overflow-wrap: anywhere; }
   table.cmp .cmp-label, table.cmp tbody th { width: 11rem; position: sticky; left: 0; z-index: 1; background: var(--surface); }
@@ -160,12 +162,12 @@ const why = (r: CompareRow): string => (r.status === 'unknown' ? 'not on the boa
   table.cmp td .sub { display: block; margin-top: 0.2rem; font-family: var(--font-sans); font-size: 0.75rem; color: var(--ink-faint); white-space: normal; }
   table.cmp td.best { background: var(--up-soft); box-shadow: inset 3px 0 0 var(--up); }
   table.cmp td.best .sub { color: var(--up); }
-  table.cmp td.worst { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+  table.cmp td.worst { background: color-mix(in oklab, var(--accent) 7%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
   table.cmp td.worst .sub { color: var(--accent-strong); }
   table.cmp .none { color: var(--ink-faint); cursor: help; }
   table.cmp tbody tr:hover td { background: color-mix(in oklab, var(--accent) 4%, transparent); }
   table.cmp tbody tr:hover td.best { background: var(--up-soft); }
-  table.cmp tbody tr:hover td.worst { background: var(--accent-soft); }
+  table.cmp tbody tr:hover td.worst { background: color-mix(in oklab, var(--accent) 10%, transparent); }
   .cmp-note { margin-top: 0.875rem; }
   .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   @media (max-width: 640px) {
