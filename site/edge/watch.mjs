@@ -7,7 +7,9 @@
  *   CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… node site/edge/watch.mjs [from] [to]
  *
  * from and to are ISO 8601 times (UTC); without them, the hour that ended two minutes ago (the logs
- * arrive with a short delay). CLOUDFLARE_ZONE_TOKEN, when set and allowed Zone: Analytics: Read, adds
+ * arrive with a short delay). The workflow hands a scheduled run the time of the previous scheduled run as
+ * from, since GitHub runs a schedule late and skips hours at times; the thresholds apply to the worst hour
+ * of the window, so a long window reports the same as the hourly ones it stands in for. CLOUDFLARE_ZONE_TOKEN, when set and allowed Zone: Analytics: Read, adds
  * what the zone stopped before the Worker. Exit status 1 when a threshold is crossed, 2 when Cloudflare
  * could not be asked. The thresholds are the WATCH_* variables, per hour of the window.
  */
@@ -166,6 +168,33 @@ function kind(agent) {
   return 'tool';
 }
 const bump = (m, k, by = 1) => m.set(k, (m.get(k) ?? 0) + by);
+/** The hourly bucket with the most of a field: GitHub runs the schedule late and skips hours at times, so a window may span many. */
+function worstHour(byHour, field) {
+  let best = { hour: '', value: 0 };
+  for (const [hour, h] of byHour) if (h[field] > best.value) best = { hour, value: h[field] };
+  return best;
+}
+/** The most in any 60 minutes of a window, from ten-minute buckets keyed by ISO minute; a window under an hour is scaled up to one. */
+function worstSixty(byTen) {
+  if (hours < 1) {
+    const total = [...byTen.values()].reduce((a, b) => a + b, 0);
+    return { value: Math.round(total / hours), at: iso(to) };
+  }
+  const keys = [...byTen.keys()].sort();
+  let best = { value: 0, at: '' };
+  for (let i = 0; i < keys.length; i++) {
+    const start = Date.parse(keys[i]);
+    let sum = 0;
+    for (let j = i; j < keys.length && Date.parse(keys[j]) < start + 3_600_000; j++) sum += byTen.get(keys[j]);
+    if (sum > best.value) best = { value: sum, at: new Date(start + 3_600_000).toISOString().slice(11, 16) };
+  }
+  return best;
+}
+const tenMinutes = (e) => {
+  const ts = under(e, 'timestamp') ?? under(e, 'eventTimestamp');
+  const d = new Date(typeof ts === 'number' ? ts : Number(ts) || ts);
+  return Number.isNaN(d.getTime()) ? iso(from) : d.toISOString().slice(0, 15) + '0:00Z';
+};
 const sorted = (m) => [...m.entries()].sort((a, b) => b[1] - a[1]);
 
 /** What the zone stopped before the Worker, when the zone token may read analytics. */
@@ -232,6 +261,9 @@ say();
 const byNetwork = new Map();
 const byNetworkUnnamed = new Map();
 const byNetworkLists = new Map();
+const tenByNetworkUnnamed = new Map(); // network -> ten-minute bucket -> count
+const tenByNetworkLists = new Map();
+const tenOf = (m, k) => m.get(k) ?? m.set(k, new Map()).get(k);
 const byAgent = new Map();
 const byShape = new Map();
 const byStatus = new Map();
@@ -248,9 +280,16 @@ for (const e of logs.events) {
   const status = response && typeof response === 'object' ? (response.status ?? '-') : '-';
   const s = shape(url);
   const k = kind(agent);
+  const ten = tenMinutes(e);
   bump(byNetwork, network);
-  if (k !== 'named crawler') bump(byNetworkUnnamed, network);
-  if (/^\/servers\?|^\/api\/servers/.test(s)) bump(byNetworkLists, network);
+  if (k !== 'named crawler') {
+    bump(byNetworkUnnamed, network);
+    bump(tenOf(tenByNetworkUnnamed, network), ten);
+  }
+  if (/^\/servers\?|^\/api\/servers/.test(s)) {
+    bump(byNetworkLists, network);
+    bump(tenOf(tenByNetworkLists, network), ten);
+  }
   // A crawler behind a browser's agent string names itself at the end; show both ends.
   bump(byAgent, `${k}: ${agent.length > 100 ? `${agent.slice(0, 48)} … ${agent.slice(-48)}` : agent || '-'}`);
   bump(byShape, s);
@@ -300,15 +339,35 @@ else if (zone.stopped.length) {
   say();
 }
 
+// The thresholds are per hour, and a window can be many hours: what counts is the worst hour in it, not the average.
 const alarms = [];
-if (perHour(requests) > LIMITS.requests) alarms.push(`${fmt(perHour(requests))} Worker requests an hour, the threshold is ${fmt(LIMITS.requests)}`);
-for (const [network, n] of sorted(byNetworkUnnamed)) {
-  if (perHour(n) > LIMITS.network) alarms.push(`${fmt(perHour(n))} requests an hour from ${network} with agents that do not name a crawler, the threshold is ${fmt(LIMITS.network)}`);
+const peakRequests = worstHour(windowHours, 'requests');
+const peakRows = worstHour(d1Window, 'rowsRead');
+say('## The worst hour');
+say();
+say('| | most in an hour | when (UTC) |');
+say('|---|---:|---|');
+say(`| Worker requests | ${fmt(peakRequests.value)} | ${peakRequests.hour.slice(11, 16) || '-'} |`);
+say(`| D1 rows read | ${fmt(peakRows.value)} | ${peakRows.hour.slice(11, 16) || '-'} |`);
+for (const [network] of sorted(byNetworkUnnamed).slice(0, 3)) {
+  const w = worstSixty(tenByNetworkUnnamed.get(network));
+  say(`| ${network}, agents that do not name a crawler | ${fmt(w.value)} | to ${w.at} |`);
 }
-for (const [network, n] of sorted(byNetworkLists)) {
-  if (perHour(n) > LIMITS.lists) alarms.push(`${fmt(perHour(n))} list variants an hour from ${network}; robots.txt disallows them for everyone, the threshold is ${fmt(LIMITS.lists)}`);
+for (const [network] of sorted(byNetworkLists).slice(0, 3)) {
+  const w = worstSixty(tenByNetworkLists.get(network));
+  say(`| ${network}, list variants | ${fmt(w.value)} | to ${w.at} |`);
 }
-if (d1PerHour(rowsRead) > LIMITS.rowsRead) alarms.push(`${fmt(d1PerHour(rowsRead))} D1 rows read an hour, the threshold is ${fmt(LIMITS.rowsRead)}`);
+say();
+if (peakRequests.value > LIMITS.requests) alarms.push(`${fmt(peakRequests.value)} Worker requests in the hour from ${peakRequests.hour.slice(11, 16)} UTC, the threshold is ${fmt(LIMITS.requests)}`);
+for (const [network] of sorted(byNetworkUnnamed)) {
+  const w = worstSixty(tenByNetworkUnnamed.get(network));
+  if (w.value > LIMITS.network) alarms.push(`${fmt(w.value)} requests in the hour to ${w.at} UTC from ${network} with agents that do not name a crawler, the threshold is ${fmt(LIMITS.network)}`);
+}
+for (const [network] of sorted(byNetworkLists)) {
+  const w = worstSixty(tenByNetworkLists.get(network));
+  if (w.value > LIMITS.lists) alarms.push(`${fmt(w.value)} list variants in the hour to ${w.at} UTC from ${network}; robots.txt disallows them for everyone, the threshold is ${fmt(LIMITS.lists)}`);
+}
+if (peakRows.value > LIMITS.rowsRead) alarms.push(`${fmt(peakRows.value)} D1 rows read in the hour from ${peakRows.hour.slice(11, 16)} UTC, the threshold is ${fmt(LIMITS.rowsRead)}`);
 
 if (alarms.length) {
   say('## Over the threshold');
