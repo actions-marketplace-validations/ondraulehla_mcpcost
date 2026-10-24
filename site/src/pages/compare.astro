@@ -1,11 +1,13 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import { compareIds, compareOnBoard, COMPARE_MAX } from '../lib/compare';
-import { bucket, num, date, authKindLabel } from '../lib/format';
+import { bucket, num, date, authKindLabel, label } from '../lib/format';
+import type { CompareRow } from '../../../packages/mcpcost/src/compare.ts';
 
 /**
  * Two to five servers side by side, from the latest daily probe: one point read per name. The same
- * comparison the MCP tool compare_servers gives, as a page you can link to.
+ * comparison the MCP tool compare_servers gives, as a page you can link to. A comparison matrix:
+ * the servers are the columns, the facts are the rows, the best value of a row is marked.
  */
 const ids = compareIds(Astro.url.searchParams.getAll('s'));
 const comparison = ids.length >= 2 ? await compareOnBoard(ids) : null;
@@ -17,6 +19,15 @@ const description = comparison
   : 'Put two to five MCP servers from the official registry side by side: status, how a client gets in, tools, exact token cost in Claude, share of a 200k window, latency.';
 const robots = ids.length ? 'noindex, follow' : undefined;
 const mcpArgs = JSON.stringify({ servers: ids, format: 'markdown' });
+
+const rows = comparison?.servers ?? [];
+const byName = (n: string | null) => rows.find((r) => r.name === n);
+const cheapest = byName(comparison?.cheapest ?? null);
+const dearest = byName(comparison?.mostExpensive ?? null);
+const fastest = rows.filter((r) => r.initMs != null).sort((a, b) => a.initMs! - b.initMs!)[0];
+const measuredInit = rows.filter((r) => r.initMs != null).length;
+/** Why a row has no number: the reader should see a reason, not a hole. */
+const why = (r: CompareRow): string => (r.status === 'unknown' ? 'not on the board' : r.status === 'ok' ? 'not measured' : `${label(r.status)}, not measured`);
 ---
 
 <Layout title={title} description={description} robots={robots}>
@@ -24,52 +35,143 @@ const mcpArgs = JSON.stringify({ servers: ids, format: 'markdown' });
   <h1 class="poster">Servers side by side</h1>
   <p class="lede">Two to five registry names, or endpoint URLs as the registry lists them. The numbers are the board's latest daily probe; nothing is contacted.</p>
 
-  <form class="checkform compare-form" method="get" action="/compare" style="margin-top:1.5rem">
-    {slots.map((v, i) => <input type="text" name="s" value={v} placeholder={i < 2 ? `server ${i + 1}, for example io.github.owner/name` : 'optional'} autocomplete="off" aria-label={`Server ${i + 1}`} required={i < 2} />)}
-    <button type="submit">Compare</button>
+  <form class="cmp-form" method="get" action="/compare">
+    <ol>
+      {slots.map((v, i) => (
+        <li>
+          <label for={`s${i + 1}`} class="mono">{i + 1}</label>
+          <input id={`s${i + 1}`} type="text" name="s" value={v} placeholder={i < 2 ? 'io.github.owner/name or https://…/mcp' : 'optional'} autocomplete="off" spellcheck="false" required={i < 2} />
+        </li>
+      ))}
+    </ol>
+    <div class="cmp-actions">
+      <span class="muted small">Add a registry name per line. Two are enough; five fit.</span>
+      <button type="submit">Compare</button>
+    </div>
   </form>
 
   {ids.length === 1 && <p class="frame pad">Add at least one more server.</p>}
 
   {comparison && (
-    <section class="panel" aria-labelledby="cmp-h">
-      <h2 id="cmp-h" class="panel-title">{comparison.measured} of {comparison.servers.length} measured</h2>
-      <div class="frame">
-        <table>
-          <thead><tr><th>Server</th><th>Status</th><th>Access</th><th class="num">Tools</th><th class="num">Tokens</th><th class="num">Of 200k</th><th class="num">Initialize</th><th>Protocol</th><th>Probed</th></tr></thead>
+    <>
+      <div class="stats cmp-stats">
+        <div class="stat"><b>{cheapest ? num(cheapest.tokens) : '—'}</b><span>{cheapest ? <>tokens, the cheapest: <a href={`/s/${cheapest.name}`} class="mono">{cheapest.name}</a></> : 'cheapest: needs two measured servers'}</span></div>
+        <div class="stat"><b>{dearest ? num(dearest.tokens) : '—'}</b><span>{dearest ? <>tokens, the most expensive: <a href={`/s/${dearest.name}`} class="mono">{dearest.name}</a></> : 'most expensive: needs two measured servers'}</span></div>
+        <div class="stat"><b>{comparison.tokenSpread != null ? num(comparison.tokenSpread) : '—'}</b><span>tokens between them</span></div>
+        <div class="stat"><b>{comparison.measured} of {rows.length}</b><span>have a token count</span></div>
+      </div>
+
+      <div class="frame cmp-frame">
+        <table class="cmp" style={`--cols:${rows.length}`}>
+          <thead>
+            <tr>
+              <th scope="col" class="cmp-label"><span class="visually-hidden">Fact</span></th>
+              {rows.map((r) => (
+                <th scope="col">
+                  {r.page ? <a href={r.page.replace('https://mcpcost.ulehla.dev', '')} class="name">{r.name}</a> : <span class="name">{r.name}</span>}
+                  {r.host && <span class="host">{r.host}</span>}
+                </th>
+              ))}
+            </tr>
+          </thead>
           <tbody>
-            {comparison.servers.map((r) => (
-              <tr>
-                <td>{r.page ? <a href={r.page.replace('https://mcpcost.ulehla.dev', '')} class="mono">{r.name}</a> : <span class="mono">{r.name}</span>}{r.host && <><br /><span class="faint mono small">{r.host}</span></>}</td>
-                <td><span class={`tag ${r.status === 'unknown' ? 'down' : bucket(r.status)}`}>{r.status === 'unknown' ? 'not on the board' : r.statusLabel}</span></td>
-                <td class="small">{r.authKind ? authKindLabel(r.authKind) : ''}</td>
-                <td class="num">{r.toolCount == null ? '' : num(r.toolCount)}</td>
-                <td class="num">{r.tokens == null ? '' : `${r.exact ? '' : '≈ '}${num(r.tokens)}`}</td>
-                <td class="num">{r.shareOf200k == null ? '' : `${r.shareOf200k} %`}</td>
-                <td class="num">{r.initMs == null ? '' : `${num(r.initMs)} ms`}</td>
-                <td class="mono small">{r.protocolVersion ?? ''}</td>
-                <td class="small">{date(r.probedAt)}</td>
-              </tr>
-            ))}
+            <tr>
+              <th scope="row">Status</th>
+              {rows.map((r) => <td><span class={`tag ${r.status === 'unknown' ? 'down' : bucket(r.status)}`}>{r.status === 'unknown' ? 'not on the board' : r.statusLabel}</span></td>)}
+            </tr>
+            <tr>
+              <th scope="row">Access</th>
+              {rows.map((r) => <td>{r.authKind ? authKindLabel(r.authKind) : r.status === 'ok' ? <span class="faint">open, no credentials</span> : <span class="none" title={why(r)}>—</span>}</td>)}
+            </tr>
+            <tr>
+              <th scope="row">Tools</th>
+              {rows.map((r) => <td class="num">{r.toolCount == null ? <span class="none" title={why(r)}>—</span> : num(r.toolCount)}</td>)}
+            </tr>
+            <tr>
+              <th scope="row">Tokens<span class="sub">context the tool definitions take in Claude</span></th>
+              {rows.map((r) => (
+                <td class={`num ${r === cheapest && dearest ? 'best' : ''} ${r === dearest && cheapest ? 'worst' : ''}`}>
+                  {r.tokens == null ? <span class="none" title={why(r)}>—</span> : <><b>{r.exact ? '' : '≈ '}{num(r.tokens)}</b><span class="sub">{r.exact ? 'exact, count_tokens' : 'estimate, o200k_base'}{r === cheapest && dearest ? ' · cheapest' : ''}{r === dearest && cheapest ? ' · most expensive' : ''}</span></>}
+                </td>
+              ))}
+            </tr>
+            <tr>
+              <th scope="row">Of a 200k window</th>
+              {rows.map((r) => <td class="num">{r.shareOf200k == null ? <span class="none" title={why(r)}>—</span> : `${r.shareOf200k} %`}</td>)}
+            </tr>
+            <tr>
+              <th scope="row">Initialize</th>
+              {rows.map((r) => <td class={`num ${r === fastest && measuredInit > 1 ? 'best' : ''}`}>{r.initMs == null ? <span class="none" title={why(r)}>—</span> : <>{num(r.initMs)} ms{r === fastest && measuredInit > 1 && <span class="sub">fastest</span>}</>}</td>)}
+            </tr>
+            <tr>
+              <th scope="row">Protocol</th>
+              {rows.map((r) => <td class="mono">{r.protocolVersion ?? <span class="none" title={why(r)}>—</span>}</td>)}
+            </tr>
+            <tr>
+              <th scope="row">Probed</th>
+              {rows.map((r) => <td>{r.probedAt ? date(r.probedAt) : <span class="none" title={why(r)}>—</span>}</td>)}
+            </tr>
           </tbody>
         </table>
       </div>
-      {comparison.cheapest
-        ? <p>Cheapest: <a href={`/s/${comparison.cheapest}`} class="mono">{comparison.cheapest}</a>. Most expensive: <a href={`/s/${comparison.mostExpensive}`} class="mono">{comparison.mostExpensive}</a>. Spread: {num(comparison.tokenSpread)} tokens. <span class="muted">A number with ≈ is the o200k_base estimate; the others are exact Claude counts.</span></p>
-        : <p class="muted">The spread needs two servers with a token number.</p>}
-      <p class="muted small">The same comparison for an agent: the tool <code>compare_servers</code> of <code>https://mcpcost.ulehla.dev/mcp</code> with <code>{mcpArgs}</code>, also as CSV with <code>"format": "csv"</code>.</p>
-    </section>
+
+      <p class="muted small cmp-note">A number with ≈ is the o200k_base estimate; the others are exact Claude counts. A dash has a reason on hover. The same comparison for an agent: the tool <code>compare_servers</code> of <code>https://mcpcost.ulehla.dev/mcp</code> with <code>{mcpArgs}</code>, also as CSV with <code>"format": "csv"</code>.</p>
+    </>
   )}
 
   {!comparison && (
-    <section class="panel">
-      <p class="muted">Try <a href="/compare?s=io.github.github/github-mcp-server&s=io.github.microsoft/playwright-mcp">two well-known servers</a>, or open any server page and follow "compare with other servers".</p>
-    </section>
+    <p class="muted cmp-note">Try <a href="/compare?s=io.github.github/github-mcp-server&s=io.github.microsoft/playwright-mcp&s=io.github.arcmira/arcmira">three well-known servers</a>, or open any server page and follow "compare with other servers".</p>
   )}
 </Layout>
 
 <style>
-  .compare-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .compare-form button { grid-column: 1 / -1; }
-  @media (max-width: 640px) { .compare-form { grid-template-columns: 1fr; } }
+  .cmp-form { margin-top: 1.5rem; border: 1px solid var(--line); background: var(--surface); transition: border-color 0.25s, box-shadow 0.25s; }
+  .cmp-form:focus-within { border-color: var(--accent); box-shadow: 0 12px 40px var(--glow); }
+  .cmp-form ol { list-style: none; margin: 0; padding: 0; }
+  .cmp-form li { display: grid; grid-template-columns: 3rem 1fr; align-items: stretch; border-bottom: 1px solid var(--line); }
+  .cmp-form label { display: flex; align-items: center; justify-content: center; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.12em; color: var(--ink-faint); border-right: 1px solid var(--line); background: color-mix(in oklab, var(--accent) 4%, transparent); }
+  .cmp-form input { border: 0; padding: 0.8rem 1rem; font-size: 0.95rem; font-family: var(--font-mono); background: transparent; color: var(--ink); min-width: 0; }
+  .cmp-form input:focus { outline: none; background: color-mix(in oklab, var(--accent) 5%, transparent); }
+  .cmp-form li:has(input:placeholder-shown) label { color: var(--line); background: transparent; }
+  .cmp-form li:nth-child(n+3) input::placeholder { color: color-mix(in oklab, var(--ink-faint) 55%, transparent); }
+  .cmp-actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-left: 1rem; }
+  .cmp-actions button { border: 0; border-left: 1px solid var(--line); padding: 0.9rem 1.5rem; background-color: transparent; color: var(--accent); font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.15em; text-transform: uppercase; font-weight: 600; cursor: pointer; background-image: linear-gradient(var(--ink), var(--ink)); background-position: bottom; background-repeat: no-repeat; background-size: 100% 0%; transition: background-size 0.28s var(--ease-out-quint), color 0.18s 60ms; }
+  .cmp-actions button:hover, .cmp-actions button:focus-visible { color: var(--surface); background-size: 100% 100%; }
+
+  .cmp-stats { margin-top: 1.5rem; }
+  .cmp-stats .stat span a { color: var(--ink); text-decoration-color: var(--line); overflow-wrap: anywhere; }
+
+  .cmp-frame { margin-top: 1px; }
+  table.cmp { min-width: calc(11rem + var(--cols) * 11rem); table-layout: fixed; }
+  table.cmp col { width: auto; }
+  table.cmp th, table.cmp td { padding: 0.8rem 1rem; }
+  table.cmp thead th { vertical-align: top; text-transform: none; letter-spacing: 0; font-family: var(--font-sans); white-space: normal; }
+  table.cmp thead th .name { display: block; font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600; letter-spacing: 0; color: var(--ink); overflow-wrap: anywhere; text-decoration: none; }
+  table.cmp thead th a.name:hover { color: var(--accent); }
+  table.cmp thead th .host { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.72rem; font-weight: 400; color: var(--ink-faint); overflow-wrap: anywhere; }
+  table.cmp .cmp-label, table.cmp tbody th { width: 11rem; position: sticky; left: 0; z-index: 1; background: var(--surface); }
+  table.cmp thead .cmp-label { background: color-mix(in oklab, var(--accent) 8%, var(--surface)); }
+  table.cmp tbody th { text-align: left; font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-muted); border-top: 1px solid var(--line); border-bottom: 0; border-right: 1px solid var(--line); background: var(--surface); vertical-align: top; }
+  table.cmp tbody tr:first-child th { border-top: 0; }
+  table.cmp tbody th .sub { display: block; margin-top: 0.3rem; font-family: var(--font-sans); font-size: 0.75rem; letter-spacing: 0; text-transform: none; color: var(--ink-faint); font-weight: 400; }
+  table.cmp td { color: var(--ink); font-size: 0.9rem; }
+  table.cmp td.num { font-size: 0.95rem; }
+  table.cmp td b { font-family: var(--font-display); font-weight: 600; font-size: 1.25rem; letter-spacing: -0.02em; }
+  table.cmp td .sub { display: block; margin-top: 0.2rem; font-family: var(--font-sans); font-size: 0.75rem; color: var(--ink-faint); white-space: normal; }
+  table.cmp td.best { background: var(--up-soft); box-shadow: inset 3px 0 0 var(--up); }
+  table.cmp td.best .sub { color: var(--up); }
+  table.cmp td.worst { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+  table.cmp td.worst .sub { color: var(--accent-strong); }
+  table.cmp .none { color: var(--ink-faint); cursor: help; }
+  table.cmp tbody tr:hover td { background: color-mix(in oklab, var(--accent) 4%, transparent); }
+  table.cmp tbody tr:hover td.best { background: var(--up-soft); }
+  table.cmp tbody tr:hover td.worst { background: var(--accent-soft); }
+  .cmp-note { margin-top: 0.875rem; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  @media (max-width: 640px) {
+    .cmp-actions { flex-direction: column; align-items: stretch; padding-left: 0; }
+    .cmp-actions span { padding: 0.75rem 1rem 0; }
+    .cmp-actions button { border-left: 0; border-top: 1px solid var(--line); }
+    table.cmp .cmp-label, table.cmp tbody th { width: 8rem; }
+  }
 </style>
