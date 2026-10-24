@@ -30,12 +30,31 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - name: Look at the last hour
+      - name: Pick the window
+        id: window
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # GitHub runs a schedule late and skips hours at times (three runs in the night of 2026-10-23, not twelve).
+        # A scheduled run starts where the previous scheduled run ended, up to a day back, so no hour goes unwatched.
+        run: |
+          from="${{ inputs.from }}"
+          if [ -z "$from" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            prev=$(gh run list --workflow watch.yml --event schedule --status completed --limit 1 --json createdAt --jq '.[0].createdAt // empty')
+            floor=$(date -u -d '24 hours ago' +%FT%TZ)
+            if [ -n "$prev" ]; then
+              from=$(date -u -d "$prev 3 minutes ago" +%FT%TZ)
+              [ "$from" \< "$floor" ] && from=$floor
+            fi
+          fi
+          echo "from=$from" >> "$GITHUB_OUTPUT"
+          echo "window starts at ${from:-one hour ago}"
+      - name: Look at the window
         id: watch
         continue-on-error: true
         env:
           WATCH_REPORT_FILE: ${{ runner.temp }}/watch.md
-        run: node site/edge/watch.mjs "${{ inputs.from }}" "${{ inputs.to }}"
+        run: node site/edge/watch.mjs "${{ steps.window.outputs.from }}" "${{ inputs.to }}"
       - name: Open or update the edge-watch issue
         if: ${{ steps.watch.outcome == 'failure' && steps.watch.outputs.alarm != '' }}
         env:
