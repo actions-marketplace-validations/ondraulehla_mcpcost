@@ -122,7 +122,7 @@ const why = (r: CompareRow): string => (r.status === 'unknown' ? 'not on the boa
   )}
 
   {!comparison && (
-    <p class="muted cmp-note">Try <a href="/compare?s=io.github.github/github-mcp-server&s=io.github.microsoft/playwright-mcp&s=io.github.arcmira/arcmira">three well-known servers</a>, or open any server page and follow "compare with other servers".</p>
+    <p class="muted cmp-note">Try <a href="/compare?s=io.github.upstash/context7&s=io.github.microsoft/playwright-mcp&s=ai.kifly/mcp&s=io.github.pipeworx-io/cloudflare-radar&s=io.github.kylehawke-stack/locationlists">five servers that answer</a>, from two tools to sixteen tools that cost a third of the window, or open any server page and follow "compare with other servers".</p>
   )}
 </Layout>
 
@@ -147,6 +147,10 @@ const why = (r: CompareRow): string => (r.status === 'unknown' ? 'not on the boa
   table.cmp { min-width: calc(11rem + var(--cols) * 11rem); table-layout: fixed; }
   table.cmp col { width: auto; }
   table.cmp th, table.cmp td { padding: 0.8rem 1rem; }
+  table.cmp thead th + th, table.cmp tbody td { border-left: 1px solid var(--line); }
+  table.cmp thead th + th { border-left-color: color-mix(in oklab, var(--accent) 30%, var(--line)); }
+  table.cmp tbody td:nth-child(even) { background: color-mix(in oklab, var(--ink) 2.5%, transparent); }
+  table.cmp tbody tr:hover td:nth-child(even) { background: color-mix(in oklab, var(--accent) 6%, transparent); }
   table.cmp thead th { vertical-align: top; text-transform: none; letter-spacing: 0; font-family: var(--font-sans); white-space: normal; }
   table.cmp thead th .name { display: block; font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600; letter-spacing: 0; color: var(--ink); overflow-wrap: break-word; text-decoration: none; }
   table.cmp thead th a.name:hover { color: var(--accent); }
