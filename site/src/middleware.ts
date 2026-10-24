@@ -53,7 +53,7 @@ function limitResponse(url: URL, message: string): Response {
  * them (ShapBot, from Google Cloud addresses) made 85 000 requests in a day and spent the
  * Worker's free-plan request limit; a WAF rule on the zone stops them before the Worker.
  */
-const BLOCKED_AGENTS = /ShapBot|SemrushBot|DataForSeoBot|AhrefsBot|MJ12bot|DotBot|PetalBot|Bytespider|BLEXBot|serpstatbot|ZoominfoBot|Barkrowler|ImagesiftBot/i;
+const BLOCKED_AGENTS = /ShapBot|SemrushBot|DataForSeoBot|AhrefsBot|MJ12bot|DotBot|PetalBot|Bytespider|BLEXBot|serpstatbot|ZoominfoBot|Barkrowler|ImagesiftBot|meta-externalagent/i;
 
 /**
  * Networks that scraped the list on the nights of 2026-10-22 and 23: Chrome user agents from hosting addresses that

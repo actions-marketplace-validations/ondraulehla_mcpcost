@@ -11,7 +11,7 @@ import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.
 import type { jsonSchemaValidator, JsonSchemaValidator, JsonSchemaValidatorResult } from '@modelcontextprotocol/sdk/validation/types.js';
 import type { AuthKind, AuthMetadata, ProbeResult, ProbeStatus, RemoteTransport } from './types.js';
 
-export const VERSION = '0.3.1';
+export const VERSION = '0.3.4';
 export const USER_AGENT = `mcpcost/${VERSION} (mcpcost; +https://github.com/ondraulehla/mcpcost)`;
 
 export interface RawTool {

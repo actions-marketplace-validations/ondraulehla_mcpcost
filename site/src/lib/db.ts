@@ -148,6 +148,12 @@ export async function recentRuns(limit = 14): Promise<RunSummary[]> {
   return results.map((r) => JSON.parse(r.summary) as RunSummary);
 }
 
+/** The runs from one date to another (ISO prefixes, the end excluded), oldest first. The monthly report reads one month this way. */
+export async function runsBetween(from: string, to: string): Promise<RunSummary[]> {
+  const { results } = await db().prepare('SELECT summary FROM runs WHERE probed_at >= ? AND probed_at < ? ORDER BY probed_at').bind(from, to).all<{ summary: string }>();
+  return results.map((r) => JSON.parse(r.summary) as RunSummary);
+}
+
 /** The headline numbers: exact Claude counts when the run has them, else the estimate. */
 export function headline(run: RunSummary): { stats: TokenStats; exact: boolean; model?: string } {
   return run.claudeTokens ? { stats: run.claudeTokens, exact: true, model: run.claudeTokens.model } : { stats: run.toolsTokens, exact: false };

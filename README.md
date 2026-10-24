@@ -78,13 +78,15 @@ The plugin adds one skill, `/mcpcost:measure`, which runs `npx mcpcost` on your 
 - **Statistics**: results by cause, token cost and tool count percentiles, the heaviest tool sets, protocol versions, auth schemes, transports, biggest publishers
 - **Servers**: full-text search over name, title, description and host (word prefixes, so `git copilot` finds the GitHub Copilot servers), filters by result, protocol and transport, seven sorts, and every filter is a plain URL you can share
 - **Server page**: status, latency, protocol, capabilities, the most expensive tools, servers with the same tool set, history, the badge, and e-mail alerts: a mail when the server stops answering, comes back, or its tool set or token cost changes
+- **Compare**: two to five servers side by side, status, access, tools, exact tokens, share of a 200k window, latency, with the cheapest and the spread; `/compare?s=<name>&s=<name>`, linked from every server page
 - **Track**: a server that is not in the registry can be tracked from the check page; the daily probe then measures it under the name `url/<host>/<path>`
 - **Hosts**: the 500 biggest publishers with how many distinct tool sets they actually serve
+- **Report**: one page a month, *The state of the MCP registry*, read from the daily runs, with a CC BY 4.0 dataset of every server
 
 ## For agents and scripts
 
-- JSON: `/api/s/<name>.json`, `/api/servers.json?q=…&status=ok&sort=tokens`, `/api/check.json?url=…`, `/api/summary.json`. The list API takes at most 6 requests in 10 seconds from one address; its answers are cached for three hours.
-- MCP server over Streamable HTTP, no auth: `https://mcpcost.ulehla.dev/mcp` with the tools `lookup_server`, `search_servers`, `check_server`, `registry_summary`. The manifest for the registry is `site/server.json`.
+- JSON: `/api/s/<name>.json`, `/api/lookup.json?url=…` (the board's row for an endpoint URL, no probe), `/api/servers.json?q=…&status=ok&sort=tokens`, `/api/check.json?url=…`, `/api/summary.json`. The list API takes at most 6 requests in 10 seconds from one address; its answers are cached for three hours.
+- MCP server over Streamable HTTP, no auth: `https://mcpcost.ulehla.dev/mcp` with the tools `lookup_server`, `search_servers`, `compare_servers`, `check_server`, `registry_summary`. The manifest for the registry is `site/server.json`.
 - `/llms.txt` lists all of it. `/tokens` answers the general question: how many context tokens does an MCP server cost.
 
 Each server on the board gets a page and a badge:
@@ -123,6 +125,12 @@ Of the 12 975 servers that answered:
 - 122 servers answer with protocol `2026-07-28`, which the current TypeScript SDK rejects
 
 The registry is lumpy. 16 161 of 16 534 hosts publish one server. Five hosts publish more than 6 000 entries between them: one Workers subdomain with 2 365 near-identical entries, a gateway with 1 716 entries of which 1 321 return a JSON-RPC error on `initialize`, and a host with 276 entries that all answer 402.
+
+## The monthly report and the dataset
+
+[/report/2026-10](https://mcpcost.ulehla.dev/report/2026-10) is *The state of the MCP registry, October 2026*: the registry in numbers, what changed between the first full run and the run of 2026-10-24, token cost, auth, the lumps, protocol versions, what the registry does not catch, and the method in six sentences. The page reads only the `runs` table (every run of the month, one query) and is cached for a day, so it costs nothing on the free tier. `/report` lists the months; `site/src/lib/reports.ts` has one entry per report with the day of the run it is pinned to. The dataset that goes with it, `data/mcpcost-2026-10.json.gz` on the site, has one row per probed server: name, host, transport, status, HTTP status, auth scheme and kind, protocol version, tool count, the o200k estimate, the exact Claude counts and the probe time. A row's numbers are what `/api/s/<name>.json` gives for that server on that day. The licence is CC BY 4.0; the document carries the licence, the field list and a citation at the top. `probe/dataset.ts` writes `data/latest/dataset.json` and its gzip on every daily run (kept in the run artifact), and `--publish site/public/data/mcpcost-YYYY-MM.json.gz` copies the gzip into the site when it is under 10 MB: a static file is served before the Worker and costs no request. A bigger file would go out as a GitHub release asset instead. To publish a month: run the probe or download the run artifact into `data/latest`, run `node --import tsx probe/dataset.ts --publish site/public/data/mcpcost-YYYY-MM.json.gz`, add the month to `reports.ts`, write the page, and commit the file with it.
+
+The same run goes out as re-check evidence for the registry, in the row shape agreed in [modelcontextprotocol/registry#1715](https://github.com/modelcontextprotocol/registry/issues/1715): `entry`, `checked_at`, `check` (endpoint or package), `state` (alive, auth, transient, dead, unknown) and `evidence`. `probe/dataset.ts` writes it daily next to the dataset, and the month's copy is `/data/mcpcost-evidence-YYYY-MM.json.gz`.
 
 ## How it works
 
@@ -182,6 +190,7 @@ Deploying needs a Cloudflare account with a D1 database named `mcpcost` (`wrangl
 
 The Workers Free plan counts every request the Worker answers, a 403 as much as a page. On 2026-10-22 and 23 scrapers with Chrome user agents on hosting addresses (Meta's cloud, Alibaba Cloud, RapidSeedbox) made 4 000 list variants an hour and spent the account's 100 000 requests a day, although the Worker refused them. What stops them must run before the Worker: `site/edge/rules.mjs` writes the zone's WAF rules through the API, idempotently.
 
+- a custom rule that blocks Meta's training crawler, `meta-externalagent`, on the whole host: a verified bot that ignores robots.txt, made 28 000 of the Worker's 31 000 requests in the twelve hours to 2026-10-24 05:42 UTC, and sends no readers (the link preview `facebookexternalhit` is not blocked)
 - a custom rule that blocks those networks on the whole host, verified bots excepted
 - a custom rule that gives every list variant (`/servers?…`) from anything but a verified bot a managed challenge; a browser passes it once, a script does not. The list API (`/api/servers.json`) is not in it: scripts and agents cannot pass a challenge, so the API stays open under the rate limiting rule
 - a custom rule that blocks a verified bot on the list variants: robots.txt disallows them for everyone, search engines never ask, and Meta's crawler (meta-externalagent behind a Chrome agent string) walked 3 000 of them an hour on 2026-10-23

@@ -113,6 +113,12 @@ jobs:
           else
             node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql --write-budget "$budget" $d1
           fi
+      - name: Write the open dataset of the run
+        # One row per probed server, the numbers the board shows, CC BY 4.0, plus the same run as re-check evidence for the registry
+        # (modelcontextprotocol/registry#1715). The monthly report publishes both as static files:
+        # node --import tsx probe/dataset.ts --publish site/public/data/mcpcost-YYYY-MM.json.gz --publish-evidence site/public/data/mcpcost-evidence-YYYY-MM.json.gz, then commit them.
+        if: ${{ inputs.sample == '' }}
+        run: node --import tsx probe/dataset.ts --in data/latest --out data/latest
       - name: Find the open-source packages of servers that need auth
         # Reads the repositories the registry names, at most a few hundred an hour; the result feeds the stdio run.
         if: ${{ inputs.sample == '' }}
@@ -162,6 +168,7 @@ jobs:
             data/raw/probe-run.json
             data/latest/servers.json
             data/latest/hosts.json
+            data/latest/dataset.json.gz
           retention-days: 90
           compression-level: 9
       - name: Tell IndexNow which pages changed

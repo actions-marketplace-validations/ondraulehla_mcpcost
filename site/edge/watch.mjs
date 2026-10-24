@@ -226,8 +226,13 @@ const say = (s = '') => {
 };
 
 const midnight = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate()));
-const [windowHours, dayHours, d1, logs, zone, queries] = await Promise.all([
+// The analytics group by the hour and keep only the requests inside the window, so an hour the window starts in
+// would come back as a part. The worst-hour search starts at the whole hour, so the hour the window starts in is
+// judged whole; the window's own totals keep the exact window.
+const wholeHour = new Date(Math.floor(from.getTime() / 3_600_000) * 3_600_000);
+const [windowHours, peakHours, dayHours, d1, logs, zone, queries] = await Promise.all([
   workerHours(from, to),
+  workerHours(wholeHour, to),
   workerHours(midnight, to),
   d1Hours(midnight.toISOString().slice(0, 10)),
   events(from, to).catch((e) => ({ events: [], truncated: false, error: e.message })),
@@ -343,7 +348,7 @@ else if (zone.stopped.length) {
 
 // The thresholds are per hour, and a window can be many hours: what counts is the worst hour in it, not the average.
 const alarms = [];
-const peakRequests = worstHour(windowHours, 'requests');
+const peakRequests = worstHour(peakHours, 'requests');
 const peakRows = worstHour(d1Window, 'rowsRead');
 say('## The worst hour');
 say();

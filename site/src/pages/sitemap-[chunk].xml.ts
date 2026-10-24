@@ -12,7 +12,7 @@ export const GET: APIRoute = async ({ params, site }) => {
   const lastmod = run?.probedAt.slice(0, 10) ?? new Date().toISOString().slice(0, 10);
   let entries: Array<{ loc: string; lastmod: string }>;
   if (params.chunk === 'pages') {
-    entries = ['/', '/tokens', '/servers', '/statistics', '/hosts', '/check', '/methodology'].map((p) => ({ loc: `${base}${p}`, lastmod }));
+    entries = ['/', '/tokens', '/servers', '/statistics', '/hosts', '/check', '/methodology', '/report', '/report/2026-10'].map((p) => ({ loc: `${base}${p}`, lastmod }));
   } else {
     const n = Number(params.chunk);
     if (!/^\d{1,9}$/.test(params.chunk ?? '')) return new Response('Not found', { status: 404 });

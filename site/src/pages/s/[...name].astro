@@ -255,6 +255,8 @@ const jsonld = {
     </section>
   )}
 
+  <p class="muted small"><a href={`/compare?s=${encodeURIComponent(name)}`}>Compare this server with others</a>{siblings.length > 0 && <>, or <a href={`/compare?s=${encodeURIComponent(name)}${siblings.slice(0, 4).map((s) => `&s=${encodeURIComponent(s.name)}`).join('')}`}>with the servers that share its tool set</a></>}.</p>
+
   {siblings.length > 0 && (
     <section class="panel" aria-labelledby="same-h">
       <h2 id="same-h" class="panel-title">Same tool set as {num(server.toolset_siblings)} other server{server.toolset_siblings === 1 ? '' : 's'}</h2>

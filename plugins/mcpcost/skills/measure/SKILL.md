@@ -31,4 +31,4 @@ Every MCP server hands the agent its tool definitions at the start of a session.
 
 ## Look up a server before it is added
 
-The `mcpcost` MCP server of this plugin answers for every server in the official MCP registry: `lookup_server`, `search_servers`, `check_server` (a live probe of any URL) and `registry_summary`. Use it when the user considers a server and wants to know if it is alive and what it costs before it goes into the config.
+The `mcpcost` MCP server of this plugin answers for every server in the official MCP registry: `lookup_server`, `search_servers`, `compare_servers` (two to five servers side by side), `check_server` (a live probe of any URL) and `registry_summary`. Use it when the user considers a server and wants to know if it is alive and what it costs before it goes into the config.
