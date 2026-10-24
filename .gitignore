@@ -13,3 +13,5 @@ data/latest/hosts.json
 data/indexnow.env
 site/.dev.vars
 probe/stdio/mcpcost-*.tgz
+data/latest/dataset.json
+data/latest/dataset.json.gz

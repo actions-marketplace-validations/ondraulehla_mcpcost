@@ -1,0 +1,36 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { latestRun } from '../../lib/db';
+import { REPORTS, monthName } from '../../lib/reports';
+import { num, date } from '../../lib/format';
+
+const run = await latestRun();
+Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=86400');
+const reports = [...REPORTS].reverse();
+---
+
+<Layout title="Reports: the state of the MCP registry" description="Monthly reports on the official MCP registry: how many servers answer, what their tool definitions cost in context tokens, auth, protocol versions and the publishers behind the entries. Each report has a CC BY 4.0 dataset.">
+  <p class="kicker">{run ? `${num(run.probed)} servers · latest run ${date(run.probedAt)}` : 'reports'}</p>
+  <h1 class="poster">Reports</h1>
+  <p class="lede">One report a month. Each one reads the daily runs of that month and ends with a dataset you can download and cite.</p>
+
+  <section class="panel" aria-labelledby="months-h">
+    <h2 id="months-h" class="panel-title">By month</h2>
+    <div class="frame">
+      <table>
+        <thead><tr><th>Month</th><th>Report</th><th>Run</th><th>Dataset</th></tr></thead>
+        <tbody>
+          {reports.map((r) => (
+            <tr>
+              <td>{monthName(r.month)}</td>
+              <td><a href={`/report/${r.month}`}>{r.title}</a></td>
+              <td class="mono">{r.run}</td>
+              <td><a href={r.dataset.path}>JSON, gzip, {r.dataset.size}</a> <span class="sub">CC BY 4.0</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <p class="panel-note">The daily numbers are on <a href="/statistics">Statistics</a>. The method is on <a href="/methodology">Method</a>.</p>
+  </section>
+</Layout>

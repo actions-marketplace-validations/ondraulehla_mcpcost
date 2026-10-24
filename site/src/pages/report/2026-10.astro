@@ -1,0 +1,513 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Trend from '../../components/charts/Trend.astro';
+import Histogram from '../../components/charts/Histogram.astro';
+import { runsBetween, type RunSummary } from '../../lib/db';
+import { REPORTS, nextMonth } from '../../lib/reports';
+import { num, pct, date, label, bucket, modelName, authKindLabel } from '../../lib/format';
+
+/**
+ * The dated report for one month. It reads the runs table only: every run of the
+ * month, one query, and the page is cached for a day. No row of the servers table
+ * is read, so the page costs nothing on the free tier.
+ */
+const report = REPORTS.find((r) => r.month === '2026-10')!;
+const all = await runsBetween(report.month, nextMonth(report.month));
+Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=86400');
+
+// Sample runs (a test of the probe over 200 servers) and broken runs (2026-10-14: the runner timed out
+// on half the registry) stay out of the series. The series ends with the run the dataset is built from.
+const runs: RunSummary[] = [];
+let best = 0;
+for (const r of all) {
+  if (r.probed < 1000 || r.ok < 0.7 * best) continue;
+  best = Math.max(best, r.ok);
+  runs.push(r);
+}
+const dated = runs.filter((r) => r.probedAt.slice(0, 10) <= report.run);
+const series = dated.length ? dated : runs;
+const first = series[0] ?? null;
+const run = series[series.length - 1] ?? null;
+const site = Astro.site?.toString().replace(/\/$/, '') ?? 'https://mcpcost.ulehla.dev';
+
+/** Alive package servers of a run, from the two package hosts in its top hosts; runs before the top hosts had no package servers. */
+const packageOk = (r: RunSummary): number | undefined =>
+  r.topHosts ? r.topHosts.filter((h) => h.host === 'npmjs.com' || h.host === 'pypi.org').reduce((a, h) => a + h.ok, 0) : r.stdioProbed ? undefined : 0;
+/** The remote servers of a run: what the registry lists with a URL, without the npm and PyPI packages. */
+const remote = (r: RunSummary) => {
+  const pk = packageOk(r);
+  return { probed: r.probed - (r.stdioProbed ?? 0), ok: pk == null ? undefined : r.ok - pk };
+};
+const known = (r: RunSummary) => Object.entries(r.protocols).filter(([v]) => v !== 'unknown').reduce((a, [, n]) => a + n, 0);
+const share = (part: number | undefined, whole: number) => (part == null || !whole ? undefined : Math.round((part / whole) * 1000) / 10);
+const trend = (pick: (r: RunSummary) => number | undefined) =>
+  series.flatMap((r) => {
+    const v = pick(r);
+    return v == null ? [] : [{ date: r.probedAt, value: v }];
+  });
+const one = (n: number) => n.toFixed(1);
+/** The first run whose exact counts cover the alive servers: the day the API key was in the workflow. */
+const firstExact = series.find((r) => r.claudeTokens && r.claudeTokens.counted >= 0.5 * r.ok) ?? null;
+
+const statuses = run ? Object.entries(run.byStatus).sort((a, b) => b[1] - a[1]) : [];
+const gated = run ? run.reachable - run.ok : 0;
+const down = run ? run.probed - run.reachable : 0;
+const ct = run?.claudeTokens;
+const model = modelName(ct?.model);
+const over200k = run ? run.heaviest.filter((h) => (h.claudeTokens ?? 0) > 200_000).length : 0;
+const over200kIsFloor = run ? over200k === run.heaviest.length : false;
+const authTotal = run ? Object.values(run.authKinds ?? {}).reduce((a, b) => a + b, 0) : 0;
+const AUTH_MEANING: Record<string, string> = {
+  'oauth-dcr': 'The authorization server registers clients itself (RFC 7591). Claude Code, Cursor or npx mcpcost auth connect with no setup. The user signs in and consents.',
+  oauth: 'The server publishes OAuth metadata, but the publisher issues the client id. A client needs a registration with the publisher before it can start the flow.',
+  token: 'The server wants a key or a token in a header. The publisher gives it out. A client has no standard way to get one.',
+  unknown: 'The server answers 401 or 403 and publishes nothing a client can read: no WWW-Authenticate scheme, no OAuth metadata. A client can only read the documentation.'
+};
+const AUTH_ORDER = ['oauth-dcr', 'oauth', 'token', 'unknown'];
+const GROUP: Record<string, string> = { up: 'alive', gated: 'gated', down: 'down' };
+const lumps = run ? (run.topHosts ?? []).filter((h) => h.host !== 'npmjs.com' && h.host !== 'pypi.org' && h.servers >= 200) : [];
+const packageHosts = run ? (run.topHosts ?? []).filter((h) => h.host === 'npmjs.com' || h.host === 'pypi.org') : [];
+const top500 = run ? (run.topHosts ?? []).reduce((a, h) => a + h.servers, 0) : 0;
+const REMOTE_MISS = ['protocol_error', 'not_found', 'dns', 'payment', 'server_error', 'tls', 'timeout', 'rate_limited', 'refused', 'error'].sort((a, b) => (run?.byStatus[b] ?? 0) - (run?.byStatus[a] ?? 0));
+const PACKAGE_MISS = ['crashed', 'install_failed', 'no_bin'];
+const MISS_MEANING: Record<string, string> = {
+  protocol_error: 'HTTP 200, but the body is not a valid MCP reply, or a JSON-RPC error to initialize',
+  not_found: 'HTTP 404, 405 or 410 on the endpoint the registry names',
+  dns: 'the host name does not resolve',
+  payment: 'HTTP 402: the server wants a payment before it talks',
+  server_error: 'HTTP 5xx',
+  tls: 'the certificate or the handshake fails',
+  timeout: 'no answer in 15 seconds',
+  rate_limited: 'HTTP 429 to the first request',
+  refused: 'the connection is refused',
+  error: 'another transport failure',
+  crashed: 'the package starts and exits before it answers initialize',
+  install_failed: 'npm or pip cannot install the package',
+  no_bin: 'the package installs but has no executable to start'
+};
+const r1 = first ? remote(first) : null;
+const r2 = run ? remote(run) : null;
+const datasetUrl = `${site}${report.dataset.path}`;
+const fields: Array<[string, string]> = [
+  ['name', 'the registry name; the server page is /s/<name>'],
+  ['host', 'the host of the remote endpoint; npmjs.com or pypi.org for a package server'],
+  ['transport', 'streamable-http, sse or stdio'],
+  ['status', 'the probe result, the same words as the status filter of the board'],
+  ['http_status', 'the HTTP status of the first response, when there was one'],
+  ['auth_scheme', 'the WWW-Authenticate scheme of a server that needs auth'],
+  ['auth_kind', 'how a client gets in: oauth-dcr, oauth, token or unknown'],
+  ['protocol_version', 'the protocol version the server negotiated'],
+  ['tool_count', 'the number of tools in tools/list'],
+  ['tools_tokens', 'estimate: o200k_base over the compact JSON of the tool definitions'],
+  ['claude_tokens', `exact: the Anthropic count_tokens endpoint, ${ct?.model ?? 'claude-opus-5-5'}, tool names as published`],
+  ['claude_tokens_cc', 'exact: the same with the Claude Code prefix mcp__<server>__ on each tool name'],
+  ['probed_at', 'when the run probed the server; a package server keeps the time of its last container run']
+];
+const cite = `Ondřej Úlehla, ${report.title}. mcpcost, run of ${run ? date(run.probedAt) : report.run}. ${site}/report/${report.month}. CC BY 4.0.`;
+const description = run
+  ? `The official MCP registry on ${date(run.probedAt)}: ${num(run.probed)} servers probed, ${pct(run.ok, run.probed)} answer, ${pct(run.byStatus.auth ?? 0, run.probed)} need auth. The median tool set costs ${num(ct?.median ?? run.toolsTokens.median)} tokens in ${model}. Auth kinds, protocol versions, the lumps, what the registry does not catch, and a CC BY 4.0 dataset of every server.`
+  : report.title;
+const jsonld = run
+  ? {
+      '@context': 'https://schema.org',
+      '@type': 'Dataset',
+      name: `mcpcost: ${report.title}`,
+      alternateName: `mcpcost-${report.month}`,
+      description: `One row per server in the official MCP registry as probed on ${date(run.probedAt)}: name, host, transport, probe result, HTTP status, auth scheme and kind, protocol version, tool count, and the token cost of the tool definitions as an o200k estimate and as exact counts for ${model} (${num(run.probed)} rows).`,
+      url: `${site}/report/${report.month}`,
+      sameAs: `${site}/report/${report.month}`,
+      license: 'https://creativecommons.org/licenses/by/4.0/',
+      isAccessibleForFree: true,
+      creator: { '@type': 'Person', name: 'Ondřej Úlehla', url: 'https://ulehla.dev' },
+      publisher: { '@type': 'Organization', name: 'mcpcost', url: site },
+      datePublished: report.run,
+      dateModified: date(run.probedAt),
+      temporalCoverage: `${report.from}/${date(run.probedAt)}`,
+      keywords: ['MCP', 'Model Context Protocol', 'MCP registry', 'MCP servers', 'context tokens', 'tool definitions', 'OAuth', 'health check'],
+      variableMeasured: fields.map(([name, desc]) => ({ '@type': 'PropertyValue', name, description: desc })),
+      distribution: [{ '@type': 'DataDownload', encodingFormat: 'application/gzip', contentUrl: datasetUrl, contentSize: report.dataset.size, description: 'A JSON document, gzip. The rows are under "rows"; the document carries the licence, the fields and the citation.' }],
+      citation: cite
+    }
+  : undefined;
+---
+
+<Layout title={report.title} description={description} jsonld={jsonld}>
+  <p class="kicker">{run ? `report · ${num(run.probed)} servers · run of ${date(run.probedAt)}` : 'report'}</p>
+  <h1 class="poster">The state of the MCP registry, October&nbsp;2026</h1>
+
+  {!run && <p class="frame pad">No run of this month is imported yet.</p>}
+  {run && (
+    <>
+      <p class="lede">
+        mcpcost probes every server in the <a href="https://registry.modelcontextprotocol.io" rel="noopener">official MCP registry</a> once a day. It connects as a client, lists the tools, and counts what the tool definitions cost in context tokens. This report reads the daily runs of October 2026, from the first full run on {report.from} to the run of {date(run.probedAt)}. Package servers from npm and PyPI joined the probe on 2026-10-15. The tables say which numbers cover them.
+      </p>
+
+      <nav class="toc" aria-label="Sections">
+        <ol>
+          <li><a href="#numbers">The registry in numbers</a></li>
+          <li><a href="#changed">What changed in October</a></li>
+          <li><a href="#tokens">Token cost</a></li>
+          <li><a href="#auth">Auth</a></li>
+          <li><a href="#lumps">The lumps</a></li>
+          <li><a href="#protocols">Protocol versions</a></li>
+          <li><a href="#misses">What the registry does not catch</a></li>
+          <li><a href="#method">Method and limits</a></li>
+          <li><a href="#dataset">The dataset</a></li>
+        </ol>
+      </nav>
+
+      <section class="panel" id="numbers" aria-labelledby="numbers-h">
+        <h2 id="numbers-h" class="panel-title">1. The registry in numbers</h2>
+        <p>The registry lists an entry per server version. mcpcost takes the latest version of each server. It probes every entry with a remote URL, and every entry whose only package is on npm or PyPI. Entries with only an OCI or MCPB package are not probed.</p>
+        <div class="frame">
+          <table>
+            <thead><tr><th>Registry, {date(run.probedAt)}</th><th class="num">Entries</th><th class="num">Share</th></tr></thead>
+            <tbody>
+              <tr><td>Entries, latest versions</td><td class="num">{num(run.registryEntries)}</td><td class="num">100 %</td></tr>
+              <tr><td>With a remote URL</td><td class="num">{num(run.registryWithRemote)}</td><td class="num">{pct(run.registryWithRemote, run.registryEntries)}</td></tr>
+              <tr><td>With an npm or PyPI package only</td><td class="num">{num(run.registryWithPackage ?? 0)}</td><td class="num">{pct(run.registryWithPackage ?? 0, run.registryEntries)}</td></tr>
+              <tr><td>Probed</td><td class="num">{num(run.probed)}</td><td class="num">{pct(run.probed, run.registryEntries)}</td></tr>
+              <tr><td><span class="sub-inline">of which remote</span></td><td class="num">{num(run.probed - (run.stdioProbed ?? 0))}</td><td class="num">{pct(run.probed - (run.stdioProbed ?? 0), run.probed)}</td></tr>
+              <tr><td><span class="sub-inline">of which package, in a container</span></td><td class="num">{num(run.stdioProbed ?? 0)}</td><td class="num">{pct(run.stdioProbed ?? 0, run.probed)}</td></tr>
+              <tr><td>Hosts</td><td class="num">{num(run.hosts)}</td><td class="num"></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <h3>By result</h3>
+        <p>Three groups. Alive: the server answers <code>initialize</code> and <code>tools/list</code>. Gated: the server is reachable, but it wants auth, a payment, an environment variable or an argument first. Down: everything else.</p>
+        <div class="frame">
+          <table>
+            <thead><tr><th>Result</th><th>Group</th><th class="num">Servers</th><th class="num">Share of probed</th></tr></thead>
+            <tbody>
+              <tr><td>Alive</td><td><span class="tag up">alive</span></td><td class="num">{num(run.ok)}</td><td class="num">{pct(run.ok, run.probed)}</td></tr>
+              <tr><td>Gated</td><td><span class="tag gated">gated</span></td><td class="num">{num(gated)}</td><td class="num">{pct(gated, run.probed)}</td></tr>
+              <tr><td>Down or broken</td><td><span class="tag down">down</span></td><td class="num">{num(down)}</td><td class="num">{pct(down, run.probed)}</td></tr>
+              {statuses.map(([s, n]) => (
+                <tr><td><a href={`/servers?status=${s}`}>{label(s)}</a></td><td><span class={`tag ${bucket(s)}`}>{GROUP[bucket(s)]}</span></td><td class="num">{num(n)}</td><td class="num">{pct(n, run.probed)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {first && r1 && r2 && (
+        <section class="panel" id="changed" aria-labelledby="changed-h">
+          <h2 id="changed-h" class="panel-title">2. What changed in October</h2>
+          <p>The first full run was on {date(first.probedAt)}. The table compares it with the run of {date(run.probedAt)}. The rows cover remote servers only, so the two runs measure the same thing. Package servers are in the second table.</p>
+          <div class="frame">
+            <table>
+              <thead><tr><th>Remote servers</th><th class="num">{date(first.probedAt)}</th><th class="num">{date(run.probedAt)}</th><th class="num">Change</th></tr></thead>
+              <tbody>
+                <tr><td>Registry entries, latest versions</td><td class="num">{num(first.registryEntries)}</td><td class="num">{num(run.registryEntries)}</td><td class="num">{num(run.registryEntries - first.registryEntries)}</td></tr>
+                <tr><td>Entries with a remote URL</td><td class="num">{num(r1.probed)}</td><td class="num">{num(r2.probed)}</td><td class="num">{num(r2.probed - r1.probed)}</td></tr>
+                <tr><td>Alive</td><td class="num">{num(r1.ok)}</td><td class="num">{num(r2.ok)}</td><td class="num">{r1.ok != null && r2.ok != null ? num(r2.ok - r1.ok) : ''}</td></tr>
+                <tr><td>Alive, share of remote</td><td class="num">{r1.ok != null ? pct(r1.ok, r1.probed) : ''}</td><td class="num">{r2.ok != null ? pct(r2.ok, r2.probed) : ''}</td><td class="num"></td></tr>
+                <tr><td>Need auth</td><td class="num">{num(first.byStatus.auth ?? 0)}</td><td class="num">{num(run.byStatus.auth ?? 0)}</td><td class="num">{num((run.byStatus.auth ?? 0) - (first.byStatus.auth ?? 0))}</td></tr>
+                <tr><td>Need auth, share of remote</td><td class="num">{pct(first.byStatus.auth ?? 0, r1.probed)}</td><td class="num">{pct(run.byStatus.auth ?? 0, r2.probed)}</td><td class="num"></td></tr>
+                <tr><td>Protocol 2025-11-25, share of alive with a known version</td><td class="num">{pct(first.protocols['2025-11-25'] ?? 0, known(first))}</td><td class="num">{pct(run.protocols['2025-11-25'] ?? 0, known(run))}</td><td class="num"></td></tr>
+                <tr><td>Hosts</td><td class="num">{num(first.hosts)}</td><td class="num">{num(run.hosts)}</td><td class="num">{num(run.hosts - first.hosts)}</td></tr>
+              </tbody>
+            </table>
+          </div>
+          {firstExact && ct && (
+            <>
+              <h3>Token cost</h3>
+              <p>Exact counts start on {date(firstExact.probedAt)}, the first run with an API key. From 2026-10-15 the alive set also holds package servers. Their tool sets are smaller, so the median goes down as they join. The estimate row covers every run.</p>
+              <div class="frame">
+                <table>
+                  <thead><tr><th>Alive servers</th><th class="num">{date(first.probedAt)}</th><th class="num">{date(firstExact.probedAt)}</th><th class="num">{date(run.probedAt)}</th></tr></thead>
+                  <tbody>
+                    <tr><td>Alive servers in the set</td><td class="num">{num(first.ok)}</td><td class="num">{num(firstExact.ok)}</td><td class="num">{num(run.ok)}</td></tr>
+                    <tr><td>Median tokens, {model}, exact</td><td class="num"></td><td class="num">{num(firstExact.claudeTokens!.median)}</td><td class="num">{num(ct.median)}</td></tr>
+                    <tr><td>90th percentile, exact</td><td class="num"></td><td class="num">{num(firstExact.claudeTokens!.p90)}</td><td class="num">{num(ct.p90)}</td></tr>
+                    <tr><td>99th percentile, exact</td><td class="num"></td><td class="num">{num(firstExact.claudeTokens!.p99)}</td><td class="num">{num(ct.p99)}</td></tr>
+                    <tr><td>Median tokens, o200k estimate</td><td class="num">{num(first.toolsTokens.median)}</td><td class="num">{num(firstExact.toolsTokens.median)}</td><td class="num">{num(run.toolsTokens.median)}</td></tr>
+                    <tr><td>Median tools per server</td><td class="num">{num(first.toolCount.median)}</td><td class="num">{num(firstExact.toolCount.median)}</td><td class="num">{num(run.toolCount.median)}</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+          {series.length > 1 && (
+            <>
+              <h3>Run by run</h3>
+              <p class="muted small">{series.length} daily runs. A point is missing where a run could not separate remote from package servers (2026-10-15 to 2026-10-20). Hover a point for its value, or open the table.</p>
+              <h4>Alive remote servers</h4>
+              <Trend id="trend-alive" points={trend((r) => remote(r).ok)} />
+              <h4>Alive, share of remote servers</h4>
+              <Trend id="trend-alive-share" points={trend((r) => share(remote(r).ok, remote(r).probed))} unit=" %" format={one} />
+              <h4>Median tokens of a tool set in {model}, alive servers, exact</h4>
+              <Trend id="trend-median" points={trend((r) => (r.claudeTokens && r.claudeTokens.counted >= 0.5 * r.ok ? r.claudeTokens.median : undefined))} />
+              <h4>Servers that need auth, share of remote servers</h4>
+              <Trend id="trend-auth" points={trend((r) => share(r.byStatus.auth ?? 0, remote(r).probed))} unit=" %" format={one} />
+              <h4>Protocol 2025-11-25, share of alive servers with a known version</h4>
+              <Trend id="trend-protocol" points={trend((r) => share(r.protocols['2025-11-25'] ?? 0, known(r)))} unit=" %" format={one} />
+              <h4>Registry entries, latest versions</h4>
+              <Trend id="trend-entries" points={trend((r) => r.registryEntries)} />
+            </>
+          )}
+        </section>
+      )}
+
+      <section class="panel" id="tokens" aria-labelledby="tokens-h">
+        <h2 id="tokens-h" class="panel-title">3. Token cost</h2>
+        <p>A client sends the model the name, the description and the input schema of each tool. It does this in each request, also when the model calls no tool. The numbers below are the cost of the tool definitions of one server, as the Anthropic <code>count_tokens</code> endpoint counts them for {model}. The endpoint is free and calls no model. Claude Code puts <code>mcp__&lt;server&gt;__</code> in front of each tool name. The second column counts that variant.</p>
+        {ct ? (
+          <>
+            <div class="frame">
+              <table>
+                <thead><tr><th>Alive servers, {num(ct.counted)} counted</th><th class="num">{model}</th><th class="num">In Claude Code</th><th class="num">o200k estimate</th></tr></thead>
+                <tbody>
+                  <tr><td>Median</td><td class="num">{num(ct.median)}</td><td class="num">{num(ct.claudeCode.median)}</td><td class="num">{num(run.toolsTokens.median)}</td></tr>
+                  <tr><td>90th percentile</td><td class="num">{num(ct.p90)}</td><td class="num">{num(ct.claudeCode.p90)}</td><td class="num">{num(run.toolsTokens.p90)}</td></tr>
+                  <tr><td>99th percentile</td><td class="num">{num(ct.p99)}</td><td class="num">{num(ct.claudeCode.p99)}</td><td class="num">{num(run.toolsTokens.p99)}</td></tr>
+                  <tr><td>Maximum</td><td class="num">{num(ct.max)}</td><td class="num">{num(ct.claudeCode.max)}</td><td class="num">{num(run.toolsTokens.max)}</td></tr>
+                  <tr><td>Sum over all counted servers</td><td class="num">{num(ct.total)}</td><td class="num">{num(ct.claudeCode.total)}</td><td class="num">{num(run.toolsTokens.total)}</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="muted small">The estimate column covers all {num(run.ok)} alive servers. {num(ct.refused)} alive servers publish a schema the endpoint refuses; they have the estimate only.</p>
+            {ct.histogram && (
+              <>
+                <h3>Servers per cost band</h3>
+                <p>How many of the counted servers fall into each band of exact tokens.</p>
+                <Histogram id="cost-histogram" edges={ct.histogram.edges} bins={ct.histogram.bins} />
+              </>
+            )}
+            <h3>Exact against the estimate</h3>
+            <p>The estimate serializes each tool as compact JSON and counts it with the <code>o200k_base</code> tokenizer. Claude renders the schemas in its own format, so the exact count is higher. The ratio is steady across servers.</p>
+            <div class="frame">
+              <table>
+                <thead><tr><th>Exact count divided by the estimate</th><th class="num">Ratio</th></tr></thead>
+                <tbody>
+                  <tr><td>10th percentile</td><td class="num">{ct.ratioToEstimate.p10.toFixed(2)}</td></tr>
+                  <tr><td>Median</td><td class="num">{ct.ratioToEstimate.median.toFixed(2)}</td></tr>
+                  <tr><td>90th percentile</td><td class="num">{ct.ratioToEstimate.p90.toFixed(2)}</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <h3>The heaviest tool sets</h3>
+            <p>Claude's context window holds 200 000 tokens. The last column says how much of it one server takes before the first prompt. {over200kIsFloor ? `At least ${num(over200k)}` : num(over200k)} alive servers do not fit into the window at all.</p>
+            <div class="frame">
+              <table>
+                <thead><tr><th>Server</th><th>Host</th><th class="num">Tools</th><th class="num">{model}</th><th class="num">In Claude Code</th><th class="num">Of 200k</th></tr></thead>
+                <tbody>
+                  {run.heaviest.slice(0, 12).map((h) => (
+                    <tr>
+                      <td class="break"><a href={`/s/${h.name}`}>{h.name}</a></td>
+                      <td class="mono">{h.host}</td>
+                      <td class="num">{num(h.toolCount)}</td>
+                      <td class="num">{num(h.claudeTokens ?? h.toolsTokens)}</td>
+                      <td class="num">{num(h.claudeTokensCc)}</td>
+                      <td class="num">{(((h.claudeTokens ?? h.toolsTokens) / 200_000) * 100).toFixed(0)} %</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p class="panel-note"><a href="/servers?sort=claude">All servers by token cost →</a> · <a href="/tokens">What a server costs, the short answer →</a></p>
+          </>
+        ) : (
+          <p class="muted">This run has no exact counts.</p>
+        )}
+      </section>
+
+      <section class="panel" id="auth" aria-labelledby="auth-h">
+        <h2 id="auth-h" class="panel-title">4. Auth</h2>
+        <p>A server that answers 401 or 403 is reachable, but it does not talk to a client without credentials. The probe records the <code>WWW-Authenticate</code> scheme. Then it reads what the server publishes about getting in: the OAuth protected-resource metadata (RFC 9728) and the authorization server's metadata (RFC 8414). It never asks for a token.</p>
+        <div class="frame">
+          <table>
+            <thead><tr><th>WWW-Authenticate scheme</th><th class="num">Servers</th><th class="num">Share of servers that need auth</th></tr></thead>
+            <tbody>
+              {Object.entries(run.authSchemes).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([v, n]) => (
+                <tr><td>{v === 'none' ? 'no WWW-Authenticate header' : v}</td><td class="num">{num(n)}</td><td class="num">{pct(n, run.byStatus.auth ?? 0)}</td></tr>
+              ))}
+              {Object.entries(run.authSchemes).length > 6 && (
+                <tr><td>other schemes, {Object.entries(run.authSchemes).length - 6} of them</td><td class="num">{num(Object.entries(run.authSchemes).sort((a, b) => b[1] - a[1]).slice(6).reduce((a, [, n]) => a + n, 0))}</td><td class="num"></td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {run.authKinds && (
+          <>
+            <h3>How a client gets in</h3>
+            <p>Four kinds. The sentence under each one says what it means for a client.</p>
+            <div class="frame">
+              <table>
+                <thead><tr><th>Kind</th><th class="num">Servers</th><th class="num">Share</th><th>For a client</th></tr></thead>
+                <tbody>
+                  {AUTH_ORDER.filter((k) => run.authKinds![k] != null).map((k) => (
+                    <tr>
+                      <td><code>{k}</code><span class="sub">{authKindLabel(k)}</span></td>
+                      <td class="num">{num(run.authKinds![k])}</td>
+                      <td class="num">{pct(run.authKinds![k], authTotal)}</td>
+                      <td class="wrap">{AUTH_MEANING[k]}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p class="panel-note"><a href="/servers?status=auth">All servers that need auth →</a> · <a href="/methodology#access">How the kinds are read →</a></p>
+          </>
+        )}
+      </section>
+
+      <section class="panel" id="lumps" aria-labelledby="lumps-h">
+        <h2 id="lumps-h" class="panel-title">5. The lumps</h2>
+        <p>The registry is not flat. Most hosts publish one server. A few hosts publish thousands of entries from one template. The table lists the hosts with at least 200 entries. “Distinct tool sets” is the number of different tool lists one host serves: a host with many entries and few tool sets publishes the same server under many names.</p>
+        <div class="frame">
+          <table>
+            <thead><tr><th>Host</th><th class="num">Entries</th><th class="num">Alive</th><th class="num">Gated</th><th class="num">Down</th><th class="num">Distinct tool sets</th><th class="num">Median tokens, estimate</th></tr></thead>
+            <tbody>
+              {lumps.map((h) => (
+                <tr>
+                  <td class="mono break"><a href={`/servers?host=${encodeURIComponent(h.host)}`}>{h.host}</a></td>
+                  <td class="num">{num(h.servers)}</td>
+                  <td class="num">{num(h.ok)}</td>
+                  <td class="num">{num(h.gated)}</td>
+                  <td class="num">{num(h.dead)}</td>
+                  <td class="num">{num(h.uniqueToolsets)}</td>
+                  <td class="num">{h.ok ? num(h.medianTokens) : ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <h3>Duplicate tool sets</h3>
+        <p>A hash of the sorted tool names and schema sizes marks servers that serve the same tools under different names.</p>
+        <div class="frame">
+          <table>
+            <thead><tr><th>Alive servers</th><th class="num">Servers</th><th class="num">Share</th></tr></thead>
+            <tbody>
+              <tr><td>Alive servers</td><td class="num">{num(run.ok)}</td><td class="num">100 %</td></tr>
+              <tr><td>Distinct tool sets</td><td class="num">{num(run.uniqueToolsets)}</td><td class="num">{pct(run.uniqueToolsets, run.ok)}</td></tr>
+              <tr><td>Servers that copy another server's tool set</td><td class="num">{num(run.duplicateServers)}</td><td class="num">{pct(run.duplicateServers, run.ok)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <h3>Packages</h3>
+        <p>The two package registries are the biggest hosts. A package is probed in a container with the network off and placeholder values for the environment variables the registry entry lists.</p>
+        <div class="frame">
+          <table>
+            <thead><tr><th>Host</th><th class="num">Entries</th><th class="num">Alive</th><th class="num">Gated</th><th class="num">Down</th><th class="num">Distinct tool sets</th><th class="num">Median tokens, estimate</th></tr></thead>
+            <tbody>
+              {packageHosts.map((h) => (
+                <tr>
+                  <td class="mono"><a href={`/servers?host=${encodeURIComponent(h.host)}`}>{h.host}</a></td>
+                  <td class="num">{num(h.servers)}</td>
+                  <td class="num">{num(h.ok)}</td>
+                  <td class="num">{num(h.gated)}</td>
+                  <td class="num">{num(h.dead)}</td>
+                  <td class="num">{num(h.uniqueToolsets)}</td>
+                  <td class="num">{num(h.medianTokens)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p class="muted small">The 500 biggest hosts hold {num(top500)} of the {num(run.probed)} probed servers. The other {num(run.hosts - (run.topHosts?.length ?? 0))} hosts hold the rest. <a href="/hosts">All hosts →</a></p>
+      </section>
+
+      <section class="panel" id="protocols" aria-labelledby="protocols-h">
+        <h2 id="protocols-h" class="panel-title">6. Protocol versions</h2>
+        <p>The version a server negotiates in <code>initialize</code>. The container run does not record the version of a package server, so package servers are the “unknown” row. A server that answers with a version the current SDK rejects is counted as “newer protocol” in section 1, not here.</p>
+        <div class="frame">
+          <table>
+            <thead><tr><th>Negotiated version</th><th class="num">Alive servers</th><th class="num">Share of alive with a known version</th></tr></thead>
+            <tbody>
+              {Object.entries(run.protocols).filter(([v]) => v !== 'unknown').sort((a, b) => b[1] - a[1]).map(([v, n]) => (
+                <tr><td><a href={`/servers?protocol=${v}`}>{v}</a></td><td class="num">{num(n)}</td><td class="num">{pct(n, known(run))}</td></tr>
+              ))}
+              <tr><td>unknown</td><td class="num">{num(run.protocols.unknown ?? 0)}</td><td class="num"></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="muted small">{num(run.byStatus.newer_protocol ?? 0)} servers answer with a version the SDK does not support yet. They are reachable and count as gated.</p>
+      </section>
+
+      <section class="panel" id="misses" aria-labelledby="misses-h">
+        <h2 id="misses-h" class="panel-title">7. What the registry does not catch</h2>
+        <p>The registry checks who may publish under a name. It does not check that the endpoint speaks MCP, or that it still exists. These servers are listed as active, and a client that adds one gets an error. Not MCP, not found, no DNS and paid are the big ones.</p>
+        <div class="frame">
+          <table>
+            <thead><tr><th>Result</th><th>What the probe saw</th><th class="num">Servers</th><th class="num">Share of remote</th></tr></thead>
+            <tbody>
+              {REMOTE_MISS.filter((s) => run.byStatus[s]).map((s) => (
+                <tr><td><a href={`/servers?status=${s}`}>{label(s)}</a></td><td class="wrap">{MISS_MEANING[s]}</td><td class="num">{num(run.byStatus[s])}</td><td class="num">{pct(run.byStatus[s], r2?.probed ?? run.probed)}</td></tr>
+              ))}
+              <tr><td>Together</td><td></td><td class="num">{num(REMOTE_MISS.reduce((a, s) => a + (run.byStatus[s] ?? 0), 0))}</td><td class="num">{pct(REMOTE_MISS.reduce((a, s) => a + (run.byStatus[s] ?? 0), 0), r2?.probed ?? run.probed)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <h3>Packages that do not start</h3>
+        <div class="frame">
+          <table>
+            <thead><tr><th>Result</th><th>What the probe saw</th><th class="num">Packages</th><th class="num">Share of packages</th></tr></thead>
+            <tbody>
+              {PACKAGE_MISS.filter((s) => run.byStatus[s]).map((s) => (
+                <tr><td><a href={`/servers?status=${s}`}>{label(s)}</a></td><td class="wrap">{MISS_MEANING[s]}</td><td class="num">{num(run.byStatus[s])}</td><td class="num">{pct(run.byStatus[s], run.stdioProbed ?? run.probed)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p class="panel-note"><a href="/changes">What changed since yesterday →</a> · <a href="/servers?status=down">All servers that are down →</a></p>
+      </section>
+
+      <section class="panel" id="method" aria-labelledby="method-h">
+        <h2 id="method-h" class="panel-title">8. Method and limits</h2>
+        <p>The probe connects to each server once a day with the official TypeScript SDK, sends <code>initialize</code> and <code>tools/list</code>, and sends no credentials. The exact token count comes from the Anthropic <code>count_tokens</code> endpoint: one request with the server's tools and a marker tool, one with the marker tool only, and the difference is the cost. A server is counted again only when its tool definitions change. A server that needs auth shows no tools, so its cost is not in the numbers. One probe from one network on one day can miss a server that is alive: a timeout or a rate limit on that day counts as down. Package servers run in a container with the network off, so a package that needs a real network or a real credential shows as gated, not as alive.</p>
+        <p class="panel-note"><a href="/methodology">The full method →</a> · <a href="https://github.com/ondraulehla/mcpcost" rel="noopener">The source →</a></p>
+      </section>
+
+      <section class="panel" id="dataset" aria-labelledby="dataset-h">
+        <h2 id="dataset-h" class="panel-title">9. The dataset</h2>
+        <p>One row per probed server from the run of {date(run.probedAt)}, with the numbers the board shows for it. The numbers of a row are the numbers the JSON API gives for that server, <code>/api/s/&lt;name&gt;.json</code>, on that day. The file is a static file of this site: it is small, and a static file costs no Worker request on the free tier, so it is the cheaper of the two ways to publish it. A GitHub release would hold a file over 10 MB.</p>
+        <div class="stats">
+          <div class="stat"><b>{num(run.probed)}</b><span>rows, one per probed server</span></div>
+          <div class="stat"><b>{fields.length}</b><span>fields per row</span></div>
+          <div class="stat"><b>{report.dataset.size}</b><span>gzip of a JSON document</span></div>
+          <div class="stat"><b>CC BY 4.0</b><span>use it, name the source</span></div>
+        </div>
+        <p class="download"><a href={report.dataset.path} download>Download mcpcost-{report.month}.json.gz</a></p>
+        <p>The document has the licence, the run date, the field list and the citation at the top. The rows are under <code>rows</code>. A missing value is <code>null</code>.</p>
+        <pre>curl -sL {datasetUrl} | gunzip | jq '.rows[] | select(.status == "ok") | .claude_tokens' | sort -n | tail -3</pre>
+        <h3>Fields</h3>
+        <div class="frame">
+          <table>
+            <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+            <tbody>
+              {fields.map(([name, desc]) => (
+                <tr><td><code>{name}</code></td><td class="wrap">{desc}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <h3>Licence and citation</h3>
+        <p>The dataset is published under <a href="https://creativecommons.org/licenses/by/4.0/" rel="license noopener">Creative Commons Attribution 4.0</a>. You may copy it, change it and build on it, also for commercial work. Name the source. A link to this page is enough.</p>
+        <pre>{cite}</pre>
+        <p class="muted small">The code of the probe and of this site is MIT. The daily summaries since {report.from} are committed in the repository as <code>data/latest/summary.json</code>, and the <a href="/api/summary.json">summary API</a> serves the latest one.</p>
+      </section>
+
+      <p class="panel-note foot-links"><a href="/report">All reports →</a> · <a href="/statistics">Today's statistics →</a> · <a href="/changes">What changed →</a></p>
+    </>
+  )}
+</Layout>
+
+<style>
+  .toc { margin: 1.5rem 0 0; border: 1px solid var(--line); padding: 0.875rem 1.25rem; }
+  .toc ol { margin: 0; padding-left: 1.25rem; columns: 2; column-gap: 2rem; font-size: 0.9rem; line-height: 1.8; }
+  .toc a { color: var(--ink-muted); text-decoration: none; }
+  .toc a:hover { color: var(--accent); }
+  .panel h4 { font-size: 0.9rem; margin: 1.25rem 0 0.25rem; color: var(--ink-muted); font-weight: 500; }
+  .panel .frame + h3, .panel .chart + h3, .panel .muted + h3 { margin-top: 1.75rem; }
+  .panel .frame { margin-top: 0.75rem; }
+  .panel p + .frame { margin-top: 0.75rem; }
+  .sub-inline { color: var(--ink-muted); font-weight: 400; padding-left: 1rem; }
+  td.wrap { white-space: normal; min-width: 18rem; line-height: 1.5; }
+  .frame table { min-width: 560px; }
+  .download { margin: 1rem 0 0; }
+  .download a { display: inline-block; border: 1px solid var(--accent); padding: 0.75rem 1.25rem; font-family: var(--font-mono); font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; text-decoration: none; color: var(--accent); }
+  .download a:hover { background: var(--accent); color: var(--surface); }
+  .foot-links { margin-top: 1.5rem; }
+  @media (max-width: 640px) { .toc ol { columns: 1; } }
+</style>

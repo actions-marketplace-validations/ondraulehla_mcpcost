@@ -80,6 +80,7 @@ The plugin adds one skill, `/mcpcost:measure`, which runs `npx mcpcost` on your 
 - **Server page**: status, latency, protocol, capabilities, the most expensive tools, servers with the same tool set, history, the badge, and e-mail alerts: a mail when the server stops answering, comes back, or its tool set or token cost changes
 - **Track**: a server that is not in the registry can be tracked from the check page; the daily probe then measures it under the name `url/<host>/<path>`
 - **Hosts**: the 500 biggest publishers with how many distinct tool sets they actually serve
+- **Report**: one page a month, *The state of the MCP registry*, read from the daily runs, with a CC BY 4.0 dataset of every server
 
 ## For agents and scripts
 
@@ -123,6 +124,10 @@ Of the 12 975 servers that answered:
 - 122 servers answer with protocol `2026-07-28`, which the current TypeScript SDK rejects
 
 The registry is lumpy. 16 161 of 16 534 hosts publish one server. Five hosts publish more than 6 000 entries between them: one Workers subdomain with 2 365 near-identical entries, a gateway with 1 716 entries of which 1 321 return a JSON-RPC error on `initialize`, and a host with 276 entries that all answer 402.
+
+## The monthly report and the dataset
+
+[/report/2026-10](https://mcpcost.ulehla.dev/report/2026-10) is *The state of the MCP registry, October 2026*: the registry in numbers, what changed between the first full run and the run of 2026-10-24, token cost, auth, the lumps, protocol versions, what the registry does not catch, and the method in six sentences. The page reads only the `runs` table (every run of the month, one query) and is cached for a day, so it costs nothing on the free tier. `/report` lists the months; `site/src/lib/reports.ts` has one entry per report with the day of the run it is pinned to. The dataset that goes with it, `data/mcpcost-2026-10.json.gz` on the site, has one row per probed server: name, host, transport, status, HTTP status, auth scheme and kind, protocol version, tool count, the o200k estimate, the exact Claude counts and the probe time. A row's numbers are what `/api/s/<name>.json` gives for that server on that day. The licence is CC BY 4.0; the document carries the licence, the field list and a citation at the top. `probe/dataset.ts` writes `data/latest/dataset.json` and its gzip on every daily run (kept in the run artifact), and `--publish site/public/data/mcpcost-YYYY-MM.json.gz` copies the gzip into the site when it is under 10 MB: a static file is served before the Worker and costs no request. A bigger file would go out as a GitHub release asset instead. To publish a month: run the probe or download the run artifact into `data/latest`, run `node --import tsx probe/dataset.ts --publish site/public/data/mcpcost-YYYY-MM.json.gz`, add the month to `reports.ts`, write the page, and commit the file with it.
 
 ## How it works
 
