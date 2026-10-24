@@ -261,7 +261,8 @@ say();
 const byNetwork = new Map();
 const byNetworkUnnamed = new Map();
 const byNetworkLists = new Map();
-const tenByNetworkUnnamed = new Map(); // network -> ten-minute bucket -> count
+const tenByNetwork = new Map(); // network -> ten-minute bucket -> count
+const tenByNetworkUnnamed = new Map();
 const tenByNetworkLists = new Map();
 const tenOf = (m, k) => m.get(k) ?? m.set(k, new Map()).get(k);
 const byAgent = new Map();
@@ -282,6 +283,7 @@ for (const e of logs.events) {
   const k = kind(agent);
   const ten = tenMinutes(e);
   bump(byNetwork, network);
+  bump(tenOf(tenByNetwork, network), ten);
   if (k !== 'named crawler') {
     bump(byNetworkUnnamed, network);
     bump(tenOf(tenByNetworkUnnamed, network), ten);
@@ -349,6 +351,10 @@ say('| | most in an hour | when (UTC) |');
 say('|---|---:|---|');
 say(`| Worker requests | ${fmt(peakRequests.value)} | ${peakRequests.hour.slice(11, 16) || '-'} |`);
 say(`| D1 rows read | ${fmt(peakRows.value)} | ${peakRows.hour.slice(11, 16) || '-'} |`);
+for (const [network] of sorted(byNetwork).slice(0, 3)) {
+  const w = worstSixty(tenByNetwork.get(network));
+  say(`| ${network}, everything | ${fmt(w.value)} | to ${w.at} |`);
+}
 for (const [network] of sorted(byNetworkUnnamed).slice(0, 3)) {
   const w = worstSixty(tenByNetworkUnnamed.get(network));
   say(`| ${network}, agents that do not name a crawler | ${fmt(w.value)} | to ${w.at} |`);
