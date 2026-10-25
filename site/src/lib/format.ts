@@ -1,4 +1,4 @@
-import { GATED_STATUSES } from '../../../packages/mcpcost/src/types.ts';
+import { GATED_STATUSES, isConfirmedDown } from '../../../packages/mcpcost/src/types.ts';
 
 export const STATUS_LABEL: Record<string, string> = {
   ok: 'alive',
@@ -9,6 +9,7 @@ export const STATUS_LABEL: Record<string, string> = {
   server_error: 'server error',
   protocol_error: 'not MCP',
   newer_protocol: 'newer protocol',
+  needs_url: 'needs your URL',
   timeout: 'timeout',
   dns: 'no DNS',
   tls: 'TLS error',
@@ -34,11 +35,18 @@ export function authKindLabel(kind: string | null | undefined): string {
   return AUTH_KIND_LABEL[kind ?? 'unknown'] ?? kind ?? 'unknown';
 }
 
-/** Three buckets for colours and filters. */
-export function bucket(status: string): 'up' | 'gated' | 'down' {
+export type Bucket = 'up' | 'gated' | 'noanswer' | 'down';
+
+/**
+ * The bucket of a result, for colours and filters. With the row's failingSince (null or a date) a failing server is
+ * down only after two days of failed probes (isConfirmedDown), and "no answer" before that. Without it (a history
+ * row, a live check) every failing result is down, as one probe can say nothing more.
+ */
+export function bucket(status: string, failingSince?: string | null, probedAt?: string | null): Bucket {
   if (status === 'ok') return 'up';
   if (GATED_STATUSES.has(status)) return 'gated';
-  return 'down';
+  if (failingSince === undefined) return 'down';
+  return isConfirmedDown(status, failingSince, probedAt) ? 'down' : 'noanswer';
 }
 
 export function label(status: string): string {

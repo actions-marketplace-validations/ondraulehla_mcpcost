@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { getHistory, getServer } from '../../../lib/db';
 import { label } from '../../../lib/format';
+import { isConfirmedDown } from '../../../../../packages/mcpcost/src/types.ts';
 
 /** One server as JSON: the latest probe plus its history. */
 export const GET: APIRoute = async ({ params, site }) => {
@@ -20,6 +21,9 @@ export const GET: APIRoute = async ({ params, site }) => {
       page: `${base}/s/${server.name}`,
       status: server.status,
       statusLabel: label(server.status),
+      /** The first probe of the current run of failed probes; down is true after two days of them. */
+      failingSince: server.failing_since,
+      down: isConfirmedDown(server.status, server.failing_since, server.probed_at),
       httpStatus: server.http_status,
       authScheme: server.auth_scheme,
       authDocumentation: server.auth_documentation,
@@ -41,7 +45,7 @@ export const GET: APIRoute = async ({ params, site }) => {
       instructionsChars: server.instructions_chars,
       topTools: server.top_tools ? JSON.parse(server.top_tools) : null,
       toolsetSiblings: server.toolset_siblings,
-      registry: { status: server.registry_status, updatedAt: server.registry_updated_at, repo: server.repo, website: server.website },
+      registry: { status: server.registry_status, version: server.version, updatedAt: server.registry_updated_at, repo: server.repo, website: server.website },
       probedAt: server.probed_at,
       history: history.map((h) => ({ probedAt: h.probed_at, status: h.status, initMs: h.init_ms, toolCount: h.tool_count, toolsTokens: h.tools_tokens, claudeTokens: h.claude_tokens }))
     },

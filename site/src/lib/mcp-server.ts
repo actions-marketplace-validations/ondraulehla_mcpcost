@@ -4,6 +4,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { findByUrl, getServer, latestRun, listServers, SORTS, MAX_NUMBERED_PAGE, decodeCursor, encodeCursor, type SortKey } from './db';
 import { label } from './format';
+import { isConfirmedDown } from '../../../packages/mcpcost/src/types.ts';
 import { probeRemoteRaw } from '../../../packages/mcpcost/src/core.ts';
 import { payloadBytes, BYTES_PER_TOKEN } from '../../../packages/mcpcost/src/payload.ts';
 import { liveClaudeCount } from './claude';
@@ -14,7 +15,7 @@ const SITE = 'https://mcpcost.ulehla.dev';
 
 /** Every tool reads and reports; none changes a server or the board. check_server reaches the network. */
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
-const STATUS = z.string().describe('ok (answered initialize and tools/list), auth (needs credentials), payment (402), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed');
+const STATUS = z.string().describe('ok (answered initialize and tools/list), auth (needs credentials), payment (402), needs_url (every URL in the registry has a placeholder each user fills in; not called), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed. A failure counts as down only after two days of failed probes (see failingSince)');
 const nullableInt = (what: string) => z.number().int().nullable().optional().describe(what);
 const nullableStr = (what: string) => z.string().nullable().optional().describe(what);
 const SERVER_ROW = {
@@ -74,6 +75,8 @@ function build(): McpServer {
         claudeTokensClaudeCode: nullableInt('The exact count with the Claude Code prefix mcp__<server>__ on each tool name'),
         claudeModel: nullableStr('The model the exact count is for'),
         claudeError: nullableStr('Why the Anthropic endpoint refused to count'),
+        failingSince: nullableStr('For a server with no valid answer: the first probe of its current run of failed probes, ISO 8601'),
+        down: z.boolean().optional().describe('True when the server has failed for two days or more; a more recent failure is "no answer", not down'),
         toolsTokensNote: z.string().optional(),
         shareOf200k: z.number().nullable().optional().describe('Percent of a 200k window, exact when claudeTokens is present'),
         latencyMs: z.object({ initialize: nullableInt('milliseconds'), toolsList: nullableInt('milliseconds') }).optional(),
@@ -90,6 +93,7 @@ function build(): McpServer {
         authKind: s.auth_kind, authDocumentation: s.auth_documentation, authMetadata: s.auth_metadata ? JSON.parse(s.auth_metadata) : null,
         protocolVersion: s.protocol_version, toolCount: s.tool_count,
         claudeTokens: s.claude_tokens, claudeTokensClaudeCode: s.claude_tokens_cc, claudeModel: s.claude_model, claudeError: s.claude_error,
+        failingSince: s.failing_since, down: isConfirmedDown(s.status, s.failing_since, s.probed_at),
         toolsTokens: s.tools_tokens, toolsTokensNote: 'o200k_base estimate; claudeTokens is exact',
         shareOf200k: (s.claude_tokens ?? s.tools_tokens) != null ? Number((((s.claude_tokens ?? s.tools_tokens)! / 200_000) * 100).toFixed(2)) : null,
         latencyMs: { initialize: s.init_ms, toolsList: s.tools_ms }, topTools: s.top_tools ? JSON.parse(s.top_tools) : null,
@@ -99,7 +103,7 @@ function build(): McpServer {
     }
   );
 
-  tool<{ query?: string; status?: 'ok' | 'auth' | 'payment' | 'newer_protocol' | 'down'; sort?: SortKey; page?: number; cursor?: string }>(
+  tool<{ query?: string; status?: 'ok' | 'auth' | 'payment' | 'newer_protocol' | 'down' | 'noanswer'; sort?: SortKey; page?: number; cursor?: string }>(
     'search_servers',
     {
       title: 'Search the registry board',
@@ -108,7 +112,7 @@ function build(): McpServer {
       annotations: READ_ONLY,
       inputSchema: {
         query: z.string().optional().describe('Words to match, three or more characters each, as prefixes: "git copilot" finds the GitHub Copilot servers. Omit for the whole list.'),
-        status: z.enum(['ok', 'auth', 'payment', 'newer_protocol', 'down']).optional().describe('ok = answers and lists tools; auth = needs credentials; payment = 402; newer_protocol = a protocol newer than the SDK; down = every other failure. Omit for all.'),
+        status: z.enum(['ok', 'auth', 'payment', 'newer_protocol', 'down', 'noanswer']).optional().describe('ok = answers and lists tools; auth = needs credentials; payment = 402; newer_protocol = a protocol newer than the SDK; down = no valid answer for two days or more; noanswer = no valid answer for less than two days. Omit for all.'),
         sort: z.enum(Object.keys(SORTS) as [SortKey, ...SortKey[]]).optional().describe('claude = exact Claude tokens, highest first (default); claude-asc = lowest first; tokens = the o200k_base estimate; tools = tool count; latency = initialize time; name; updated = registry date'),
         page: z.number().int().min(1).max(MAX_NUMBERED_PAGE).optional().describe(`Page number, 1 to ${MAX_NUMBERED_PAGE}, twenty servers each; default 1. Not with cursor.`),
         cursor: z.string().optional().describe('The `next` value of a previous answer, to continue from there; replaces page')
@@ -241,6 +245,7 @@ function build(): McpServer {
         probed: z.number().int().optional().describe('Servers probed in this run'),
         ok: z.number().int().optional().describe('Servers that answered initialize and tools/list'),
         byStatus: z.record(z.string(), z.number()).optional().describe('Servers per status'),
+        noAnswer: z.record(z.string(), z.number()).optional().describe('Of the failing servers, the ones that are not down yet: no valid answer for less than two days, per status'),
         authSchemes: z.record(z.string(), z.number()).optional().describe('Servers that need auth, per WWW-Authenticate scheme'),
         authKinds: z.record(z.string(), z.number()).optional().describe('Servers that need auth, per kind of access: oauth-dcr, oauth, token, unknown'),
         protocols: z.record(z.string(), z.number()).optional().describe('Alive servers per negotiated protocol version'),

@@ -11,7 +11,8 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { GATED_STATUSES, isSchemaRefusal } from '../packages/mcpcost/src/index.js';
+import { GATED_STATUSES, isConfirmedDown, isFailing, isSchemaRefusal } from '../packages/mcpcost/src/index.js';
+import { downChange, failingSinceOf } from './rows.js';
 import type { ProbeResult, RegistryEntry } from '../packages/mcpcost/src/index.js';
 
 const { values: args } = parseArgs({
@@ -23,6 +24,8 @@ const { values: args } = parseArgs({
     previous: { type: 'string' },
     /** A stdio run file from probe/stdio-run.ts: package servers probed in containers. */
     stdio: { type: 'string' },
+    /** A dump of the board (name, status, failing_since) from D1: where failing_since comes from before servers.json has it. */
+    'd1-status': { type: 'string' },
     /** Import even when far fewer servers answered than last time. */
     force: { type: 'boolean', default: false }
   }
@@ -67,8 +70,12 @@ export interface ServerRow {
   website?: string;
   registryStatus: string;
   registryUpdatedAt: string;
+  /** The version of the registry entry that was probed (the latest one). */
+  version?: string;
   probedAt: string;
   status: string;
+  /** The first probe of the current run of failed probes (ISO time); unset while the server answers or is gated. */
+  failingSince?: string;
   httpStatus?: number;
   authScheme?: string;
   /** The publisher's guide to getting access, from the OAuth protected-resource metadata. */
@@ -176,6 +183,7 @@ const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
     website: s?.websiteUrl,
     registryStatus: r.status,
     registryUpdatedAt: r.updatedAt,
+    version: s?.version,
     probedAt: res.probedAt,
     status: res.status,
     httpStatus: res.httpStatus,
@@ -210,6 +218,20 @@ const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
 });
 
 rows.push(...carried);
+
+/**
+ * failingSince: the first probe of the current run of failed probes. A server that fails today and failed at its
+ * previous probe keeps the date it had; one that answered last time starts today. Before servers.json carried the
+ * field, the D1 dump has it (seeded once from the probes history), and else the previous probe is the lower bound.
+ * A server is down only when isConfirmedDown says so: one failed probe is "no answer", not an outage.
+ */
+const d1FailingSince = new Map<string, string>();
+if (args['d1-status'] && existsSync(args['d1-status'])) {
+  const raw = JSON.parse(await readFile(args['d1-status'], 'utf8')) as Array<{ results?: Array<{ name: string; failing_since?: string | null }> }>;
+  for (const r of raw.flatMap((x) => x.results ?? [])) if (r.failing_since) d1FailingSince.set(r.name, r.failing_since);
+}
+const previousByName = new Map(previousForCarry.map((r) => [r.name, r]));
+for (const r of rows) r.failingSince = failingSinceOf(r, previousByName.get(r.name), d1FailingSince.get(r.name));
 
 // The derived tool set of a gated remote server: today's container result, else what the previous run had.
 const previousDerived = new Map(previousForCarry.filter((r) => r.derivedPackage).map((r) => [r.name, r.derivedPackage!]));
@@ -281,7 +303,6 @@ export interface Changes {
   tokenChanges: Array<{ name: string; before: number; after: number; exact: boolean }>;
   counts: { added: number; removed: number; wentDown: number; cameBack: number; tokenChanges: number };
 }
-const LIVE = new Set(['ok', ...GATED_STATUSES]);
 function diffRuns(previousRows: ServerRow[], current: ServerRow[]): Changes {
   const prev = new Map(previousRows.map((r) => [r.name, r]));
   const now = new Map(current.map((r) => [r.name, r]));
@@ -294,8 +315,9 @@ function diffRuns(previousRows: ServerRow[], current: ServerRow[]): Changes {
   for (const r of current) {
     const p = prev.get(r.name);
     if (!p) continue;
-    if (LIVE.has(p.status) && !LIVE.has(r.status)) wentDown.push({ name: r.name, from: p.status, to: r.status });
-    if (!LIVE.has(p.status) && LIVE.has(r.status)) cameBack.push({ name: r.name, from: p.status, to: r.status });
+    const change = downChange(p, r, d1FailingSince.get(p.name));
+    if (change === 'went-down') wentDown.push({ name: r.name, from: p.status, to: r.status });
+    if (change === 'came-back') cameBack.push({ name: r.name, from: p.status, to: r.status });
     const exact = p.claudeTokens != null && r.claudeTokens != null;
     const before = exact ? p.claudeTokens! : p.toolsTokens;
     const after = exact ? r.claudeTokens! : r.toolsTokens;
@@ -340,6 +362,8 @@ const hosts = [...hostMap.entries()]
     host,
     servers: list.length,
     byStatus: count(list, (r) => r.status),
+    down: list.filter((r) => isConfirmedDown(r.status, r.failingSince, r.probedAt)).length,
+    noAnswer: list.filter((r) => isFailing(r.status) && !isConfirmedDown(r.status, r.failingSince, r.probedAt)).length,
     uniqueToolsets: new Set(list.filter((r) => r.toolsetHash).map((r) => r.toolsetHash)).size,
     medianTokens: quantile(list.filter((r) => r.status === 'ok').map((r) => r.toolsTokens ?? 0), 0.5)
   }))
@@ -351,7 +375,10 @@ const topHosts = hosts.slice(0, 500).map((h) => ({
   servers: h.servers,
   ok: h.byStatus.ok ?? 0,
   gated: [...GATED_STATUSES].reduce((a, k) => a + (h.byStatus[k] ?? 0), 0),
-  dead: h.servers - (h.byStatus.ok ?? 0) - [...GATED_STATUSES].reduce((a, k) => a + (h.byStatus[k] ?? 0), 0),
+  /** Down for two days or more (isConfirmedDown). */
+  dead: h.down,
+  /** No valid answer in this run, for less than two days. */
+  noAnswer: h.noAnswer,
   uniqueToolsets: h.uniqueToolsets,
   medianTokens: h.medianTokens
 }));
@@ -367,6 +394,8 @@ const summary = {
   stdioToday: stdioRows.length,
   probed: rows.length,
   byStatus: count(rows, (r) => r.status),
+  /** The failing servers that are not down yet: fewer than DOWN_AFTER_DAYS days without a valid answer, by status. */
+  noAnswer: count(rows.filter((r) => isFailing(r.status) && !isConfirmedDown(r.status, r.failingSince, r.probedAt)), (r) => r.status),
   reachable: ok.length + rows.filter((r) => GATED_STATUSES.has(r.status)).length,
   ok: ok.length,
   uniqueToolsets,

@@ -68,7 +68,7 @@
             },
             "status": {
               "type": "string",
-              "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed"
+              "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), needs_url (every URL in the registry has a placeholder each user fills in; not called), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed. A failure counts as down only after two days of failed probes (see failingSince)"
             },
             "toolCount": {
               "anyOf": [
@@ -191,6 +191,17 @@
               ],
               "description": "Why the Anthropic endpoint refused to count"
             },
+            "failingSince": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "For a server with no valid answer: the first probe of its current run of failed probes, ISO 8601"
+            },
+            "down": {
+              "type": "boolean",
+              "description": "True when the server has failed for two days or more; a more recent failure is \"no answer\", not down"
+            },
             "toolsTokensNote": {
               "type": "string"
             },
@@ -292,9 +303,10 @@
                 "auth",
                 "payment",
                 "newer_protocol",
-                "down"
+                "down",
+                "noanswer"
               ],
-              "description": "ok = answers and lists tools; auth = needs credentials; payment = 402; newer_protocol = a protocol newer than the SDK; down = every other failure. Omit for all."
+              "description": "ok = answers and lists tools; auth = needs credentials; payment = 402; newer_protocol = a protocol newer than the SDK; down = no valid answer for two days or more; noanswer = no valid answer for less than two days. Omit for all."
             },
             "sort": {
               "type": "string",
@@ -385,7 +397,7 @@
                   },
                   "status": {
                     "type": "string",
-                    "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed"
+                    "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), needs_url (every URL in the registry has a placeholder each user fills in; not called), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed. A failure counts as down only after two days of failed probes (see failingSince)"
                   },
                   "toolCount": {
                     "anyOf": [
@@ -487,7 +499,7 @@
             },
             "status": {
               "type": "string",
-              "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed"
+              "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), needs_url (every URL in the registry has a placeholder each user fills in; not called), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed. A failure counts as down only after two days of failed probes (see failingSince)"
             },
             "statusLabel": {
               "type": "string",
@@ -866,6 +878,13 @@
                 "type": "number"
               },
               "description": "Servers per status"
+            },
+            "noAnswer": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "number"
+              },
+              "description": "Of the failing servers, the ones that are not down yet: no valid answer for less than two days, per status"
             },
             "authSchemes": {
               "type": "object",

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { env } from 'cloudflare:workers';
 import { memoryD1, type MemoryD1 } from './d1';
-import { latestRun, latestRunWithTrend, recentChanges, runsBetween, sitemapChunkLines } from '../src/lib/db';
+import { countByStatus, latestRun, latestRunWithTrend, listServers, recentChanges, runsBetween, sitemapChunkLines } from '../src/lib/db';
 import { GATED_STATUSES } from '../../packages/mcpcost/src/types';
 
 /**
@@ -119,5 +119,42 @@ describe('sitemap lines made by D1', () => {
     expect(await sitemapChunkLines(0, 2, escape(`${base}/s/`))).toBe(before(0, 2));
     expect(await sitemapChunkLines(1, 2, escape(`${base}/s/`))).toBe(before(2, 4));
     expect(await sitemapChunkLines(9, 2, escape(`${base}/s/`))).toBe('');
+  });
+});
+
+describe('down and no answer in the list', () => {
+  // Down: failed probes on two calendar days or more before this probe. No answer: a more recent failure, or no date.
+  const servers = [
+    { name: 'a/alive', status: 'ok', failing_since: null },
+    { name: 'b/down', status: 'timeout', failing_since: '2026-10-23T09:00:00.000Z' },
+    { name: 'c/first-failure', status: 'timeout', failing_since: '2026-10-25T08:10:00.000Z' },
+    { name: 'd/no-date', status: 'dns', failing_since: null },
+    { name: 'e/template', status: 'needs_url', failing_since: null }
+  ];
+  beforeEach(() => {
+    const insert = db.sql.prepare("INSERT INTO servers (name, url, host, transport, probed_at, status, failing_since) VALUES (?, 'https://x.example/mcp', 'x.example', 'streamable-http', '2026-10-25T08:30:00.000Z', ?, ?)");
+    for (const s of servers) insert.run(s.name, s.status, s.failing_since);
+  });
+  const names = async (status: string) => (await listServers({ status, run: null, sort: 'name' })).rows.map((r) => r.name).sort();
+
+  it('lists the confirmed down servers under down, and the others that fail under noanswer', async () => {
+    expect(await names('down')).toEqual(['b/down']);
+    expect(await names('noanswer')).toEqual(['c/first-failure', 'd/no-date']);
+  });
+
+  it('takes a group and a cause', async () => {
+    expect(await names('down:timeout')).toEqual(['b/down']);
+    expect(await names('noanswer:timeout')).toEqual(['c/first-failure']);
+    expect(await names('noanswer:dns')).toEqual(['d/no-date']);
+    // A bare cause, as older links have it, lists both.
+    expect(await names('timeout')).toEqual(['b/down', 'c/first-failure']);
+  });
+
+  it('counts the no-answer rows of each failing status, and none of a status that answers or is gated', async () => {
+    const { counts } = await countByStatus({ sort: 'name' });
+    expect(counts.timeout).toMatchObject({ n: 2, na: 1 });
+    expect(counts.dns).toMatchObject({ n: 1, na: 1 });
+    expect(counts.ok).toMatchObject({ n: 1, na: 0 });
+    expect(counts.needs_url).toMatchObject({ n: 1, na: 0 });
   });
 });

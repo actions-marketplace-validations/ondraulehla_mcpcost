@@ -29,6 +29,7 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
     <li>Close the session.</li>
   </ol>
   <p>Each request has a timeout of 15 seconds. We run one probe at a time against each host.</p>
+  <p id="endpoints">An entry can list several endpoints. We try them in order, streamable HTTP first, then SSE, and the first one that gives a valid answer counts. An endpoint can have placeholders that each user fills in, such as <code>https://&#123;tenant&#125;.example.com/mcp</code>. We fill a placeholder from the registry's default value, else from its first choice. When no endpoint can be filled, or the default points to the user's own machine, we do not call the URL: the result is “needs your URL”, not a failure.</p>
   </section>
 
   <section class="panel" aria-labelledby="results-h">
@@ -40,8 +41,10 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
     <dt>newer protocol</dt><dd>The server answers with a protocol version that the current SDK does not support. The server is reachable.</dd>
     <dt>not found</dt><dd>HTTP 404, 405 or 410 on the MCP endpoint.</dd>
     <dt>not MCP</dt><dd>HTTP 200, but the response is not a valid MCP reply. Or the server returned a JSON-RPC error to <code>initialize</code>.</dd>
+    <dt>needs your URL</dt><dd>Every endpoint of the entry has a placeholder with no usable value, for example a tenant or a host of the user's own. We do not call it.</dd>
     <dt>timeout, no DNS, TLS error, refused, server error, rate limited</dt><dd>Transport failures. We name each one after its cause.</dd>
   </dl>
+  <p id="down">One failed probe is not an outage: a timeout, a 429 or a 5xx can be a bad hour of the server or a fault of our own network. A server with no valid answer is <b>no answer</b> until it has failed on two calendar days in a row; from the third day it is <b>down</b>, and its page says since when. A package server is probed once a week, so it is down when it fails again at its next probe. The re-check evidence for the registry follows the same rule: a dead cause counts as dead only after two days.</p>
   </section>
 
   <section class="panel" aria-labelledby="tokens-h" id="tokens">

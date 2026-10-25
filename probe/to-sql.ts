@@ -94,8 +94,8 @@ function upsertSuffix(key: string, columns: string[]): string {
 }
 
 const serverColumns = [
-  'name', 'title', 'description', 'url', 'host', 'transport', 'repo', 'website', 'registry_status', 'registry_updated_at',
-  'probed_at', 'status', 'http_status', 'auth_scheme', 'protocol_version', 'server_name', 'server_version', 'capabilities',
+  'name', 'title', 'description', 'url', 'host', 'transport', 'repo', 'website', 'registry_status', 'registry_updated_at', 'version',
+  'probed_at', 'status', 'failing_since', 'http_status', 'auth_scheme', 'protocol_version', 'server_name', 'server_version', 'capabilities',
   'init_ms', 'tools_ms', 'tool_count', 'tools_tokens', 'instructions_chars', 'toolset_hash', 'toolset_siblings', 'top_tools', 'error',
   'claude_model', 'claude_tokens', 'claude_tokens_cc', 'claude_measured_at', 'claude_error',
   'gemini_model', 'gemini_tokens', 'gemini_measured_at', 'gemini_error', 'measured_with_credentials',
@@ -104,8 +104,8 @@ const serverColumns = [
 ];
 function serverValues(s: ServerRow): Value[] {
   return [
-    s.name, s.title, s.description, s.url, s.host, s.transport, s.repo, s.website, s.registryStatus, s.registryUpdatedAt,
-    s.probedAt, s.status, s.httpStatus, s.authScheme, s.protocolVersion, s.serverName, s.serverVersion, s.capabilities ? JSON.stringify(s.capabilities) : null,
+    s.name, s.title, s.description, s.url, s.host, s.transport, s.repo, s.website, s.registryStatus, s.registryUpdatedAt, s.version,
+    s.probedAt, s.status, s.failingSince, s.httpStatus, s.authScheme, s.protocolVersion, s.serverName, s.serverVersion, s.capabilities ? JSON.stringify(s.capabilities) : null,
     s.initMs, s.toolsMs, s.toolCount, s.toolsTokens, s.instructionsChars, s.toolsetHash, s.toolsetSiblings, s.topTools ? JSON.stringify(s.topTools) : null, s.error,
     s.claudeModel, s.claudeTokens, s.claudeTokensCc, s.claudeMeasuredAt, s.claudeError,
     s.geminiModel, s.geminiTokens, s.geminiMeasuredAt, s.geminiError, s.measuredWithCredentials ? 1 : 0,
@@ -124,6 +124,16 @@ const changedServers = servers.filter((s) => previousRows.has(s.name));
  * the previous run. Rows with the same set of changed columns share one
  * statement through UPDATE ... FROM (VALUES ...).
  */
+/** The columns of each index on servers, and the columns the full-text triggers read. */
+const INDEXES: string[][] = [['toolset_hash'], ['tool_count', 'name'], ['url'], ['status', 'name'], ['host', 'name'], ['status', 'claude_tokens', 'tools_tokens', 'name'], ['claude_tokens', 'tools_tokens', 'name']];
+const FTS_COLUMNS = new Set(['name', 'title', 'description', 'host', 'server_name']);
+/** Rows written by an UPDATE of these columns, as D1 counts them: the row, the old and the new entry of each index it touches, and the two FTS writes. */
+function updateCost(columns: string[]): number {
+  const touched = INDEXES.filter((cols) => cols.some((c) => columns.includes(c))).length;
+  return 1 + 2 * touched + (columns.some((c) => FTS_COLUMNS.has(c)) ? 2 : 0);
+}
+/** Writes of the narrow updates, summed by narrowUpdates: a column with no index (failing_since, version) costs one. */
+let updateWrites = 0;
 function narrowUpdates(rows: ServerRow[]): string[] {
   const groups = new Map<string, { columns: string[]; values: Value[][] }>();
   for (const s of rows) {
@@ -133,6 +143,7 @@ function narrowUpdates(rows: ServerRow[]): string[] {
     const statusChanged = s.status !== previousRows.get(s.name)!.status;
     const changed = serverColumns.filter((c, i) => c !== 'name' && lit(before[i]) !== lit(after[i]) && (statusChanged || (c !== 'init_ms' && c !== 'tools_ms' && c !== 'error')));
     if (!changed.length) continue;
+    updateWrites += updateCost(changed);
     const key = changed.join(',');
     const g = groups.get(key) ?? groups.set(key, { columns: changed, values: [] }).get(key)!;
     g.values.push([s.name, ...changed.map((c) => after[serverColumns.indexOf(c)])]);
@@ -174,9 +185,10 @@ const drifted = d1Status.size
 /**
  * Writes per row, counted the way D1 counts them (the row plus one entry per index touched,
  * plus the FTS triggers): with the seven indexes left a new or whole row costs about 11, a narrow
- * update about 6, a delete about 10, a history row 2. The repair takes what the ordinary import leaves.
+ * update what updateCost says for its columns, a delete about 10, a history row 2. The repair takes
+ * what the ordinary import leaves.
  */
-const ordinaryWrites = newServers.length * 11 + changedServers.length * 6 + probeRows.length * 2 + removed.length * 10 + 2;
+const ordinaryWrites = newServers.length * 11 + updateWrites + probeRows.length * 2 + removed.length * 10 + 2;
 const left = Math.max(0, Number(args['write-budget']) - ordinaryWrites);
 const staleAll = d1Status.size ? [...d1Status.keys()].filter((n) => !currentNames.has(n) && !removed.includes(n)) : [];
 const stale = staleAll.slice(0, Math.min(Number(args['delete-limit']), Math.floor(left / 10 / 4)));

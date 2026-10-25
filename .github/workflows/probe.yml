@@ -117,7 +117,7 @@ jobs:
       - name: Dump the board's statuses, so the import can repair rows that drifted
         if: ${{ inputs.sample == '' && env.CLOUDFLARE_API_TOKEN != '' }}
         working-directory: site
-        run: npx wrangler d1 execute mcp-pulse --remote --json --command "SELECT name, status FROM servers" > ../data/previous/d1-status.json || rm -f ../data/previous/d1-status.json
+        run: npx wrangler d1 execute mcp-pulse --remote --json --command "SELECT name, status, failing_since FROM servers" > ../data/previous/d1-status.json || npx wrangler d1 execute mcp-pulse --remote --json --command "SELECT name, status FROM servers" > ../data/previous/d1-status.json || rm -f ../data/previous/d1-status.json
       - name: Build one missing token index inside today's write budget
         # Migrations 007 and 008 each build an index over every row, about 42 000 writes of the 100 000 a day.
         # One a day, before the import, which then gets what the index leaves of the budget. Each one drops the
@@ -138,12 +138,12 @@ jobs:
         if: ${{ inputs.sample == '' }}
         run: |
           stdio=""; [ -f data/stdio/stdio-run.json ] && stdio="--stdio data/stdio/stdio-run.json"
-          if [ -f data/previous/servers.json ]; then
-            node --import tsx probe/build-data.ts --in data/raw/probe-run.json --out data/latest --previous data/previous/servers.json $stdio
-          else
-            node --import tsx probe/build-data.ts --in data/raw/probe-run.json --out data/latest $stdio
-          fi
           d1=""; [ -s data/previous/d1-status.json ] && d1="--d1-status data/previous/d1-status.json"
+          if [ -f data/previous/servers.json ]; then
+            node --import tsx probe/build-data.ts --in data/raw/probe-run.json --out data/latest --previous data/previous/servers.json $stdio $d1
+          else
+            node --import tsx probe/build-data.ts --in data/raw/probe-run.json --out data/latest $stdio $d1
+          fi
           budget=$(( 85000 - ${INDEX_WRITES:-0} ))
           if [ -f data/previous/servers.json ]; then
             node --import tsx probe/to-sql.ts --in data/latest --out data/latest/import.sql --previous data/previous/servers.json --write-budget "$budget" $d1
@@ -190,6 +190,7 @@ jobs:
           if [ "$(has derived_package)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/005-derived.sql; echo "migration 005 applied"; fi
           if [ "$(has auth_documentation)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/009-auth-documentation.sql; echo "migration 009 applied"; fi
           if [ "$(has auth_kind)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/010-auth-kind.sql; echo "migration 010 applied"; fi
+          if [ "$(has failing_since)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/011-failing-since-version.sql; echo "migration 011 applied"; fi
           idx=$(npx wrangler d1 execute mcp-pulse --remote --json --command "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='servers_init_name'" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].results[0].n))')
           if [ "$idx" != "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/006-fewer-indexes.sql; echo "migration 006 applied"; fi
       - name: Import into D1

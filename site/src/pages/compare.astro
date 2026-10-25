@@ -79,7 +79,7 @@ const why = (r: CompareRow): string => (r.status === 'unknown' ? 'not on the boa
           <tbody>
             <tr>
               <th scope="row">Status</th>
-              {rows.map((r) => <td><span class={`tag ${r.status === 'unknown' ? 'down' : bucket(r.status)}`}>{r.status === 'unknown' ? 'not on the board' : r.statusLabel}</span></td>)}
+              {rows.map((r) => <td><span class={`tag ${r.status === 'unknown' ? 'down' : bucket(r.status, r.failingSince ?? null, r.probedAt)}`}>{r.status === 'unknown' ? 'not on the board' : r.statusLabel}</span></td>)}
             </tr>
             <tr>
               <th scope="row">Access</th>

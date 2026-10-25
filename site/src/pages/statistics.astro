@@ -6,6 +6,7 @@ import Trend from '../components/charts/Trend.astro';
 import Histogram from '../components/charts/Histogram.astro';
 import { latestRunWithTrend, listHosts, type TrendPoint } from '../lib/db';
 import { bucket, label, num, pct, date, ms, modelName, authKindLabel } from '../lib/format';
+import { GATED_STATUSES } from '../../../packages/mcpcost/src/types.ts';
 
 // The latest run and, for the run-by-run charts, the 29 before it, of which they draw three numbers: one round trip.
 const { run, earlier } = await latestRunWithTrend(['changes'], 29);
@@ -13,8 +14,10 @@ const { run, earlier } = await latestRunWithTrend(['changes'], 29);
 const hosts = run ? await listHosts(12, run) : [];
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=10800');
 
-const gated = run ? (run.byStatus.auth ?? 0) + (run.byStatus.payment ?? 0) + (run.byStatus.newer_protocol ?? 0) : 0;
-const down = run ? run.probed - run.ok - gated : 0;
+const gated = run ? [...GATED_STATUSES].reduce((a, s) => a + (run.byStatus[s] ?? 0), 0) : 0;
+/** Failed for less than two days: no answer, not down yet. Runs before 2026-10-26 have no such count. */
+const noAnswer = run ? Object.values(run.noAnswer ?? {}).reduce((a, n) => a + n, 0) : 0;
+const down = run ? run.probed - run.ok - gated - noAnswer : 0;
 const statusItems = run
   ? Object.entries(run.byStatus).sort((a, b) => b[1] - a[1]).map(([s, n]) => ({ label: label(s), value: n, tone: bucket(s), href: `/servers?status=${s}`, note: pct(n, run.probed) }))
   : [];
@@ -50,8 +53,9 @@ const heavyMax = Math.max(1, ...topHeavy.map((h) => h.claudeTokens ?? h.toolsTok
         <p class="muted small">What every probed server answered. Hover a segment or a bar for the count, or open the table.</p>
         <Stack id="results-stack" segments={[
           { label: 'alive', value: run.ok, tone: 'up', href: '/servers?status=ok' },
-          { label: 'needs auth, payment, env or args', value: gated, tone: 'gated', href: '/servers?status=auth' },
-          { label: 'down or broken', value: down, tone: 'down', href: '/servers?status=down' }
+          { label: 'needs auth, payment, setup or a URL of your own', value: gated, tone: 'gated', href: '/servers?status=gated' },
+          { label: 'no answer, less than two days', value: noAnswer, tone: 'noanswer', href: '/servers?status=noanswer' },
+          { label: 'down for two days or more', value: down, tone: 'down', href: '/servers?status=down' }
         ]} />
         <Bars id="results-bars" items={statusItems} columns={['Result', 'Servers']} />
       </section>

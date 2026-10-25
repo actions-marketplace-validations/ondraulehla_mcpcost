@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { GATED_STATUSES } from '../../../packages/mcpcost/src/types.ts';
+import { DOWN_AFTER_DAYS, GATED_STATUSES } from '../../../packages/mcpcost/src/types.ts';
 import { STATUS_LABEL } from './format';
 
 export interface ServerRecord {
@@ -13,8 +13,12 @@ export interface ServerRecord {
   website: string | null;
   registry_status: string | null;
   registry_updated_at: string | null;
+  /** The version of the registry entry that was probed. Null before migration 011 ran a probe. */
+  version: string | null;
   probed_at: string;
   status: string;
+  /** The first probe of the current run of failed probes; null while the server answers or is gated. See isConfirmedDown. */
+  failing_since: string | null;
   http_status: number | null;
   auth_scheme: string | null;
   /** The publisher's guide to getting access, from the OAuth protected-resource metadata. */
@@ -95,6 +99,8 @@ export interface RunSummary {
   registryWithRemote: number;
   probed: number;
   byStatus: Record<string, number>;
+  /** The failing servers that are not down yet (fewer than DOWN_AFTER_DAYS days of failed probes), by status; runs since 2026-10-26. */
+  noAnswer?: Record<string, number>;
   reachable: number;
   ok: number;
   uniqueToolsets: number;
@@ -122,7 +128,7 @@ export interface RunSummary {
   initMs: { median: number; p90: number };
   hosts: number;
   /** The 500 biggest hosts, from the run that wrote them (runs since 2026-10-21); older runs have the hosts table. */
-  topHosts?: Array<{ host: string; servers: number; ok: number; gated: number; dead: number; uniqueToolsets: number; medianTokens: number }>;
+  topHosts?: Array<{ host: string; servers: number; ok: number; gated: number; dead: number; noAnswer?: number; uniqueToolsets: number; medianTokens: number }>;
   /** The smallest and the largest number the board shows for an alive server (exact count, else estimate); runs since 2026-10-21. */
   shownTokens?: { min: number; max: number };
   heaviest: Array<{ name: string; toolCount: number; toolsTokens: number; claudeTokens?: number; claudeTokensCc?: number; host: string }>;
@@ -455,10 +461,10 @@ export interface ListQuery {
 }
 
 export const LIST_COLUMNS =
-  `name, title, host, transport, status, http_status, auth_scheme, protocol_version, init_ms, tool_count, tools_tokens, claude_tokens, claude_tokens_cc, toolset_siblings, registry_updated_at, derived_package, derived_status, derived_tools_tokens, derived_claude_tokens, ${SHOWN_TOKENS} AS shown_tokens`;
+  `name, title, host, transport, status, failing_since, probed_at, http_status, auth_scheme, protocol_version, init_ms, tool_count, tools_tokens, claude_tokens, claude_tokens_cc, toolset_siblings, registry_updated_at, derived_package, derived_status, derived_tools_tokens, derived_claude_tokens, ${SHOWN_TOKENS} AS shown_tokens`;
 export type ListRow = Pick<
   ServerRecord,
-  | 'name' | 'title' | 'host' | 'transport' | 'status' | 'http_status' | 'auth_scheme' | 'protocol_version'
+  | 'name' | 'title' | 'host' | 'transport' | 'status' | 'failing_since' | 'probed_at' | 'http_status' | 'auth_scheme' | 'protocol_version'
   | 'init_ms' | 'tool_count' | 'tools_tokens' | 'claude_tokens' | 'claude_tokens_cc' | 'toolset_siblings' | 'registry_updated_at' | 'derived_package' | 'derived_status' | 'derived_tools_tokens' | 'derived_claude_tokens'
 > & { shown_tokens: number | null };
 
@@ -527,10 +533,23 @@ function downStatuses(run: Pick<RunSummary, 'byStatus'> | null): string[] {
   return [...new Set([...Object.keys(STATUS_LABEL), ...Object.keys(run?.byStatus ?? {})])].filter((s) => s !== 'ok' && !GATED_STATUSES.has(s)).sort();
 }
 
+/** A failing row that is down: failed probes on DOWN_AFTER_DAYS calendar days or more. isConfirmedDown, in SQL. */
+const CONFIRMED_DOWN_SQL = `(failing_since IS NOT NULL AND julianday(substr(probed_at, 1, 10)) - julianday(substr(failing_since, 1, 10)) >= ${DOWN_AFTER_DAYS})`;
+
+/**
+ * The failing statuses split in two: "down" is down for DOWN_AFTER_DAYS days or more, "noanswer" failed more
+ * recently. A status parameter names a group (down, noanswer) or a group and a cause (down:timeout).
+ */
+function downCondition(status: string | undefined): string | null {
+  const group = status?.split(':')[0];
+  return group === 'down' ? CONFIRMED_DOWN_SQL : group === 'noanswer' ? `NOT ${CONFIRMED_DOWN_SQL}` : null;
+}
+
 /** The statuses of a status parameter, or null for every status. */
 function statusesOf(status: string | undefined, run: Pick<RunSummary, 'byStatus'> | null): string[] | null {
   if (!status) return null;
-  if (status === 'down') return downStatuses(run);
+  if (status === 'down' || status === 'noanswer') return downStatuses(run);
+  if (/^(down|noanswer):/.test(status)) return [status.slice(status.indexOf(':') + 1)];
   if (status === 'gated') return [...GATED_STATUSES];
   if (status === 'access') return [...ACCESS_STATUSES];
   if (status === 'setup') return [...SETUP_STATUSES];
@@ -579,6 +598,8 @@ function listFilter(query: ListQuery, run: Pick<RunSummary, 'byStatus'> | null, 
     where.push(band.sql);
     binds.push(...band.binds);
   }
+  const down = downCondition(query.status);
+  if (down) where.push(down);
   return { fts: fts.length ? fts.join(' AND ') : null, statuses: statusesOf(query.status, run), where, binds, sortWhere: sort.where || null };
 }
 
@@ -612,6 +633,8 @@ function statusCondition(statuses: string[] | null, walk: boolean): { sql: strin
 export interface StatusCount {
   /** Rows of this status under every other filter, the token range included. */
   n: number;
+  /** Of those, the rows that failed for less than DOWN_AFTER_DAYS days: "no answer", not down. */
+  na: number;
   /** The smallest and the largest shown token count of this status under the other filters, the token range left out. */
   lo: number | null;
   hi: number | null;
@@ -623,13 +646,16 @@ export async function countByStatus(query: Omit<ListQuery, 'status'>): Promise<{
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const band = tokenCondition(query.tokens);
   const count = band ? `count(*) FILTER (WHERE ${band.sql})` : 'count(*)';
+  const notDown = band ? `count(*) FILTER (WHERE ${band.sql} AND NOT ${CONFIRMED_DOWN_SQL})` : `count(*) FILTER (WHERE NOT ${CONFIRMED_DOWN_SQL})`;
   const { results } = await db()
-    .prepare(`SELECT status, ${count} AS n, count(*) AS rows_seen, min(${SHOWN_TOKENS}) AS lo, max(${SHOWN_TOKENS}) AS hi FROM ${from.sql} ${whereSql} GROUP BY status`)
-    // The FILTER clause stands before the FROM, and the FROM before the WHERE, so their values bind in that order.
-    .bind(...(band?.binds ?? []), ...from.binds, ...binds)
-    .all<{ status: string; n: number; rows_seen: number; lo: number | null; hi: number | null }>();
+    .prepare(`SELECT status, ${count} AS n, ${notDown} AS na, count(*) AS rows_seen, min(${SHOWN_TOKENS}) AS lo, max(${SHOWN_TOKENS}) AS hi FROM ${from.sql} ${whereSql} GROUP BY status`)
+    // The FILTER clauses stand before the FROM, and the FROM before the WHERE, so their values bind in that order.
+    .bind(...(band?.binds ?? []), ...(band?.binds ?? []), ...from.binds, ...binds)
+    .all<{ status: string; n: number; na: number; rows_seen: number; lo: number | null; hi: number | null }>();
   const seen = results.reduce((a, r) => a + r.rows_seen, 0);
-  return { counts: Object.fromEntries(results.map((r) => [r.status, { n: r.n, lo: r.lo, hi: r.hi }])), capped: fts !== null && seen > MATCH_CAP };
+  // na counts only for a failing status: an alive or gated row has no failing_since, and is never "no answer".
+  const failing = (status: string) => status !== 'ok' && !GATED_STATUSES.has(status);
+  return { counts: Object.fromEntries(results.map((r) => [r.status, { n: r.n, na: failing(r.status) ? r.na : 0, lo: r.lo, hi: r.hi }])), capped: fts !== null && seen > MATCH_CAP };
 }
 
 /** Which indexes on the shown number exist: migration 007 builds the one with the status, 008 the one without. Asked once in ten minutes per isolate. */

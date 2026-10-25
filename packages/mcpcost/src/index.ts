@@ -1,4 +1,5 @@
-export { fetchRegistry, primaryRemote, hostOf, REGISTRY_URL } from './registry.js';
+export { fetchRegistry, primaryRemote, remoteCandidates, isLocalHost, hostOf, REGISTRY_URL } from './registry.js';
+export type { RemoteCandidate, RemoteTemplate } from './registry.js';
 export { probeRemote, USER_AGENT, VERSION } from './probe.js';
 export type { ProbeOptions, ClaudeOptions, GeminiOptions } from './probe.js';
 export { probeStdio, probeStdioRaw } from './stdio.js';
@@ -14,7 +15,7 @@ export type { ClaudeCountOptions, ClaudeCount, Limiter } from './claude.js';
 export { countGeminiTokens, toGeminiDeclarations, GeminiCountError, GEMINI_MODEL } from './gemini.js';
 export type { GeminiCountOptions, GeminiCount } from './gemini.js';
 export type * from './types.js';
-export { GATED_STATUSES } from './types.js';
+export { GATED_STATUSES, isFailing, isConfirmedDown, DOWN_AFTER_DAYS } from './types.js';
 export { buildServer } from './mcp.js';
 export { compare, formatComparison, rowFromBoard, unknownRow, COMPARE_FORMATS } from './compare.js';
 export type { CompareRow, Comparison, CompareFormat } from './compare.js';
