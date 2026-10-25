@@ -12,6 +12,11 @@ on:
       to:
         description: 'End of the window, ISO 8601 UTC (default: two minutes ago)'
         required: false
+      quiet:
+        description: 'Only write the report: no issue and no red run when a threshold is crossed (for a look back at a past window)'
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
   issues: write
@@ -58,7 +63,7 @@ jobs:
           WATCH_REPORT_FILE: ${{ runner.temp }}/watch.md
         run: node site/edge/watch.mjs "${{ steps.window.outputs.from }}" "${{ inputs.to }}"
       - name: Open or update the edge-watch issue
-        if: ${{ steps.watch.outcome == 'failure' && steps.watch.outputs.alarm != '' }}
+        if: ${{ steps.watch.outcome == 'failure' && steps.watch.outputs.alarm != '' && !inputs.quiet }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -75,5 +80,6 @@ jobs:
             gh issue create --title "Edge watch: $ALARM" --label edge-watch --body-file "${{ runner.temp }}/issue.md"
           fi
       - name: Fail the run when a threshold was crossed or Cloudflare could not be asked
-        if: ${{ steps.watch.outcome == 'failure' }}
+        # A quiet run still fails when Cloudflare could not be asked (no alarm text); it only keeps quiet about thresholds.
+        if: ${{ steps.watch.outcome == 'failure' && (steps.watch.outputs.alarm == '' || !inputs.quiet) }}
         run: exit 1
