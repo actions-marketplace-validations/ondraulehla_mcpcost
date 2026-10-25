@@ -326,7 +326,7 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
               {r.title && r.title !== r.name && <span class="sub">{r.title}</span>}
             </td>
             <td>
-              <span class={`tag ${bucket(r.status, r.failing_since, r.probed_at)}`} title={r.failing_since ? `${bucket(r.status, r.failing_since, r.probed_at) === 'down' ? 'Down' : 'No valid answer'} since ${r.failing_since.slice(0, 10)}` : undefined}>{label(r.status)}</span>
+              <span class={`tag ${bucket(r.status, r.failing_since, r.down_since)}`} title={r.failing_since ? `${bucket(r.status, r.failing_since, r.down_since) === 'down' ? 'Down' : 'No valid answer'} since ${r.failing_since.slice(0, 10)}` : undefined}>{label(r.status)}</span>
               {r.status === 'auth' && r.auth_scheme && <span class="sub">{r.auth_scheme}</span>}
               {(r.toolset_siblings ?? 0) > 0 && <span class="sub">same tools as {num(r.toolset_siblings)} other{r.toolset_siblings === 1 ? '' : 's'}</span>}
             </td>

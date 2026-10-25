@@ -123,17 +123,18 @@ describe('sitemap lines made by D1', () => {
 });
 
 describe('down and no answer in the list', () => {
-  // Down: failed probes on two calendar days or more before this probe. No answer: a more recent failure, or no date.
+  // Down: down_since is set (the probe sets it after two days of failed probes). No answer: failing, down_since null.
   const servers = [
-    { name: 'a/alive', status: 'ok', failing_since: null },
-    { name: 'b/down', status: 'timeout', failing_since: '2026-10-23T09:00:00.000Z' },
-    { name: 'c/first-failure', status: 'timeout', failing_since: '2026-10-25T08:10:00.000Z' },
-    { name: 'd/no-date', status: 'dns', failing_since: null },
-    { name: 'e/template', status: 'needs_url', failing_since: null }
+    { name: 'a/alive', status: 'ok', failing_since: null, down_since: null },
+    { name: 'b/down', status: 'timeout', failing_since: '2026-10-23T09:00:00.000Z', down_since: '2026-10-23T09:00:00.000Z' },
+    { name: 'c/first-failure', status: 'timeout', failing_since: '2026-10-25T08:10:00.000Z', down_since: null },
+    { name: 'd/no-date', status: 'dns', failing_since: null, down_since: null },
+    { name: 'e/template', status: 'needs_url', failing_since: null, down_since: null }
   ];
   beforeEach(() => {
-    const insert = db.sql.prepare("INSERT INTO servers (name, url, host, transport, probed_at, status, failing_since) VALUES (?, 'https://x.example/mcp', 'x.example', 'streamable-http', '2026-10-25T08:30:00.000Z', ?, ?)");
-    for (const s of servers) insert.run(s.name, s.status, s.failing_since);
+    // probed_at is the time of the last change in D1, as for b/down here: the list must not read it as the probe time.
+    const insert = db.sql.prepare("INSERT INTO servers (name, url, host, transport, probed_at, status, failing_since, down_since) VALUES (?, 'https://x.example/mcp', 'x.example', 'streamable-http', ?, ?, ?, ?)");
+    for (const s of servers) insert.run(s.name, s.failing_since ?? '2026-10-25T08:30:00.000Z', s.status, s.failing_since, s.down_since);
   });
   const names = async (status: string) => (await listServers({ status, run: null, sort: 'name' })).rows.map((r) => r.name).sort();
 

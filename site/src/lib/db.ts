@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { DOWN_AFTER_DAYS, GATED_STATUSES } from '../../../packages/mcpcost/src/types.ts';
+import { GATED_STATUSES } from '../../../packages/mcpcost/src/types.ts';
 import { STATUS_LABEL } from './format';
 
 export interface ServerRecord {
@@ -19,6 +19,8 @@ export interface ServerRecord {
   status: string;
   /** The first probe of the current run of failed probes; null while the server answers or is gated. See isConfirmedDown. */
   failing_since: string | null;
+  /** failing_since once the server is down (two days of failed probes, from the real probe times); else null. */
+  down_since: string | null;
   http_status: number | null;
   auth_scheme: string | null;
   /** The publisher's guide to getting access, from the OAuth protected-resource metadata. */
@@ -461,10 +463,10 @@ export interface ListQuery {
 }
 
 export const LIST_COLUMNS =
-  `name, title, host, transport, status, failing_since, probed_at, http_status, auth_scheme, protocol_version, init_ms, tool_count, tools_tokens, claude_tokens, claude_tokens_cc, toolset_siblings, registry_updated_at, derived_package, derived_status, derived_tools_tokens, derived_claude_tokens, ${SHOWN_TOKENS} AS shown_tokens`;
+  `name, title, host, transport, status, failing_since, down_since, probed_at, http_status, auth_scheme, protocol_version, init_ms, tool_count, tools_tokens, claude_tokens, claude_tokens_cc, toolset_siblings, registry_updated_at, derived_package, derived_status, derived_tools_tokens, derived_claude_tokens, ${SHOWN_TOKENS} AS shown_tokens`;
 export type ListRow = Pick<
   ServerRecord,
-  | 'name' | 'title' | 'host' | 'transport' | 'status' | 'failing_since' | 'probed_at' | 'http_status' | 'auth_scheme' | 'protocol_version'
+  | 'name' | 'title' | 'host' | 'transport' | 'status' | 'failing_since' | 'down_since' | 'probed_at' | 'http_status' | 'auth_scheme' | 'protocol_version'
   | 'init_ms' | 'tool_count' | 'tools_tokens' | 'claude_tokens' | 'claude_tokens_cc' | 'toolset_siblings' | 'registry_updated_at' | 'derived_package' | 'derived_status' | 'derived_tools_tokens' | 'derived_claude_tokens'
 > & { shown_tokens: number | null };
 
@@ -533,8 +535,11 @@ function downStatuses(run: Pick<RunSummary, 'byStatus'> | null): string[] {
   return [...new Set([...Object.keys(STATUS_LABEL), ...Object.keys(run?.byStatus ?? {})])].filter((s) => s !== 'ok' && !GATED_STATUSES.has(s)).sort();
 }
 
-/** A failing row that is down: failed probes on DOWN_AFTER_DAYS calendar days or more. isConfirmedDown, in SQL. */
-const CONFIRMED_DOWN_SQL = `(failing_since IS NOT NULL AND julianday(substr(probed_at, 1, 10)) - julianday(substr(failing_since, 1, 10)) >= ${DOWN_AFTER_DAYS})`;
+/**
+ * A failing row that is down: two days of failed probes. The probe sets down_since from the real probe times
+ * (isConfirmedDown); probed_at here is the time of the last change, so the board cannot compute it.
+ */
+const CONFIRMED_DOWN_SQL = '(down_since IS NOT NULL)';
 
 /**
  * The failing statuses split in two: "down" is down for DOWN_AFTER_DAYS days or more, "noanswer" failed more

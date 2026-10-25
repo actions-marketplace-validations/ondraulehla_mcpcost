@@ -31,7 +31,7 @@ const answered = bucket(server.status) !== 'down' || history.some((h) => bucket(
 const robots = answered ? undefined : 'noindex, follow';
 const heading = server.title ?? server.server_name ?? name;
 /** up, gated, noanswer or down: a failing server is down after two days of failed probes, "no answer" before. */
-const group = bucket(server.status, server.failing_since, server.probed_at);
+const group = bucket(server.status, server.failing_since, server.down_since);
 const failingSince = group === 'down' || group === 'noanswer' ? (server.failing_since ?? server.probed_at) : null;
 const ok = server.status === 'ok';
 const exact = ok && server.claude_tokens != null;

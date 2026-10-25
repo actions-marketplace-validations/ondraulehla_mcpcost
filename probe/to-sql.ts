@@ -95,7 +95,7 @@ function upsertSuffix(key: string, columns: string[]): string {
 
 const serverColumns = [
   'name', 'title', 'description', 'url', 'host', 'transport', 'repo', 'website', 'registry_status', 'registry_updated_at', 'version',
-  'probed_at', 'status', 'failing_since', 'http_status', 'auth_scheme', 'protocol_version', 'server_name', 'server_version', 'capabilities',
+  'probed_at', 'status', 'failing_since', 'down_since', 'http_status', 'auth_scheme', 'protocol_version', 'server_name', 'server_version', 'capabilities',
   'init_ms', 'tools_ms', 'tool_count', 'tools_tokens', 'instructions_chars', 'toolset_hash', 'toolset_siblings', 'top_tools', 'error',
   'claude_model', 'claude_tokens', 'claude_tokens_cc', 'claude_measured_at', 'claude_error',
   'gemini_model', 'gemini_tokens', 'gemini_measured_at', 'gemini_error', 'measured_with_credentials',
@@ -105,7 +105,7 @@ const serverColumns = [
 function serverValues(s: ServerRow): Value[] {
   return [
     s.name, s.title, s.description, s.url, s.host, s.transport, s.repo, s.website, s.registryStatus, s.registryUpdatedAt, s.version,
-    s.probedAt, s.status, s.failingSince, s.httpStatus, s.authScheme, s.protocolVersion, s.serverName, s.serverVersion, s.capabilities ? JSON.stringify(s.capabilities) : null,
+    s.probedAt, s.status, s.failingSince, s.downSince, s.httpStatus, s.authScheme, s.protocolVersion, s.serverName, s.serverVersion, s.capabilities ? JSON.stringify(s.capabilities) : null,
     s.initMs, s.toolsMs, s.toolCount, s.toolsTokens, s.instructionsChars, s.toolsetHash, s.toolsetSiblings, s.topTools ? JSON.stringify(s.topTools) : null, s.error,
     s.claudeModel, s.claudeTokens, s.claudeTokensCc, s.claudeMeasuredAt, s.claudeError,
     s.geminiModel, s.geminiTokens, s.geminiMeasuredAt, s.geminiError, s.measuredWithCredentials ? 1 : 0,

@@ -35,7 +35,7 @@ export const GET: APIRoute = async ({ params }) => {
   let text = 'unknown server';
   let color: string = COLORS.unknown;
   if (server) {
-    const b = bucket(server.status, server.failing_since, server.probed_at);
+    const b = bucket(server.status, server.failing_since, server.down_since);
     color = COLORS[b];
     if (server.status === 'ok') {
       text = `alive · ${server.tool_count} tools · ${tokens(server.claude_tokens ?? server.tools_tokens)} tokens`;

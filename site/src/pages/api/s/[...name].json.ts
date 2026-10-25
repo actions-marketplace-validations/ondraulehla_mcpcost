@@ -1,7 +1,6 @@
 import type { APIRoute } from 'astro';
 import { getHistory, getServer } from '../../../lib/db';
 import { label } from '../../../lib/format';
-import { isConfirmedDown } from '../../../../../packages/mcpcost/src/types.ts';
 
 /** One server as JSON: the latest probe plus its history. */
 export const GET: APIRoute = async ({ params, site }) => {
@@ -23,7 +22,7 @@ export const GET: APIRoute = async ({ params, site }) => {
       statusLabel: label(server.status),
       /** The first probe of the current run of failed probes; down is true after two days of them. */
       failingSince: server.failing_since,
-      down: isConfirmedDown(server.status, server.failing_since, server.probed_at),
+      down: server.down_since != null,
       httpStatus: server.http_status,
       authScheme: server.auth_scheme,
       authDocumentation: server.auth_documentation,

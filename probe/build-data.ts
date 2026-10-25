@@ -76,6 +76,8 @@ export interface ServerRow {
   status: string;
   /** The first probe of the current run of failed probes (ISO time); unset while the server answers or is gated. */
   failingSince?: string;
+  /** failingSince once the server is down: isConfirmedDown at this row's real probe time. The board reads it. */
+  downSince?: string;
   httpStatus?: number;
   authScheme?: string;
   /** The publisher's guide to getting access, from the OAuth protected-resource metadata. */
@@ -231,7 +233,10 @@ if (args['d1-status'] && existsSync(args['d1-status'])) {
   for (const r of raw.flatMap((x) => x.results ?? [])) if (r.failing_since) d1FailingSince.set(r.name, r.failing_since);
 }
 const previousByName = new Map(previousForCarry.map((r) => [r.name, r]));
-for (const r of rows) r.failingSince = failingSinceOf(r, previousByName.get(r.name), d1FailingSince.get(r.name));
+for (const r of rows) {
+  r.failingSince = failingSinceOf(r, previousByName.get(r.name), d1FailingSince.get(r.name));
+  r.downSince = isConfirmedDown(r.status, r.failingSince, r.probedAt) ? r.failingSince : undefined;
+}
 
 // The derived tool set of a gated remote server: today's container result, else what the previous run had.
 const previousDerived = new Map(previousForCarry.filter((r) => r.derivedPackage).map((r) => [r.name, r.derivedPackage!]));

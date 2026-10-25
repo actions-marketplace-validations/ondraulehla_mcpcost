@@ -23,7 +23,7 @@ export const REPORTS: Report[] = [
     run: '2026-10-24',
     from: '2026-10-03',
     dataset: { path: '/data/mcpcost-2026-10.json.gz', size: '1.2 MB' },
-    evidence: { path: '/data/mcpcost-evidence-2026-10.json.gz', size: '1.6 MB' }
+    evidence: { path: '/data/mcpcost-evidence-2026-10.json.gz', size: '1.8 MB' }
   }
 ];
 

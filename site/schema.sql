@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS servers (
   status TEXT NOT NULL,
   -- The first probe of the current run of failed probes. A server is down after two days of them, see isConfirmedDown.
   failing_since TEXT,
+  -- failing_since once the server is down (isConfirmedDown at the real probe time), else null. See migrations/012-down-since.sql.
+  down_since TEXT,
   http_status INTEGER,
   auth_scheme TEXT,
   -- The publisher's guide to getting access: resource_documentation of the OAuth protected-resource metadata (migration 009).

@@ -4,7 +4,6 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { findByUrl, getServer, latestRun, listServers, SORTS, MAX_NUMBERED_PAGE, decodeCursor, encodeCursor, type SortKey } from './db';
 import { label } from './format';
-import { isConfirmedDown } from '../../../packages/mcpcost/src/types.ts';
 import { probeRemoteRaw } from '../../../packages/mcpcost/src/core.ts';
 import { payloadBytes, BYTES_PER_TOKEN } from '../../../packages/mcpcost/src/payload.ts';
 import { liveClaudeCount } from './claude';
@@ -93,7 +92,7 @@ function build(): McpServer {
         authKind: s.auth_kind, authDocumentation: s.auth_documentation, authMetadata: s.auth_metadata ? JSON.parse(s.auth_metadata) : null,
         protocolVersion: s.protocol_version, toolCount: s.tool_count,
         claudeTokens: s.claude_tokens, claudeTokensClaudeCode: s.claude_tokens_cc, claudeModel: s.claude_model, claudeError: s.claude_error,
-        failingSince: s.failing_since, down: isConfirmedDown(s.status, s.failing_since, s.probed_at),
+        failingSince: s.failing_since, down: s.down_since != null,
         toolsTokens: s.tools_tokens, toolsTokensNote: 'o200k_base estimate; claudeTokens is exact',
         shareOf200k: (s.claude_tokens ?? s.tools_tokens) != null ? Number((((s.claude_tokens ?? s.tools_tokens)! / 200_000) * 100).toFixed(2)) : null,
         latencyMs: { initialize: s.init_ms, toolsList: s.tools_ms }, topTools: s.top_tools ? JSON.parse(s.top_tools) : null,
