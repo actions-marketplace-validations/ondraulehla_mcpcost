@@ -72,22 +72,23 @@ const gatedCount = sum(GATED_STATUSES);
 /** The failing servers that are not down yet, by status: failed probes for less than two days. Older runs have none. */
 const noAnswerBy: Record<string, number> = counted ? Object.fromEntries(Object.entries(counted).map(([k, v]) => [k, v.na])) : (run?.noAnswer ?? {});
 const noAnswerCount = Object.values(noAnswerBy).reduce((a, n) => a + n, 0);
-const failingCount = allCount - (byStatus?.ok ?? 0) - gatedCount;
-const counts = byStatus ? { ok: byStatus.ok ?? 0, access: sum(ACCESS_STATUSES), setup: sum(SETUP_STATUSES), down: failingCount - noAnswerCount, noanswer: noAnswerCount, all: allCount } : null;
-type Bucket = 'ok' | 'access' | 'setup' | 'down' | 'noanswer' | 'all';
-const BUCKETS: Bucket[] = ['ok', 'access', 'setup', 'down', 'noanswer', 'all'];
+const unprobedCount = byStatus?.unprobed ?? 0;
+const failingCount = allCount - (byStatus?.ok ?? 0) - gatedCount - unprobedCount;
+const counts = byStatus ? { ok: byStatus.ok ?? 0, access: sum(ACCESS_STATUSES), setup: sum(SETUP_STATUSES), down: failingCount - noAnswerCount, noanswer: noAnswerCount, unprobed: unprobedCount, all: allCount } : null;
+type Bucket = 'ok' | 'access' | 'setup' | 'down' | 'noanswer' | 'unprobed' | 'all';
+const BUCKETS: Bucket[] = ['ok', 'access', 'setup', 'down', 'noanswer', 'unprobed', 'all'];
 /** A status parameter can name a group and a cause, "down:timeout"; a bare cause (an older link) belongs to Down. */
 const group = status.includes(':') ? status.slice(0, status.indexOf(':')) : status;
 const cause = status.includes(':') ? status.slice(status.indexOf(':') + 1) : status;
 const activeBucket: Bucket =
-  status === 'ok' ? 'ok' : status === '' || status === 'gated' ? 'all' : status === 'access' || ACCESS_STATUSES.has(status) ? 'access' : status === 'setup' || SETUP_STATUSES.has(status) ? 'setup' : group === 'noanswer' ? 'noanswer' : 'down';
-const failing = (k: string) => k !== 'ok' && !GATED_STATUSES.has(k);
+  status === 'ok' ? 'ok' : status === '' || status === 'gated' ? 'all' : status === 'unprobed' ? 'unprobed' : status === 'access' || ACCESS_STATUSES.has(status) ? 'access' : status === 'setup' || SETUP_STATUSES.has(status) ? 'setup' : group === 'noanswer' ? 'noanswer' : 'down';
+const failing = (k: string) => k !== 'ok' && k !== 'unprobed' && !GATED_STATUSES.has(k);
 const inBucket = (b: Bucket, k: string) => (b === 'access' ? ACCESS_STATUSES.has(k) : b === 'setup' ? SETUP_STATUSES.has(k) : b === 'down' || b === 'noanswer' ? failing(k) : false);
 /** Servers of a cause in a bucket: in Down the ones that failed for two days or more, in No answer the others. */
 const inGroup = (b: Bucket, k: string) => (!byStatus ? 0 : b === 'noanswer' ? (noAnswerBy[k] ?? 0) : b === 'down' && failing(k) ? (byStatus[k] ?? 0) - (noAnswerBy[k] ?? 0) : (byStatus[k] ?? 0));
 /** The causes of the active bucket, with counts, zero counts left out. In Down and No answer a cause links to "group:cause". */
 const causes: Array<{ key: string; label: string; count: number }> =
-  activeBucket === 'ok' || activeBucket === 'all' || !byStatus
+  activeBucket === 'ok' || activeBucket === 'all' || activeBucket === 'unprobed' || !byStatus
     ? []
     : Object.entries(STATUS_LABEL)
         .filter(([k]) => inBucket(activeBucket, k))
@@ -101,7 +102,7 @@ const total = counts && !(SORTS[sort].where && !counted)
     ? counts.all
     : status === 'gated'
       ? gatedCount
-      : status === 'ok' || status === 'access' || status === 'setup' || status === 'down' || status === 'noanswer'
+      : status === 'ok' || status === 'access' || status === 'setup' || status === 'down' || status === 'noanswer' || status === 'unprobed'
         ? counts[status]
         : group === 'down' || group === 'noanswer'
           ? inGroup(group, cause)
@@ -149,7 +150,7 @@ const bucketHref = (b: Bucket) => withParams({ status: b });
 const transportLabel: Record<string, string> = { 'streamable-http': 'streamable http', sse: 'sse', stdio: 'stdio (npm, PyPI)' };
 const active: Array<{ label: string; href: string }> = [];
 if (q) active.push({ label: `“${q}”`, href: withParams({ q: null }) });
-if (statusParam && statusParam !== 'ok') active.push({ label: statusParam === 'all' ? 'every result' : statusParam === 'gated' ? 'needs auth or setup' : statusParam === 'access' ? 'needs auth' : statusParam === 'setup' ? 'needs setup' : statusParam === 'down' ? 'down for two days or more' : statusParam === 'noanswer' ? 'no answer, less than two days' : group === 'down' ? `down: ${label(cause)}` : group === 'noanswer' ? `no answer: ${label(cause)}` : label(statusParam), href: withParams({ status: null }) });
+if (statusParam && statusParam !== 'ok') active.push({ label: statusParam === 'all' ? 'every result' : statusParam === 'gated' ? 'needs auth or setup' : statusParam === 'access' ? 'needs auth' : statusParam === 'setup' ? 'needs setup' : statusParam === 'down' ? 'down for two days or more' : statusParam === 'noanswer' ? 'no answer, less than two days' : statusParam === 'unprobed' ? 'not probed' : group === 'down' ? `down: ${label(cause)}` : group === 'noanswer' ? `no answer: ${label(cause)}` : label(statusParam), href: withParams({ status: null }) });
 if (host) active.push({ label: host, href: withParams({ host: null }) });
 if (protocol) active.push({ label: `protocol ${protocol}`, href: withParams({ protocol: null }) });
 if (transport) active.push({ label: transportLabel[transport] ?? transport, href: withParams({ transport: null }) });
@@ -174,8 +175,8 @@ function sortHref(key: SortKey): string {
 function arrow(key: SortKey): string {
   return /-asc$|^latency$|^name$|^status$|^host$|^protocol$/.test(key) ? '▲' : '▼';
 }
-const bucketTitle: Record<Bucket, string> = { ok: 'Alive servers', access: 'Servers that need auth', setup: 'Servers that need setup', down: 'Servers down for two days or more', noanswer: 'Servers with no answer for less than two days', all: 'Every server' };
-const heading = host ? host : q ? `Servers matching “${q}”` : status === 'gated' ? 'Servers that need auth or setup' : ['ok', '', 'access', 'setup', 'down', 'noanswer'].includes(status) ? bucketTitle[activeBucket] : group === 'down' ? `Down for two days or more: ${label(cause)}` : group === 'noanswer' ? `No answer for less than two days: ${label(cause)}` : `${label(status)} servers`;
+const bucketTitle: Record<Bucket, string> = { ok: 'Alive servers', access: 'Servers that need auth', setup: 'Servers that need setup', down: 'Servers down for two days or more', noanswer: 'Servers with no answer for less than two days', unprobed: 'Registry entries the probe does not run yet', all: 'Every server' };
+const heading = host ? host : q ? `Servers matching “${q}”` : status === 'gated' ? 'Servers that need auth or setup' : ['ok', '', 'access', 'setup', 'down', 'noanswer', 'unprobed'].includes(status) ? bucketTitle[activeBucket] : group === 'down' ? `Down for two days or more: ${label(cause)}` : group === 'noanswer' ? `No answer for less than two days: ${label(cause)}` : `${label(status)} servers`;
 // The default view is the page search engines index, so its title and description say what the list is.
 const title = host ? `Servers on ${host}` : defaultView ? 'MCP server list, ranked by token cost' : heading;
 const description = defaultView
@@ -210,7 +211,7 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
   <nav class="segments" aria-label="Result">
     {BUCKETS.map((b) => (
       <a class={`seg ${b}${activeBucket === b ? ' active' : ''}`} href={capped ? undefined : bucketHref(b)} rel="nofollow" aria-current={activeBucket === b ? 'true' : undefined}>
-        <span class="seg-label">{b === 'ok' ? 'Alive' : b === 'access' ? 'Needs auth' : b === 'setup' ? 'Needs setup' : b === 'down' ? 'Down' : b === 'noanswer' ? 'No answer' : 'All'}</span>
+        <span class="seg-label">{b === 'ok' ? 'Alive' : b === 'access' ? 'Needs auth' : b === 'setup' ? 'Needs setup' : b === 'down' ? 'Down' : b === 'noanswer' ? 'No answer' : b === 'unprobed' ? 'Not probed' : 'All'}</span>
         {counts && <span class="seg-count">{num(counts[b])}</span>}
       </a>
     ))}
@@ -350,7 +351,7 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
   .search input { padding: 0.8rem 1rem; font-size: 0.95rem; }
 
   /* The result as a segmented control: one row, counts under the labels. */
-  .segments { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 1px; margin-top: 12px; border: 1px solid var(--line); background: var(--line); }
+  .segments { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px; margin-top: 12px; border: 1px solid var(--line); background: var(--line); }
   .seg { display: flex; flex-direction: column; gap: 4px; padding: 0.7rem 0.9rem; background: var(--surface); color: var(--ink-muted); text-decoration: none; min-width: 0; }
   .seg-label { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .seg-count { font-family: var(--font-display); font-size: 1.15rem; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; color: var(--ink); }
@@ -362,6 +363,7 @@ const countLine = total !== null ? `${num(total)} servers` : rows.length ? `${nu
   .seg.access.active .seg-count, .seg.setup.active .seg-count { color: var(--gated); }
   .seg.down.active, .seg.noanswer.active { box-shadow: inset 0 -3px 0 var(--accent); background: var(--accent-soft); }
   .seg.down.active .seg-count, .seg.noanswer.active .seg-count { color: var(--accent-strong); }
+  .seg.unprobed.active { box-shadow: inset 0 -3px 0 var(--ink-faint); background: var(--panel); }
   .seg.all.active { background: var(--panel); }
 
   /* Chips: the causes of the active bucket, and the filters that are on. */

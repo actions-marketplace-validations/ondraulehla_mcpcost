@@ -10,6 +10,7 @@ export const STATUS_LABEL: Record<string, string> = {
   protocol_error: 'not MCP',
   newer_protocol: 'newer protocol',
   needs_url: 'needs your URL',
+  unprobed: 'not probed',
   timeout: 'timeout',
   dns: 'no DNS',
   tls: 'TLS error',
@@ -35,7 +36,7 @@ export function authKindLabel(kind: string | null | undefined): string {
   return AUTH_KIND_LABEL[kind ?? 'unknown'] ?? kind ?? 'unknown';
 }
 
-export type Bucket = 'up' | 'gated' | 'noanswer' | 'down';
+export type Bucket = 'up' | 'gated' | 'noanswer' | 'down' | 'unprobed';
 
 /**
  * The bucket of a result, for colours and filters. With the row's failing_since (null or a date) a failing server is
@@ -45,6 +46,7 @@ export type Bucket = 'up' | 'gated' | 'noanswer' | 'down';
  */
 export function bucket(status: string, failingSince?: string | null, downSince?: string | null): Bucket {
   if (status === 'ok') return 'up';
+  if (status === 'unprobed') return 'unprobed';
   if (GATED_STATUSES.has(status)) return 'gated';
   if (failingSince === undefined) return 'down';
   return downSince ? 'down' : 'noanswer';

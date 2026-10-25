@@ -33,7 +33,8 @@ const { values: args } = parseArgs({
 });
 
 
-const servers = JSON.parse(await readFile(`${args.in}/servers.json`, 'utf8')) as ServerRow[];
+// The board also lists the registry entries the probe does not run (status unprobed); the dataset holds what was probed.
+const servers = (JSON.parse(await readFile(`${args.in}/servers.json`, 'utf8')) as ServerRow[]).filter((s) => s.status !== 'unprobed');
 const summary = JSON.parse(await readFile(`${args.in}/summary.json`, 'utf8')) as { probedAt: string; probed: number };
 if (servers.length !== summary.probed) throw new Error(`servers.json has ${servers.length} rows, summary.json says ${summary.probed} probed: the two files are not from the same run`);
 const rows = servers.map(datasetRow).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));

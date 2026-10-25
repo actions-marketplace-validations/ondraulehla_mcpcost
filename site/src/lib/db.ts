@@ -103,6 +103,8 @@ export interface RunSummary {
   byStatus: Record<string, number>;
   /** The failing servers that are not down yet (fewer than DOWN_AFTER_DAYS days of failed probes), by status; runs since 2026-10-26. */
   noAnswer?: Record<string, number>;
+  /** Registry entries the probe does not run yet, by kind (oci, mcpb, nuget, cargo, npm, pypi, remote, none); runs since 2026-10-26. */
+  unprobed?: Record<string, number>;
   reachable: number;
   ok: number;
   uniqueToolsets: number;
@@ -532,7 +534,7 @@ export const MATCH_CAP = 500;
 
 /** The statuses that are not an answer: every status the board knows or the run counted, minus alive and gated. */
 function downStatuses(run: Pick<RunSummary, 'byStatus'> | null): string[] {
-  return [...new Set([...Object.keys(STATUS_LABEL), ...Object.keys(run?.byStatus ?? {})])].filter((s) => s !== 'ok' && !GATED_STATUSES.has(s)).sort();
+  return [...new Set([...Object.keys(STATUS_LABEL), ...Object.keys(run?.byStatus ?? {})])].filter((s) => s !== 'ok' && s !== 'unprobed' && !GATED_STATUSES.has(s)).sort();
 }
 
 /**
@@ -659,7 +661,7 @@ export async function countByStatus(query: Omit<ListQuery, 'status'>): Promise<{
     .all<{ status: string; n: number; na: number; rows_seen: number; lo: number | null; hi: number | null }>();
   const seen = results.reduce((a, r) => a + r.rows_seen, 0);
   // na counts only for a failing status: an alive or gated row has no failing_since, and is never "no answer".
-  const failing = (status: string) => status !== 'ok' && !GATED_STATUSES.has(status);
+  const failing = (status: string) => status !== 'ok' && status !== 'unprobed' && !GATED_STATUSES.has(status);
   return { counts: Object.fromEntries(results.map((r) => [r.status, { n: r.n, na: failing(r.status) ? r.na : 0, lo: r.lo, hi: r.hi }])), capped: fts !== null && seen > MATCH_CAP };
 }
 

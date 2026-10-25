@@ -41,6 +41,7 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
     <dt>newer protocol</dt><dd>The server answers with a protocol version that the current SDK does not support. The server is reachable.</dd>
     <dt>not found</dt><dd>HTTP 404, 405 or 410 on the MCP endpoint.</dd>
     <dt>not MCP</dt><dd>HTTP 200, but the response is not a valid MCP reply. Or the server returned a JSON-RPC error to <code>initialize</code>.</dd>
+    <dt>not probed</dt><dd>The registry entry has only an MCPB bundle, an OCI image, a NuGet or Cargo package, or nothing to connect to, and the probe does not run that yet. The entry is on the board, so the list holds the whole registry, but it is not in the counts of probed servers, the dataset or the evidence.</dd>
     <dt>needs your URL</dt><dd>Every endpoint of the entry has a placeholder with no usable value, for example a tenant or a host of the user's own. We do not call it.</dd>
     <dt>timeout, no DNS, TLS error, refused, server error, rate limited</dt><dd>Transport failures. We name each one after its cause.</dd>
   </dl>

@@ -167,6 +167,7 @@ const serverStatements = [
 const probeRows = servers
   .filter((s) => {
     const p = previousRows.get(s.name);
+    if (s.status === 'unprobed') return false; // not probed: no history row
     return !p || p.status !== s.status || p.toolCount !== s.toolCount || p.toolsTokens !== s.toolsTokens || p.claudeTokens !== s.claudeTokens;
   })
   .map((s) => [s.name, s.probedAt, s.status, s.initMs, s.toolCount, s.toolsTokens, s.claudeTokens]);

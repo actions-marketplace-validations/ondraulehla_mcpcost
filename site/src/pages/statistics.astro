@@ -19,7 +19,7 @@ const gated = run ? [...GATED_STATUSES].reduce((a, s) => a + (run.byStatus[s] ??
 const noAnswer = run ? Object.values(run.noAnswer ?? {}).reduce((a, n) => a + n, 0) : 0;
 const down = run ? run.probed - run.ok - gated - noAnswer : 0;
 const statusItems = run
-  ? Object.entries(run.byStatus).sort((a, b) => b[1] - a[1]).map(([s, n]) => ({ label: label(s), value: n, tone: bucket(s), href: `/servers?status=${s}`, note: pct(n, run.probed) }))
+  ? Object.entries(run.byStatus).filter(([s]) => s !== 'unprobed').sort((a, b) => b[1] - a[1]).map(([s, n]) => ({ label: label(s), value: n, tone: bucket(s), href: `/servers?status=${s}`, note: pct(n, run.probed) }))
   : [];
 const series: TrendPoint[] = run ? [...earlier].reverse().concat(run) : [];
 const trend = (pick: (r: TrendPoint) => number | undefined) =>
@@ -39,6 +39,7 @@ const heavyMax = Math.max(1, ...topHeavy.map((h) => h.claudeTokens ?? h.toolsTok
         <h2 id="run-h" class="panel-title">Probed today</h2>
         <div class="stats">
           <div class="stat"><b>{num(run.registryEntries)}</b><span>registry entries, latest versions</span></div>
+          {run.unprobed && <div class="stat"><b>{num(Object.values(run.unprobed).reduce((a, n) => a + n, 0))}</b><span><a href="/servers?status=unprobed">not probed</a>: an MCPB bundle, an OCI image, a NuGet or Cargo package, or nothing to connect to</span></div>}
           <div class="stat"><b>{num(run.probed)}</b><span>probed: {num(run.probed - (run.stdioProbed ?? 0))} remote, {num(run.stdioProbed ?? 0)} npm and PyPI packages</span></div>
           <div class="stat"><b>{num(run.hosts)}</b><span>hosts</span></div>
           <div class="stat"><b>{num(run.uniqueToolsets)}</b><span>distinct tool sets among alive servers</span></div>

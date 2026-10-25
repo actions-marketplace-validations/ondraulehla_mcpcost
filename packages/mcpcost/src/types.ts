@@ -79,6 +79,8 @@ export type ProbeStatus =
   | 'error'
   // The registry URL has {placeholders} with no usable value: each user fills in their own. Not probed.
   | 'needs_url'
+  // A registry entry the probe cannot run yet: only an MCPB bundle, an OCI image, a NuGet or Cargo package, or nothing to connect to.
+  | 'unprobed'
   // package (stdio) servers only
   | 'install_failed'
   | 'no_bin'
@@ -90,9 +92,9 @@ export type ProbeStatus =
 /** Reachable but not usable without something from the user: credentials, arguments, a network, a URL of their own, or a newer SDK. */
 export const GATED_STATUSES: ReadonlySet<string> = new Set(['auth', 'payment', 'newer_protocol', 'needs_env', 'needs_args', 'needs_network', 'needs_url']);
 
-/** A result that is neither alive nor gated: the server did not give a valid answer in this probe. */
+/** A result that is neither alive nor gated: the server did not give a valid answer in this probe. An entry the probe did not run has no result. */
 export function isFailing(status: string): boolean {
-  return status !== 'ok' && !GATED_STATUSES.has(status);
+  return status !== 'ok' && status !== 'unprobed' && !GATED_STATUSES.has(status);
 }
 
 /**

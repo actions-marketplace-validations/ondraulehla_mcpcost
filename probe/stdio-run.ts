@@ -78,7 +78,15 @@ async function loadTargets(): Promise<Target[]> {
     const want = new Set((await readFile(args.names, 'utf8')).split('\n').map((l) => l.trim()).filter(Boolean));
     return all.filter((t) => want.has(t.name));
   }
-  if (args.shard !== '') all = all.filter((t) => shardOf(t.name) === Number(args.shard));
+  if (args.shard !== '') {
+    // A package published or updated in the last 36 hours is probed today, whatever its day of the cycle: a new server
+    // is on the board the day after it appears, not up to a week later, and a new version is checked at once.
+    const day = Number(args.shard);
+    const since = Date.now() - FRESH_HOURS * 3_600_000;
+    const fresh = all.filter((t) => shardOf(t.name) !== day && t.updatedAt && Date.parse(t.updatedAt) >= since).slice(0, FRESH_MAX);
+    all = [...all.filter((t) => shardOf(t.name) === day), ...fresh];
+    if (fresh.length) console.error(`${fresh.length} packages published or updated in the last ${FRESH_HOURS} hours are added to today's shard`);
+  }
   all.sort((a, b) => a.name.localeCompare(b.name));
   // Packages derived for gated remote servers: a few hundred, probed every run, so no shard.
   let derived: Target[] = [];
@@ -101,6 +109,10 @@ async function loadTargets(): Promise<Target[]> {
   const list = args.sample ? all.slice(0, Number(args.sample)) : all;
   return [...list, ...derived];
 }
+
+/** Packages published or updated within this many hours join today's shard; at most FRESH_MAX of them a day. */
+const FRESH_HOURS = 36;
+const FRESH_MAX = 1500;
 
 /** Which day of a seven-day cycle a server is probed on: a stable hash of its name. */
 export function shardOf(name: string): number {

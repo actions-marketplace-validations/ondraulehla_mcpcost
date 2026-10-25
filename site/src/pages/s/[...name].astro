@@ -27,7 +27,8 @@ const badgeHtml = `<a href="${site}/s/${name}"><img src="${site}/badge/${name}.s
 const reachable = history.filter((h) => h.status === 'ok' || h.status === 'auth' || h.status === 'payment').length;
 // A server that never answered has a page that says only "timeout" or "error". Google reads that as a soft 404,
 // so the page is noindex (links still followed) until one probe gets an answer. The sitemap applies the same rule.
-const answered = bucket(server.status) !== 'down' || history.some((h) => bucket(h.status) !== 'down') || (await serverEverAnswered(name));
+// An entry the probe does not run has no result to show, so its page is noindex as well.
+const answered = server.status !== 'unprobed' && (bucket(server.status) !== 'down' || history.some((h) => bucket(h.status) !== 'down') || (await serverEverAnswered(name)));
 const robots = answered ? undefined : 'noindex, follow';
 const heading = server.title ?? server.server_name ?? name;
 /** up, gated, noanswer or down: a failing server is down after two days of failed probes, "no answer" before. */
@@ -86,6 +87,9 @@ switch (server.status) {
     break;
   case 'payment':
     hints.push('The server answers HTTP 402 to initialize. The probe records it as paid and does not list its tools.');
+    break;
+  case 'unprobed':
+    hints.push(`${server.error ?? 'The probe does not run this entry yet.'} The entry is on the board so that the list holds the whole registry and says what it does not check.`);
     break;
   case 'needs_url':
     hints.push('Every URL of the registry entry has a placeholder that each user fills in, such as a tenant, a project or a host of their own. Without that value there is nothing to call, so the probe does not call the URL, and the entry is not counted as down. A client asks the user for the value.');
@@ -151,6 +155,8 @@ const answer = ok
     ? `${name} needs auth, so the daily probe cannot list its tools. The publisher's package ${derived.name} has ${num(derived.tools)} tool definitions that cost ${num(derived.cost)} tokens of context per session${derived.exact ? ` in ${derivedModel}` : ' (o200k_base estimate)'}, ${derivedShare} % of a 200k window. The tool definitions were read from the open-source package in a container, not from the authenticated server. Measured ${date(derived.probedAt)}.`
     : server.status === 'needs_url'
       ? `${name} has only URL templates in the official MCP registry: each user fills in an address of their own, so the probe does not call it.`
+      : server.status === 'unprobed'
+        ? `${name} is in the official MCP registry. ${server.error ?? 'The probe does not run it yet.'}`
       : group === 'down'
         ? `${name} has given no valid answer since ${date(failingSince)}. Result: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}.`
         : group === 'noanswer'
@@ -193,7 +199,7 @@ const jsonld = {
 
   <p style="margin-top:22px">
     <span class={`tag big ${group}`}>{label(server.status)}</span>
-    <span class="muted small">{group === 'down' && <> down since {date(failingSince)} ·</>}{group === 'noanswer' && <> no valid answer since {date(failingSince)} ·</>} probed {date(run?.probedAt ?? server.probed_at)}{run && server.probed_at.slice(0, 10) < run.probedAt.slice(0, 10) && <> · unchanged since {date(server.probed_at)}</>}{server.http_status && <> · HTTP {server.http_status}</>}{server.auth_scheme && <> · {server.auth_scheme}</>}{server.measured_with_credentials ? <> · measured with credentials</> : null}</span>
+    <span class="muted small">{group === 'down' && <> down since {date(failingSince)} ·</>}{group === 'noanswer' && <> no valid answer since {date(failingSince)} ·</>}{group === 'unprobed' ? <> in the official registry, not probed</> : <> probed {date(run?.probedAt ?? server.probed_at)}{run && server.probed_at.slice(0, 10) < run.probedAt.slice(0, 10) && <> · unchanged since {date(server.probed_at)}</>}</>}{server.http_status && <> · HTTP {server.http_status}</>}{server.auth_scheme && <> · {server.auth_scheme}</>}{server.measured_with_credentials ? <> · measured with credentials</> : null}</span>
   </p>
 
   {server.status === 'ok' && (
@@ -216,7 +222,7 @@ const jsonld = {
       <p class="muted small" style="margin:10px 0 0">The server needs auth, so these tool definitions were read from the publisher's open-source package <span class="mono">{derived.registry}:{derived.name}</span>, started in a container with placeholder values and the network off, on {date(derived.probedAt)}. Tool definitions do not depend on the token, so this is what an authorized user loads, unless the server hides tools by plan or role.</p>
     </>
   )}
-  {server.status !== 'ok' && server.error && <pre>{server.error}</pre>}
+  {server.status !== 'ok' && server.status !== 'unprobed' && server.error && <pre>{server.error}</pre>}
 
   <dl class="facts">
     {server.transport === 'stdio'

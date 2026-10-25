@@ -3,7 +3,7 @@ import { getServer } from '../../lib/db';
 import { bucket, label, tokens } from '../../lib/format';
 
 // noanswer: failed for less than two days, not down yet (isConfirmedDown). Amber, dark enough for white text.
-const COLORS = { up: '#2ea44f', gated: '#2d5bd1', noanswer: '#9a6700', down: '#c43a2f', unknown: '#8a8f98' } as const;
+const COLORS = { up: '#2ea44f', gated: '#2d5bd1', noanswer: '#9a6700', down: '#c43a2f', unprobed: '#8a8f98', unknown: '#8a8f98' } as const;
 
 /** Approximate text width for Verdana 11px, the same rule shields.io used for years. */
 function width(text: string): number {

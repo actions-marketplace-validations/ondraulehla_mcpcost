@@ -447,6 +447,8 @@ const beaconToken = import.meta.env.DEV ? '' : ((env as unknown as { CF_BEACON_T
   .tag.gated { border-color: color-mix(in oklab, var(--gated) 45%, transparent); color: var(--gated); background: var(--gated-soft); }
   .tag.down { border-color: color-mix(in oklab, var(--accent) 45%, transparent); color: var(--accent-strong); background: var(--accent-soft); }
   /* no answer: failed for less than two days, not down yet. The accent hue, a dashed frame and no fill. */
+  /* not probed: an entry the probe does not run yet. No colour of a result. */
+  .tag.unprobed { border-style: dashed; color: var(--ink-faint); background: transparent; }
   .tag.noanswer { border-style: dashed; border-color: color-mix(in oklab, var(--accent) 55%, transparent); color: var(--accent-strong); background: transparent; }
   .tag.big { font-size: 0.78rem; padding: 0.35rem 0.8rem; }
 
@@ -551,6 +553,7 @@ const beaconToken = import.meta.env.DEV ? '' : ((env as unknown as { CF_BEACON_T
   .bars .bar.up .bar-fill { background: var(--chart-up); }
   .bars .bar.gated .bar-fill { background: var(--chart-gated); }
   .bars .bar.down .bar-fill { background: var(--chart-accent); }
+  .bars .bar.unprobed .bar-fill { background: var(--line); }
   .bars .bar.noanswer .bar-fill { background: color-mix(in oklab, var(--chart-accent) 45%, var(--line)); }
   .bars .bar:hover .bar-fill, .bars .bar:focus-visible .bar-fill { filter: brightness(1.15); }
   .bars .bar-value { font-family: var(--font-mono); font-size: 0.78rem; color: var(--ink-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -560,6 +563,7 @@ const beaconToken = import.meta.env.DEV ? '' : ((env as unknown as { CF_BEACON_T
   .seg.up, .legend i.up { background: var(--chart-up); }
   .seg.gated, .legend i.gated { background: var(--chart-gated); }
   .seg.down, .legend i.down { background: var(--chart-accent); }
+  .seg.unprobed, .legend i.unprobed { background: var(--line); }
   .seg.noanswer, .legend i.noanswer { background: color-mix(in oklab, var(--chart-accent) 45%, var(--line)); }
   .legend { display: flex; flex-wrap: wrap; gap: 6px 22px; list-style: none; margin: 10px 0 0; padding: 0; font-size: 0.9rem; color: var(--ink-muted); }
   .legend i { display: inline-block; width: 12px; height: 12px; margin-right: 7px; vertical-align: -1px; }
