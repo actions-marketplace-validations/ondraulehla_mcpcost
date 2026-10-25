@@ -1,9 +1,9 @@
 ---
 import Layout from '../layouts/Layout.astro';
-import { recentRuns } from '../lib/db';
+import { recentChanges } from '../lib/db';
 import { bucket, label, num, date } from '../lib/format';
 
-const runs = (await recentRuns(14)).filter((r) => r.changes);
+const runs = (await recentChanges(14)).filter((r) => r.changes);
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=10800');
 const sign = (n: number) => (n > 0 ? `+${num(n)}` : num(n));
 ---

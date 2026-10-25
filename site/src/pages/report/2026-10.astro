@@ -3,29 +3,28 @@ import Layout from '../../layouts/Layout.astro';
 import Trend from '../../components/charts/Trend.astro';
 import Histogram from '../../components/charts/Histogram.astro';
 import { runsBetween, type RunSummary } from '../../lib/db';
-import { REPORTS, nextMonth } from '../../lib/reports';
+import { REPORTS, nextDay } from '../../lib/reports';
 import { num, pct, date, label, bucket, modelName, authKindLabel } from '../../lib/format';
 
 /**
- * The dated report for one month. It reads the runs table only: every run of the
- * month, one query, and the page is cached for a day. No row of the servers table
- * is read, so the page costs nothing on the free tier.
+ * The dated report for one month. It reads the runs table only, in one query: the runs
+ * of the month up to the run day the report is pinned to, without their changes, which
+ * the page does not show. The page is cached for a day. No row of the servers table is
+ * read, so the page costs nothing on the free tier.
  */
 const report = REPORTS.find((r) => r.month === '2026-10')!;
-const all = await runsBetween(report.month, nextMonth(report.month));
+const all = await runsBetween(report.month, nextDay(report.run), ['changes']);
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=86400');
 
 // Sample runs (a test of the probe over 200 servers) and broken runs (2026-10-14: the runner timed out
 // on half the registry) stay out of the series. The series ends with the run the dataset is built from.
-const runs: RunSummary[] = [];
+const series: RunSummary[] = [];
 let best = 0;
 for (const r of all) {
   if (r.probed < 1000 || r.ok < 0.7 * best) continue;
   best = Math.max(best, r.ok);
-  runs.push(r);
+  series.push(r);
 }
-const dated = runs.filter((r) => r.probedAt.slice(0, 10) <= report.run);
-const series = dated.length ? dated : runs;
 const first = series[0] ?? null;
 const run = series[series.length - 1] ?? null;
 const site = Astro.site?.toString().replace(/\/$/, '') ?? 'https://mcpcost.ulehla.dev';

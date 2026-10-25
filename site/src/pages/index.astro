@@ -3,7 +3,7 @@ import Layout from '../layouts/Layout.astro';
 import { latestRun, headline } from '../lib/db';
 import { num, pct, tokens, date, modelName } from '../lib/format';
 
-const run = await latestRun();
+const run = await latestRun(['topHosts', 'changes', 'heaviest']);
 const cost = run ? headline(run) : null;
 const inModel = cost?.exact ? ` in ${modelName(cost.model)}` : '';
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=3600');

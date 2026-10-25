@@ -4,6 +4,7 @@
  * surface ring, hairline grid, the latest value labelled at the end. Each point
  * is a focusable hit area with its own tooltip. A table twin follows.
  */
+import { grouped } from '../../lib/format';
 interface Point {
   date: string;
   value: number;
@@ -18,7 +19,7 @@ interface Props {
   zero?: boolean;
 }
 const { points, id, unit = '', zero = false } = Astro.props;
-const format = Astro.props.format ?? ((n: number) => n.toLocaleString('en-US').replace(/,/g, ' '));
+const format = Astro.props.format ?? ((n: number) => grouped(n, ' '));
 const W = 720;
 const H = 220;
 const pad = { l: 56, r: 72, t: 28, b: 30 };

@@ -52,9 +52,20 @@ export function tokens(n: number | null | undefined): string {
   return `${Math.round(n / 1000)}k`;
 }
 
+/**
+ * n.toLocaleString('en-US') with `separator` in place of the commas. toLocaleString builds a number format on every
+ * call, about 15 µs, and the changes page made 1 400 calls, 60 % of its CPU time; so an integer, nearly every number
+ * here, is grouped by hand, to the same text.
+ */
+export function grouped(n: number, separator: string): string {
+  if (Number.isSafeInteger(n) && !Object.is(n, -0)) return (n < 0 ? '-' : '') + String(Math.abs(n)).replace(/\B(?=(\d{3})+$)/g, separator);
+  return n.toLocaleString('en-US').replace(/,/g, separator);
+}
+
+/** A number with a narrow no-break space between the thousands. */
 export function num(n: number | null | undefined): string {
   if (n === null || n === undefined) return '';
-  return n.toLocaleString('en-US').replace(/,/g, ' ');
+  return grouped(n, '\u202f');
 }
 
 export function ms(n: number | null | undefined): string {

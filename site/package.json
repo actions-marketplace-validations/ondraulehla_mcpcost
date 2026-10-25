@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "astro dev",
-    "build": "wrangler types && astro build",
+    "build": "wrangler types && npm run mcp:snapshot && vitest run tests/mcp.test.ts && astro build",
+    "test": "vitest run",
+    "mcp:snapshot": "vitest run tests/mcp-snapshot.test.ts --update",
     "preview": "wrangler dev",
     "deploy": "npm run build && wrangler deploy",
     "db:schema:local": "wrangler d1 execute mcp-pulse --local --file=schema.sql",

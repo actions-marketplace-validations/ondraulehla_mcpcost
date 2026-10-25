@@ -11,7 +11,7 @@ if (!server) {
 const [history, siblings, run] = await Promise.all([
   getHistory(name, 60),
   server.toolset_hash ? getSiblings(server.toolset_hash, name) : Promise.resolve([]),
-  latestRun()
+  latestRun(['topHosts', 'changes', 'heaviest'])
 ]);
 // A day at the edge: the data change once a day, and a crawl that reads every server page costs the Worker one request per page per colo, not one every three hours.
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=86400');

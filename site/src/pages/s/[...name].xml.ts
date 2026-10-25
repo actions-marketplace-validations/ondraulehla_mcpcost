@@ -1,9 +1,9 @@
 import type { APIRoute } from 'astro';
 import { getHistory, getServer } from '../../lib/db';
-import { label } from '../../lib/format';
+import { label, grouped } from '../../lib/format';
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-const num = (n: number | null | undefined) => (n == null ? '' : n.toLocaleString('en-US').replace(/,/g, ' '));
+const num = (n: number | null | undefined) => (n == null ? '' : grouped(n, ' '));
 
 /**
  * One server as an Atom feed: an entry for every probe that changed something

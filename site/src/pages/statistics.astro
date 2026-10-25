@@ -4,11 +4,12 @@ import Bars from '../components/charts/Bars.astro';
 import Stack from '../components/charts/Stack.astro';
 import Trend from '../components/charts/Trend.astro';
 import Histogram from '../components/charts/Histogram.astro';
-import { latestRun, listHosts, recentRuns } from '../lib/db';
+import { latestRun, listHosts, trendBefore, type TrendPoint } from '../lib/db';
 import { bucket, label, num, pct, date, ms, modelName, authKindLabel } from '../lib/format';
 
-const runs = await recentRuns(30);
-const run = runs[0] ?? null;
+const run = await latestRun(['changes']);
+// The run-by-run charts: the latest run and the 29 before it, of which they draw three numbers.
+const earlier = run ? await trendBefore(run.probedAt, 29) : [];
 const hosts = run ? await listHosts(12, run) : [];
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=10800');
 
@@ -17,8 +18,8 @@ const down = run ? run.probed - run.ok - gated : 0;
 const statusItems = run
   ? Object.entries(run.byStatus).sort((a, b) => b[1] - a[1]).map(([s, n]) => ({ label: label(s), value: n, tone: bucket(s), href: `/servers?status=${s}`, note: pct(n, run.probed) }))
   : [];
-const series = [...runs].reverse();
-const trend = (pick: (r: (typeof runs)[number]) => number | undefined) =>
+const series: TrendPoint[] = run ? [...earlier].reverse().concat(run) : [];
+const trend = (pick: (r: TrendPoint) => number | undefined) =>
   series.flatMap((r) => { const v = pick(r); return v == null ? [] : [{ date: r.probedAt, value: v }]; });
 const topHeavy = run ? run.heaviest.slice(0, 12) : [];
 const heavyMax = Math.max(1, ...topHeavy.map((h) => h.claudeTokens ?? h.toolsTokens));

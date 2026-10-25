@@ -39,7 +39,7 @@ const requestedPage = cursor ? Math.max(1, Number(p.get('p') ?? '1') || 1) : Mat
 // The unfiltered list never asks: that query reads the whole table, and the summary answers (its token bounds from 2026-10-22 on).
 // A sort alone asks nothing either: the summary's counts are the list's, give or take the rows the sort leaves out.
 const needsCount = Boolean(q || host || protocol || transport || tokensParam);
-const run = await latestRun();
+const run = await latestRun(['changes', 'heaviest']);
 // A sort with no index on a big list would read the whole table on every page; the list keeps the Tokens order then.
 const plannedSort = sortPlan({ q, host, status, sort: askedSort }, run).key;
 const [{ rows, sort, hasNext, hasPrev, perPage, page, nextCursor, prevCursor }, countResult] = await Promise.all([

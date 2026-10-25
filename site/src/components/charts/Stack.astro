@@ -4,6 +4,7 @@
  * between segments, a legend that names every segment with its count, hover
  * lifts a segment and shows its tooltip.
  */
+import { grouped } from '../../lib/format';
 interface Segment {
   label: string;
   value: number;
@@ -16,7 +17,7 @@ interface Props {
 }
 const { segments, id } = Astro.props;
 const total = Math.max(1, segments.reduce((a, s) => a + s.value, 0));
-const fmt = (n: number) => n.toLocaleString('en-US').replace(/,/g, ' ');
+const fmt = (n: number) => grouped(n, ' ');
 const pct = (n: number) => `${Math.round((n / total) * 100)} %`;
 ---
 

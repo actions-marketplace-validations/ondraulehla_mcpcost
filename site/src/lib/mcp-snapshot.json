@@ -1,0 +1,922 @@
+{
+  "supportedProtocolVersions": [
+    "2025-11-25",
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05",
+    "2024-10-07"
+  ],
+  "initialize": {
+    "protocolVersion": "2025-11-25",
+    "capabilities": {
+      "tools": {
+        "listChanged": true
+      }
+    },
+    "serverInfo": {
+      "name": "mcpcost",
+      "version": "0.2.0"
+    },
+    "instructions": "Health and token cost of every remote server in the official MCP registry, and of its npm and PyPI package servers, probed daily. Use lookup_server for a registry name or URL, search_servers to find servers, compare_servers to put two to five next to each other, check_server to probe a URL that is not in the registry. claudeTokens is the exact count from the Anthropic count_tokens endpoint (claudeTokensClaudeCode with the mcp__<server>__ prefix); toolsTokens is an o200k_base estimate over each tool definition."
+  },
+  "toolsList": {
+    "tools": [
+      {
+        "name": "lookup_server",
+        "title": "Look up a registry server",
+        "description": "Reads the board's latest daily probe of one server in the official MCP registry: status, how a client gets access, the exact Claude token cost of its tool definitions, tool count, latency and the most expensive tools. Instant, no connection to the server. Use it when the server is in the registry; use search_servers when you do not know its name, and check_server to probe a URL that is not in the registry. A name or URL that is not on the board returns isError with a short message.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "nameOrUrl": {
+              "type": "string",
+              "description": "The registry name, for example io.github.owner/name, or the server's https URL as the registry lists it. The name is exact; the URL must match the registry entry."
+            }
+          },
+          "required": [
+            "nameOrUrl"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": true
+        },
+        "execution": {
+          "taskSupport": "forbidden"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The registry name, io.github.owner/name"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The title the registry gives"
+            },
+            "host": {
+              "type": "string",
+              "description": "The endpoint host"
+            },
+            "status": {
+              "type": "string",
+              "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed"
+            },
+            "toolCount": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How many tools tools/list returned"
+            },
+            "claudeTokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact count from the Anthropic count_tokens endpoint, names as published"
+            },
+            "toolsTokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "o200k_base estimate over the compact JSON of the tool definitions; the exact count is about 1.9 times this at the median"
+            },
+            "protocolVersion": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The MCP protocol version the server negotiated"
+            },
+            "page": {
+              "type": "string",
+              "description": "The server's page on the board"
+            },
+            "url": {
+              "type": "string",
+              "description": "The endpoint the board probes"
+            },
+            "statusLabel": {
+              "type": "string",
+              "description": "The status in words, as the board shows it"
+            },
+            "httpStatus": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The HTTP status of the first response"
+            },
+            "authScheme": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The WWW-Authenticate scheme of a server that needs auth"
+            },
+            "authKind": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "How a client gets in: oauth-dcr (clients register themselves), oauth (client id from the publisher), token (a key in the Authorization header), unknown"
+            },
+            "authDocumentation": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The publisher's guide to getting access"
+            },
+            "authMetadata": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": {}
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "authorizationServers, scopesSupported, dynamicRegistration, pkce, grantTypes, from the OAuth metadata"
+            },
+            "claudeTokensClaudeCode": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The exact count with the Claude Code prefix mcp__<server>__ on each tool name"
+            },
+            "claudeModel": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The model the exact count is for"
+            },
+            "claudeError": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Why the Anthropic endpoint refused to count"
+            },
+            "toolsTokensNote": {
+              "type": "string"
+            },
+            "shareOf200k": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "description": "Percent of a 200k window, exact when claudeTokens is present"
+            },
+            "latencyMs": {
+              "type": "object",
+              "properties": {
+                "initialize": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "milliseconds"
+                },
+                "toolsList": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "milliseconds"
+                }
+              },
+              "additionalProperties": false
+            },
+            "topTools": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "tokens": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "tokens"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The five most expensive tools: name and o200k_base tokens"
+            },
+            "probedAt": {
+              "type": "string",
+              "description": "ISO 8601 time of the probe"
+            }
+          },
+          "required": [
+            "name",
+            "host",
+            "status",
+            "page",
+            "url",
+            "statusLabel",
+            "probedAt"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        }
+      },
+      {
+        "name": "search_servers",
+        "title": "Search the registry board",
+        "description": "Finds servers on the board by words in their name, title, description or host, with optional filters, sorted by exact Claude token cost (highest first) by default. With no query and no filter it ranks the whole board, so page 1 is the most expensive servers in the registry and sort=claude-asc the cheapest. Use it to discover servers or to rank them by cost; use lookup_server once you have a name, compare_servers for a few side by side, registry_summary for the totals. Returns up to 20 servers per page with name, host, status, tool count and tokens. Page numbers go to 20; after that pass the `next` value of the previous answer as `cursor`. Sorting by the estimate, latency, protocol or registry date needs a query or a small status; on a bigger list the answer keeps the token order and says so in `sort`.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Words to match, three or more characters each, as prefixes: \"git copilot\" finds the GitHub Copilot servers. Omit for the whole list."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "auth",
+                "payment",
+                "newer_protocol",
+                "down"
+              ],
+              "description": "ok = answers and lists tools; auth = needs credentials; payment = 402; newer_protocol = a protocol newer than the SDK; down = every other failure. Omit for all."
+            },
+            "sort": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "claude-asc",
+                "tokens",
+                "tokens-asc",
+                "tools",
+                "tools-asc",
+                "latency",
+                "latency-desc",
+                "name",
+                "name-desc",
+                "status",
+                "status-desc",
+                "protocol",
+                "protocol-desc",
+                "host",
+                "host-desc",
+                "updated"
+              ],
+              "description": "claude = exact Claude tokens, highest first (default); claude-asc = lowest first; tokens = the o200k_base estimate; tools = tool count; latency = initialize time; name; updated = registry date"
+            },
+            "page": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "description": "Page number, 1 to 20, twenty servers each; default 1. Not with cursor."
+            },
+            "cursor": {
+              "type": "string",
+              "description": "The `next` value of a previous answer, to continue from there; replaces page"
+            }
+          },
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": true
+        },
+        "execution": {
+          "taskSupport": "forbidden"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "page": {
+              "type": "integer",
+              "description": "The page number, absent when a cursor was used"
+            },
+            "sort": {
+              "type": "string",
+              "description": "The sort that was applied"
+            },
+            "hasNext": {
+              "type": "boolean"
+            },
+            "next": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The cursor for the next page, when hasNext"
+            },
+            "servers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The registry name, io.github.owner/name"
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "The title the registry gives"
+                  },
+                  "host": {
+                    "type": "string",
+                    "description": "The endpoint host"
+                  },
+                  "status": {
+                    "type": "string",
+                    "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed"
+                  },
+                  "toolCount": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "How many tools tools/list returned"
+                  },
+                  "claudeTokens": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Exact count from the Anthropic count_tokens endpoint, names as published"
+                  },
+                  "toolsTokens": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "o200k_base estimate over the compact JSON of the tool definitions; the exact count is about 1.9 times this at the median"
+                  },
+                  "protocolVersion": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "The MCP protocol version the server negotiated"
+                  },
+                  "page": {
+                    "type": "string",
+                    "description": "The server's page on the board"
+                  }
+                },
+                "required": [
+                  "name",
+                  "host",
+                  "status",
+                  "page"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "sort",
+            "hasNext",
+            "servers"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        }
+      },
+      {
+        "name": "check_server",
+        "title": "Probe a server live",
+        "description": "Connects to an MCP server URL now (initialize and tools/list, 10 s timeout) and reports status, protocol, how a client gets access, tool names and the token cost of the tool definitions: exact in Claude when the counter is available, else an estimate from the schema size. Use it for a URL that is not in the official registry, or to see the state this minute; for a registry server prefer lookup_server, which is instant. Sends no credentials: a server that needs them comes back with status \"auth\", not an error. A URL that is not https, or a server that does not answer, returns its failure as status and error.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "description": "The https URL of the MCP endpoint, Streamable HTTP (…/mcp) or SSE (…/sse)"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": true
+        },
+        "execution": {
+          "taskSupport": "forbidden"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed"
+            },
+            "statusLabel": {
+              "type": "string",
+              "description": "The status in words"
+            },
+            "httpStatus": {
+              "type": "integer",
+              "description": "The HTTP status of the first response"
+            },
+            "authScheme": {
+              "type": "string",
+              "description": "The WWW-Authenticate scheme of a server that needs auth"
+            },
+            "authKind": {
+              "type": "string",
+              "description": "How a client gets in: oauth-dcr, oauth, token or unknown"
+            },
+            "authDocumentation": {
+              "type": "string",
+              "description": "The publisher's guide to getting access"
+            },
+            "authMetadata": {
+              "type": "object",
+              "additionalProperties": {},
+              "description": "authorizationServers, scopesSupported, dynamicRegistration, pkce, grantTypes"
+            },
+            "protocolVersion": {
+              "type": "string"
+            },
+            "serverInfo": {
+              "type": "object",
+              "additionalProperties": {},
+              "description": "name, version and title from initialize"
+            },
+            "toolCount": {
+              "type": "integer"
+            },
+            "toolsBytes": {
+              "type": "integer",
+              "description": "Bytes of the compact JSON of every tool definition"
+            },
+            "claudeTokens": {
+              "type": "integer",
+              "description": "Exact count from the Anthropic count_tokens endpoint"
+            },
+            "claudeTokensClaudeCode": {
+              "type": "integer",
+              "description": "The exact count with the Claude Code prefix on each tool name"
+            },
+            "claudeModel": {
+              "type": "string"
+            },
+            "claudeError": {
+              "type": "string"
+            },
+            "toolsTokensEstimate": {
+              "type": "integer",
+              "description": "Tokens estimated from the schema size at the registry median of 4.42 bytes per token"
+            },
+            "estimateNote": {
+              "type": "string"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The tool names, in the order the server lists them"
+            },
+            "latencyMs": {
+              "type": "object",
+              "properties": {
+                "initialize": {
+                  "type": "number"
+                },
+                "toolsList": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false
+            },
+            "error": {
+              "type": "string",
+              "description": "The first line of the failure, when status is not ok"
+            }
+          },
+          "required": [
+            "url",
+            "status",
+            "statusLabel",
+            "toolsBytes",
+            "toolsTokensEstimate",
+            "estimateNote",
+            "tools",
+            "latencyMs"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        }
+      },
+      {
+        "name": "compare_servers",
+        "title": "Compare servers side by side",
+        "description": "Puts two to five registry servers next to each other from the board's latest daily probe: status, how a client gets in, tool count, token cost (exact in Claude when counted, else the estimate), share of a 200k window and initialize latency, with the cheapest, the most expensive and the spread. Use it to choose between servers that do the same job; use lookup_server for the full record of one server, search_servers to find candidates, and check_server for a URL that is not in the registry. Instant, no connection to the servers. A name the board does not know gets a row with status \"unknown\" and the comparison goes on. format picks the text layout (JSON, a Markdown table, or CSV to paste into a spreadsheet); the structured content is always JSON.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "servers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 2,
+              "maxItems": 5,
+              "description": "Two to five registry names (io.github.owner/name) or the servers' https URLs as the registry lists them"
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "json",
+                "markdown",
+                "csv"
+              ],
+              "description": "The layout of the text content: json (default), markdown (a table with a summary line), or csv (a header row, then one row per server)"
+            }
+          },
+          "required": [
+            "servers"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": true
+        },
+        "execution": {
+          "taskSupport": "forbidden"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "servers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The registry name, or what was given when the board does not know it"
+                  },
+                  "host": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "The endpoint host"
+                  },
+                  "status": {
+                    "type": "string",
+                    "description": "The probe status, or \"unknown\" when the board has no such server"
+                  },
+                  "statusLabel": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "The status in words"
+                  },
+                  "authKind": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "oauth-dcr, oauth, token or unknown, for a server that needs auth"
+                  },
+                  "toolCount": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "How many tools"
+                  },
+                  "claudeTokens": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Exact Claude count"
+                  },
+                  "toolsTokens": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "o200k_base estimate"
+                  },
+                  "tokens": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "The number compared: the exact count when it exists, else the estimate"
+                  },
+                  "exact": {
+                    "type": "boolean",
+                    "description": "Whether tokens is the exact count"
+                  },
+                  "shareOf200k": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "description": "Percent of a 200k window"
+                  },
+                  "initMs": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "initialize latency, milliseconds"
+                  },
+                  "protocolVersion": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "The negotiated protocol version"
+                  },
+                  "probedAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "ISO 8601 time of the probe"
+                  },
+                  "page": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "The server's page on the board"
+                  },
+                  "error": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Why there is no data, for example \"not on the board\""
+                  }
+                },
+                "required": [
+                  "name",
+                  "status",
+                  "exact"
+                ],
+                "additionalProperties": false
+              },
+              "description": "One row per requested server, in the order given"
+            },
+            "measured": {
+              "type": "integer",
+              "description": "How many rows have a token number"
+            },
+            "cheapest": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The server with the fewest tokens, when two or more rows are measured"
+            },
+            "mostExpensive": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tokenSpread": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Tokens between the most expensive and the cheapest"
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "json",
+                "markdown",
+                "csv"
+              ]
+            }
+          },
+          "required": [
+            "servers",
+            "measured",
+            "cheapest",
+            "mostExpensive",
+            "tokenSpread",
+            "format"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        }
+      },
+      {
+        "name": "registry_summary",
+        "title": "Registry summary",
+        "description": "Aggregates of the latest daily run over the whole official MCP registry: how many servers answer and why the rest do not, token cost percentiles and the exact-to-estimate ratio, how servers authenticate, protocol versions, transports, the heaviest servers and the biggest publishers. Use it for the state of the registry as a whole; use lookup_server or search_servers for one server. No input; the answer is a few kilobytes of JSON.",
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": true
+        },
+        "execution": {
+          "taskSupport": "forbidden"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "probedAt": {
+              "type": "string",
+              "description": "ISO 8601 time of the run"
+            },
+            "registryEntries": {
+              "type": "integer",
+              "description": "Entries in the registry"
+            },
+            "registryWithRemote": {
+              "type": "integer",
+              "description": "Entries with a remote endpoint"
+            },
+            "probed": {
+              "type": "integer",
+              "description": "Servers probed in this run"
+            },
+            "ok": {
+              "type": "integer",
+              "description": "Servers that answered initialize and tools/list"
+            },
+            "byStatus": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "number"
+              },
+              "description": "Servers per status"
+            },
+            "authSchemes": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "number"
+              },
+              "description": "Servers that need auth, per WWW-Authenticate scheme"
+            },
+            "authKinds": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "number"
+              },
+              "description": "Servers that need auth, per kind of access: oauth-dcr, oauth, token, unknown"
+            },
+            "protocols": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "number"
+              },
+              "description": "Alive servers per negotiated protocol version"
+            },
+            "transports": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "number"
+              }
+            },
+            "toolsTokens": {
+              "type": "object",
+              "additionalProperties": {},
+              "description": "o200k_base estimate: median, p90, p99, max, total"
+            },
+            "claudeTokens": {
+              "type": "object",
+              "additionalProperties": {},
+              "description": "Exact Claude counts: model, counted, refused, median, p90, p99, max, histogram, ratioToEstimate"
+            },
+            "toolCount": {
+              "type": "object",
+              "additionalProperties": {},
+              "description": "median, p90, max"
+            }
+          },
+          "required": [
+            "probedAt"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        }
+      }
+    ]
+  }
+}
