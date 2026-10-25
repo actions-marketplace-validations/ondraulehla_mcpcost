@@ -13,6 +13,18 @@ Disallow: /
 User-agent: meta-externalagent
 Disallow: /
 
+# X and LinkedIn read robots.txt before they show a link card. They fetch only the page that someone shares, so a shared
+# comparison (/compare?s=...) gets its card here. A bot that has a group of its own does not read the * group, so the
+# other rules are written again.
+User-agent: Twitterbot
+User-agent: LinkedInBot
+Allow: /
+Disallow: /servers?
+Disallow: /api/
+Disallow: /check?
+Disallow: /watch
+Disallow: /track
+
 User-agent: *
 Allow: /
 Crawl-delay: 2
