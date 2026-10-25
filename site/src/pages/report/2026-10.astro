@@ -59,6 +59,13 @@ const gated = run ? run.reachable - run.ok : 0;
 const down = run ? run.probed - run.reachable : 0;
 const ct = run?.claudeTokens;
 const model = modelName(ct?.model);
+/**
+ * Alive servers with no exact count and no refused schema. From 2026-10-18 the API refused the probe's key: servers
+ * that kept their tools kept their count, but new and changed servers got none. A run with a working key leaves only a
+ * few here, and the sentence about it goes away.
+ */
+const uncounted = run && ct ? Math.max(0, run.ok - ct.counted - ct.refused) : 0;
+const keyGap = run ? uncounted > 0.05 * run.ok : false;
 const over200k = run ? run.heaviest.filter((h) => (h.claudeTokens ?? 0) > 200_000).length : 0;
 const over200kIsFloor = run ? over200k === run.heaviest.length : false;
 const authTotal = run ? Object.values(run.authKinds ?? {}).reduce((a, b) => a + b, 0) : 0;
@@ -271,7 +278,7 @@ const jsonld = run
                 </tbody>
               </table>
             </div>
-            <p class="muted small">The estimate column covers all {num(run.ok)} alive servers. {num(ct.refused)} alive servers publish a schema the endpoint refuses; they have the estimate only.</p>
+            <p class="muted small">The estimate column covers all {num(run.ok)} alive servers. {num(ct.refused)} alive servers publish a schema the endpoint refuses; they have the estimate only.{keyGap && <> {num(uncounted)} more alive servers have no exact count in this run. That is an error on our side: from 2026-10-18 the API refused the key of the probe. Servers that kept their tools kept their count, but new and changed servers got none. The exact columns cover the {num(ct.counted)} counted servers, and the heaviest servers below can miss some of the new ones.</>}</p>
             {ct.histogram && (
               <>
                 <h3>Servers per cost band</h3>

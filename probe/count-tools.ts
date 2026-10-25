@@ -5,7 +5,7 @@
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { createClaudeCounter, payloadHash } from './claude-cache.js';
+import { createClaudeCounter, payloadHash, reportKeyError } from './claude-cache.js';
 import { createGeminiCounter } from './gemini-cache.js';
 import type { RawTool } from '../packages/mcpcost/src/core.js';
 import type { ProbeResult } from '../packages/mcpcost/src/index.js';
@@ -24,6 +24,7 @@ for (const row of file.rows) {
 }
 await writeFile(args.out ?? args.in, JSON.stringify(file));
 const c = claude.stats();
-console.error(claude.enabled ? `stdio Claude counts: ${c.counted} counted, ${c.reused} reused, ${c.skipped} skipped` : 'ANTHROPIC_API_KEY is not set: stdio rows get no exact counts.');
+console.error(claude.enabled ? `stdio Claude counts: ${c.counted} counted, ${c.reused} reused, ${c.skipped} skipped${c.keyError ? ' (the API refused the key)' : ''}` : 'ANTHROPIC_API_KEY is not set: stdio rows get no exact counts.');
+await reportKeyError(c.keyError);
 const g = gemini.stats();
 console.error(gemini.enabled ? `stdio Gemini counts: ${g.counted} counted, ${g.reused} reused, ${g.skipped} skipped` : 'GEMINI_API_KEY is not set: stdio rows get no Gemini counts.');

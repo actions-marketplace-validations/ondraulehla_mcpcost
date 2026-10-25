@@ -13,6 +13,7 @@ concurrency:
   cancel-in-progress: false
 permissions:
   contents: write
+  issues: write # the issue about a refused Claude key, see "Open, update or close the issue about the Claude key"
 jobs:
   probe:
     runs-on: ubuntu-latest
@@ -25,6 +26,8 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       # Exact Gemini counts come from the free countTokens endpoint. Without the key the run has no Gemini column.
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # When the API refuses the key, the counter stops and writes the API's answer here (probe/claude-cache.ts).
+      CLAUDE_KEY_ERROR_FILE: data/claude-key-error.txt
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -77,6 +80,40 @@ jobs:
       - name: Count the tools of the stdio run
         if: ${{ hashFiles('data/stdio/stdio-run.json') != '' }}
         run: node --import tsx probe/count-tools.ts --in data/stdio/stdio-run.json --cache data/cache/servers.json --deadline-min 40
+      - name: Open, update or close the issue about the Claude key
+        # A refused key is not a fact about a server, so the counter does not store it on the servers. It stops counting and
+        # writes the API's answer to CLAUDE_KEY_ERROR_FILE, and this step tells the owner in an issue. The run goes on and
+        # stays green: a failed run would hold back the evidence deploy, and the next run would not take its rows as the
+        # previous run. When a later run has no refusal, the issue is closed.
+        if: ${{ inputs.sample == '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          open=$(gh issue list --label claude-key --state open --json number --jq '.[0].number // empty')
+          run="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ -f "$CLAUDE_KEY_ERROR_FILE" ]; then
+            {
+              echo "The Anthropic count_tokens endpoint refused the key in this run, so the run stopped counting. Servers with new or changed tools keep the o200k estimate until a run counts them."
+              echo
+              echo '```'
+              sort -u "$CLAUDE_KEY_ERROR_FILE" | head -5
+              echo '```'
+              echo
+              echo "Run: $run"
+              echo
+              echo "To fix: make a key in a workspace of the Anthropic Console. Set it as the repository secret ANTHROPIC_API_KEY, and as the Worker secret with npx wrangler secret put ANTHROPIC_API_KEY in site/. cc @${{ github.repository_owner }}"
+            } > "${{ runner.temp }}/claude-key.md"
+            if [ -n "$open" ]; then
+              gh issue comment "$open" --body-file "${{ runner.temp }}/claude-key.md"
+            else
+              gh label create claude-key --color d93f0b --description 'The count_tokens endpoint refuses the key' 2>/dev/null || true
+              gh issue create --title "count_tokens refuses the Claude key" --label claude-key --body-file "${{ runner.temp }}/claude-key.md"
+            fi
+          elif [ -n "$open" ] && [ -n "$ANTHROPIC_API_KEY" ]; then
+            gh issue close "$open" --comment "The key works again in this run: $run"
+          fi
       - name: Dump the board's statuses, so the import can repair rows that drifted
         if: ${{ inputs.sample == '' && env.CLOUDFLARE_API_TOKEN != '' }}
         working-directory: site

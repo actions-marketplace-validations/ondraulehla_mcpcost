@@ -10,7 +10,7 @@ import { parseArgs } from 'node:util';
 import { fetchRegistry, hostOf, primaryRemote, CLAUDE_MODEL } from '../packages/mcpcost/src/index.js';
 import { probeRemoteRaw } from '../packages/mcpcost/src/core.js';
 import { priceTools } from '../packages/mcpcost/src/probe.js';
-import { createClaudeCounter, payloadHash } from './claude-cache.js';
+import { createClaudeCounter, payloadHash, reportKeyError } from './claude-cache.js';
 import { createGeminiCounter } from './gemini-cache.js';
 import { loadCredentials, saveCredentials, credentialsFor, type CredentialStore, type FileProvider } from '../packages/mcpcost/src/credentials.js';
 import type { ProbeResult, RegistryEntry } from '../packages/mcpcost/src/index.js';
@@ -243,7 +243,11 @@ if (credentials && args.credentials && providers.some((p) => p.changed)) {
   await saveCredentials(credentials, args.credentials);
   console.error('credentials: refreshed tokens written back');
 }
-if (claude.enabled) { const c = claude.stats(); console.error(`Claude counts: ${c.counted} servers counted now, ${c.reused} reused from the previous run, ${c.skipped} left for the next run (deadline)`); }
+if (claude.enabled) {
+  const c = claude.stats();
+  console.error(`Claude counts: ${c.counted} servers counted now, ${c.reused} reused from the previous run, ${c.skipped} left for the next run (${c.keyError ? 'the API refused the key' : 'deadline'})`);
+  await reportKeyError(c.keyError);
+}
 else console.error('ANTHROPIC_API_KEY is not set: no exact Claude counts in this run.');
 if (gemini.enabled) { const g = gemini.stats(); console.error(`Gemini counts: ${g.counted} servers counted now, ${g.reused} reused from the previous run, ${g.skipped} left for the next run (deadline)`); }
 else console.error('GEMINI_API_KEY is not set: no exact Gemini counts in this run.');

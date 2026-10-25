@@ -9,7 +9,7 @@ export { discoverConfigs, readConfigFile, normalizeServers, knownConfigPaths, ex
 export type { ConfiguredServer, ConfigFile, DiscoverOptions } from './configs.js';
 export { toolCost, toolsCost, toolPayload, countTokens, TOKENIZER } from './tokens.js';
 export type { ToolLike } from './tokens.js';
-export { countClaudeTokens, countForServer, claudeCodePrefix, toApiTools, createLimiter, ClaudeCountError, CLAUDE_MODEL } from './claude.js';
+export { countClaudeTokens, countForServer, claudeCodePrefix, toApiTools, createLimiter, ClaudeCountError, isSchemaRefusal, CLAUDE_MODEL } from './claude.js';
 export type { ClaudeCountOptions, ClaudeCount, Limiter } from './claude.js';
 export { countGeminiTokens, toGeminiDeclarations, GeminiCountError, GEMINI_MODEL } from './gemini.js';
 export type { GeminiCountOptions, GeminiCount } from './gemini.js';

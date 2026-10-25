@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { GATED_STATUSES } from '../packages/mcpcost/src/index.js';
+import { GATED_STATUSES, isSchemaRefusal } from '../packages/mcpcost/src/index.js';
 import type { ProbeResult, RegistryEntry } from '../packages/mcpcost/src/index.js';
 
 const { values: args } = parseArgs({
@@ -153,7 +153,11 @@ const stdioRows: RawRow[] = (stdioFile?.rows ?? []).filter((r) => !r.derivedFor)
 });
 const probedNow = new Set([...run.rows, ...stdioRows].map((r) => r.name));
 const previousForCarry = args.previous && existsSync(args.previous) ? (JSON.parse(await readFile(args.previous, 'utf8')) as ServerRow[]) : [];
-const carried: ServerRow[] = previousForCarry.filter((r) => r.transport === 'stdio' && !probedNow.has(r.name) && registry.has(r.name));
+// A carried row keeps its count. An error that is not a refused schema (the API refused the key) is not a fact about the
+// package, so it goes, and the row shows the estimate until its day of the stdio cycle counts it again.
+const carried: ServerRow[] = previousForCarry
+  .filter((r) => r.transport === 'stdio' && !probedNow.has(r.name) && registry.has(r.name))
+  .map((r) => (r.claudeError && !isSchemaRefusal(r.claudeError) && r.claudeTokens == null ? { ...r, claudeError: undefined, claudeModel: undefined, claudeMeasuredAt: undefined } : r));
 
 const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
   const s = registry.get(r.name);
@@ -376,7 +380,7 @@ const summary = {
     ? {
         model: claudeModel,
         counted: counted.length,
-        refused: ok.filter((r) => r.claudeError).length,
+        refused: ok.filter((r) => isSchemaRefusal(r.claudeError)).length,
         histogram: histogram(claude),
         median: quantile(claude, 0.5), p90: quantile(claude, 0.9), p99: quantile(claude, 0.99), max: Math.max(0, ...claude), total: claude.reduce((a, b) => a + b, 0),
         claudeCode: { median: quantile(claudeCc, 0.5), p90: quantile(claudeCc, 0.9), p99: quantile(claudeCc, 0.99), max: Math.max(0, ...claudeCc), total: claudeCc.reduce((a, b) => a + b, 0) },
