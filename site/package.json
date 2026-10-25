@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "astro dev",
-    "build": "wrangler types && npm run mcp:snapshot && vitest run tests/mcp.test.ts && astro build",
+    "build": "wrangler types && vitest run tests/mcp-snapshot.test.ts tests/mcp.test.ts && astro build",
     "check": "astro check",
     "test": "vitest run",
     "mcp:snapshot": "vitest run tests/mcp-snapshot.test.ts --update",

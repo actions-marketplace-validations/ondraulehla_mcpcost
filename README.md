@@ -182,7 +182,7 @@ npm run db:schema:local && npm run db:import:local
 npm run dev
 ```
 
-The MCP endpoint answers `initialize`, `tools/list`, `ping` and the notifications from `site/src/lib/mcp-snapshot.json`, without the SDK; every other request goes to the SDK. The site build writes the snapshot from the SDK's own answers (`npm run mcp:snapshot -w site`), so a changed tool definition shows in that file: commit it with the change. `npm test -w site` holds the two answers side by side, byte for byte.
+The MCP endpoint answers `initialize`, `tools/list`, `ping` and the notifications from `site/src/lib/mcp-snapshot.json`, without the SDK; every other request goes to the SDK. The snapshot must be the SDK's own answers, or the site build fails: after a change to a tool definition, run `npm run mcp:snapshot -w site` and commit the new file in the same commit. `npm test -w site`, which the build runs too, holds the two answers side by side, byte for byte.
 
 The alert mails need a sending domain: either Cloudflare Email Sending (Workers Paid plan, then the `send_email` binding in `site/wrangler.jsonc`) or Resend (verify the domain there and `npx wrangler secret put RESEND_API_KEY`). Without one, the watch form says that the confirmation mail could not be sent.
 
