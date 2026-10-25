@@ -214,6 +214,12 @@ CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… node site/edge/watch.mjs     
 CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… node site/edge/watch.mjs 2026-10-22T22:00:00Z 2026-10-23T06:00:00Z   # one night
 ```
 
+A run started by hand with `quiet` on only writes the report: a look back at a past window does not open an issue or turn red for an hour that was already reported.
+
+```bash
+gh workflow run watch.yml -f from=2026-10-24T19:00:00Z -f quiet=true
+```
+
 ### The old host
 
 The site was mcp-pulse.ulehla.dev until 2026-10-15. The old host stays a route of the Worker, and the middleware in `site/src/middleware.ts` answers every request on it with a 301 to mcpcost.ulehla.dev.

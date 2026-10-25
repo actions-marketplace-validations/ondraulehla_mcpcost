@@ -100,8 +100,10 @@ const jsonld = {
   .today .stats { margin-top: 0; }
   .why { margin: 2.5rem 0 0; padding: 1rem 1.25rem; border: 1px solid var(--line); font-size: 0.95rem; line-height: 1.625; color: var(--ink-muted); }
   /* the command with a copy cell, like the e-mail cell of ulehla.dev */
-  .copy-row { display: flex; align-items: stretch; border: 1px solid var(--line); background: var(--panel); }
-  .copy-row pre { flex: 1; min-width: 0; margin: 0; border: 0; background: transparent; }
+  /* The same box as the check form next to it: one height, one background, one inset. */
+  .copy-row { display: flex; align-items: stretch; border: 1px solid var(--line); background: var(--surface); }
+  .copy-row pre { flex: 1; min-width: 0; margin: 0; border: 0; background: transparent; padding: 0.75rem 0.875rem; font-family: var(--font-mono); font-size: 0.95rem; line-height: 1.5; color: var(--ink); }
+  .actions-grid .checkform input { line-height: 1.5; }
   .copy-row .copy { border: 0; border-left: 1px solid var(--line); padding: 0 1.25rem; background-color: transparent; color: var(--accent); font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.15em; text-transform: uppercase; font-weight: 600; cursor: pointer; background-image: linear-gradient(var(--ink), var(--ink)); background-position: bottom; background-repeat: no-repeat; background-size: 100% 0%; transition: background-size 0.28s var(--ease-out-quint), color 0.18s 60ms; }
   .copy-row .copy:hover, .copy-row .copy:focus-visible { color: var(--surface); background-size: 100% 100%; }
   @media (width <= 760px) {
