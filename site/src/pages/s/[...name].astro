@@ -241,7 +241,7 @@ const jsonld = {
   {topTools.length > 0 && (
     <section class="panel" aria-labelledby="tools-h">
       <h2 id="tools-h" class="panel-title">Most expensive tools</h2>
-      <p class="muted small">{exact && server.tools_tokens ? `The Claude column scales the o200k estimate of each tool by this server's ratio of exact to estimate, ${(server.claude_tokens! / server.tools_tokens).toFixed(2)}×.` : 'Estimates with the o200k_base tokenizer.'}</p>
+      <p class="muted small">{exact && server.tools_tokens ? `The Claude column scales the o200k estimate of each tool by this server's ratio of exact to estimate, ${((server.claude_tokens as number) / server.tools_tokens).toFixed(2)}×.` : 'Estimates with the o200k_base tokenizer.'}</p>
       <div class="frame">
         <table>
           <thead><tr><th>Tool</th>{exact && server.tools_tokens && <th class="num">≈ Claude tokens</th>}<th class="num">o200k estimate</th><th class="num">Share of this server</th></tr></thead>

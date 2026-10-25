@@ -17,6 +17,7 @@ jobs:
       - run: npm test --workspaces --if-present
       - run: node --test ".github/actions/*.test.mjs"
       - run: npm run build -w site
+      - run: npm run check -w site
   action:
     name: the GitHub Action against two public servers
     runs-on: ubuntu-latest

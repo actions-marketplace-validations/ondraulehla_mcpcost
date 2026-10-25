@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { findByUrl, getServer, latestRun, listServers, SORTS, MAX_NUMBERED_PAGE, decodeCursor, encodeCursor, type SortKey } from './db';
 import { label } from './format';
 import { probeRemoteRaw } from '../../../packages/mcpcost/src/core.ts';
@@ -29,6 +30,17 @@ const SERVER_ROW = {
 };
 
 /**
+ * registerTool with the tool's argument type named by the caller. The SDK's types read zod from its own copy of the
+ * package (zod 4 with v3 inside), the site's schemas come from another copy (zod 3), and inferring the arguments across
+ * the two made the type check run out of memory. The SDK still checks the arguments against the schema at run time.
+ */
+type RegisterTool = <Args>(
+  name: string,
+  config: { title: string; description: string; annotations: ToolAnnotations; inputSchema: Record<string, unknown>; outputSchema: Record<string, unknown> },
+  cb: (args: Args) => Promise<CallToolResult>
+) => void;
+
+/**
  * mcpcost as an MCP server: five tools over the same data as the board.
  * Stateless, one server instance per request, JSON responses.
  */
@@ -40,8 +52,9 @@ function build(): McpServer {
         'Health and token cost of every remote server in the official MCP registry, and of its npm and PyPI package servers, probed daily. Use lookup_server for a registry name or URL, search_servers to find servers, compare_servers to put two to five next to each other, check_server to probe a URL that is not in the registry. claudeTokens is the exact count from the Anthropic count_tokens endpoint (claudeTokensClaudeCode with the mcp__<server>__ prefix); toolsTokens is an o200k_base estimate over each tool definition.'
     }
   );
+  const tool = server.registerTool.bind(server) as unknown as RegisterTool;
 
-  server.registerTool(
+  tool<{ nameOrUrl: string }>(
     'lookup_server',
     {
       title: 'Look up a registry server',
@@ -86,7 +99,7 @@ function build(): McpServer {
     }
   );
 
-  server.registerTool(
+  tool<{ query?: string; status?: 'ok' | 'auth' | 'payment' | 'newer_protocol' | 'down'; sort?: SortKey; page?: number; cursor?: string }>(
     'search_servers',
     {
       title: 'Search the registry board',
@@ -115,7 +128,7 @@ function build(): McpServer {
     }
   );
 
-  server.registerTool(
+  tool<{ url: string }>(
     'check_server',
     {
       title: 'Probe a server live',
@@ -170,7 +183,7 @@ function build(): McpServer {
     }
   );
 
-  server.registerTool(
+  tool<{ servers: string[]; format?: 'json' | 'markdown' | 'csv' }>(
     'compare_servers',
     {
       title: 'Compare servers side by side',
@@ -213,7 +226,7 @@ function build(): McpServer {
     }
   );
 
-  server.registerTool(
+  tool<Record<string, never>>(
     'registry_summary',
     {
       title: 'Registry summary',
