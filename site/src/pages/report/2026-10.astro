@@ -3,7 +3,7 @@ import Layout from '../../layouts/Layout.astro';
 import Trend from '../../components/charts/Trend.astro';
 import Histogram from '../../components/charts/Histogram.astro';
 import { runsBetween, type RunSummary } from '../../lib/db';
-import { REPORTS, nextDay } from '../../lib/reports';
+import { REPORTS, nextDay, nextMonth } from '../../lib/reports';
 import { num, pct, date, label, bucket, modelName, authKindLabel } from '../../lib/format';
 
 /**
@@ -13,18 +13,24 @@ import { num, pct, date, label, bucket, modelName, authKindLabel } from '../../l
  * read, so the page costs nothing on the free tier.
  */
 const report = REPORTS.find((r) => r.month === '2026-10')!;
-const all = await runsBetween(report.month, nextDay(report.run), ['changes']);
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=86400');
 
 // Sample runs (a test of the probe over 200 servers) and broken runs (2026-10-14: the runner timed out
 // on half the registry) stay out of the series. The series ends with the run the dataset is built from.
-const series: RunSummary[] = [];
-let best = 0;
-for (const r of all) {
-  if (r.probed < 1000 || r.ok < 0.7 * best) continue;
-  best = Math.max(best, r.ok);
-  series.push(r);
+// The filter looks only at earlier runs, so the runs up to the run day give the same series as the month cut there.
+function seriesOf(all: Array<Omit<RunSummary, 'changes'>>): Array<Omit<RunSummary, 'changes'>> {
+  const out: Array<Omit<RunSummary, 'changes'>> = [];
+  let best = 0;
+  for (const r of all) {
+    if (r.probed < 1000 || r.ok < 0.7 * best) continue;
+    best = Math.max(best, r.ok);
+    out.push(r);
+  }
+  return out;
 }
+let series = seriesOf(await runsBetween(report.month, nextDay(report.run), ['changes']));
+// A run day before the month's first full run would leave the page empty: the whole month stands in, a second query only then.
+if (!series.length) series = seriesOf(await runsBetween(report.month, nextMonth(report.month), ['changes']));
 const first = series[0] ?? null;
 const run = series[series.length - 1] ?? null;
 const site = Astro.site?.toString().replace(/\/$/, '') ?? 'https://mcpcost.ulehla.dev';

@@ -4,12 +4,12 @@ import Bars from '../components/charts/Bars.astro';
 import Stack from '../components/charts/Stack.astro';
 import Trend from '../components/charts/Trend.astro';
 import Histogram from '../components/charts/Histogram.astro';
-import { latestRun, listHosts, trendBefore, type TrendPoint } from '../lib/db';
+import { latestRunWithTrend, listHosts, type TrendPoint } from '../lib/db';
 import { bucket, label, num, pct, date, ms, modelName, authKindLabel } from '../lib/format';
 
-const run = await latestRun(['changes']);
-// The run-by-run charts: the latest run and the 29 before it, of which they draw three numbers.
-const earlier = run ? await trendBefore(run.probedAt, 29) : [];
+// The latest run and, for the run-by-run charts, the 29 before it, of which they draw three numbers: one round trip.
+const { run, earlier } = await latestRunWithTrend(['changes'], 29);
+// The run carries its biggest hosts, so this reads nothing more from the database.
 const hosts = run ? await listHosts(12, run) : [];
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=10800');
 

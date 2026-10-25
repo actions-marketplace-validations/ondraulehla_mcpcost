@@ -161,22 +161,34 @@ export async function recentChanges(limit = 14): Promise<Array<Pick<RunSummary, 
 /** One run as a point of the run-by-run charts. */
 export type TrendPoint = Pick<RunSummary, 'probedAt' | 'ok' | 'probed'> & { claudeTokens?: { median: number }; toolsTokens: { median: number } };
 
-/** The runs before a run, newest first, with only the numbers the run-by-run charts draw. */
-export async function trendBefore(probedAt: string, limit: number): Promise<TrendPoint[]> {
-  const { results } = await db()
-    .prepare(
-      `SELECT json_extract(summary, '$.probedAt') AS probedAt, json_extract(summary, '$.ok') AS ok, json_extract(summary, '$.probed') AS probed,
-         json_extract(summary, '$.claudeTokens.median') AS claudeMedian, json_extract(summary, '$.toolsTokens.median') AS toolsMedian
-       FROM runs WHERE probed_at < ? ORDER BY probed_at DESC LIMIT ?`
-    )
-    .bind(probedAt, limit)
-    .all<{ probedAt: string; ok: number; probed: number; claudeMedian: number | null; toolsMedian: number }>();
-  return results.map((r) => ({ probedAt: r.probedAt, ok: r.ok, probed: r.probed, claudeTokens: r.claudeMedian == null ? undefined : { median: r.claudeMedian }, toolsTokens: { median: r.toolsMedian } }));
-}
-
 /** The summary column without the lists named, and the values the SQL binds for them. */
 function summaryWithout(without: RunList[]): { sql: string; binds: string[] } {
   return without.length ? { sql: `json_remove(summary${', ?'.repeat(without.length)})`, binds: without.map((k) => `$.${k}`) } : { sql: 'summary', binds: [] };
+}
+
+/**
+ * The latest run without the lists named, and the runs before it, newest first, as points of the run-by-run
+ * charts. One round trip: D1 runs a batch as one transaction, so both answers come from the same table.
+ */
+export async function latestRunWithTrend<K extends RunList = never>(without: K[], limit: number): Promise<{ run: Omit<RunSummary, K> | null; earlier: TrendPoint[] }> {
+  const summary = summaryWithout(without);
+  const d = db();
+  const [latest, trend] = await d.batch([
+    d.prepare(`SELECT ${summary.sql} AS summary FROM runs ORDER BY probed_at DESC LIMIT 1`).bind(...summary.binds),
+    d
+      .prepare(
+        `SELECT json_extract(summary, '$.probedAt') AS probedAt, json_extract(summary, '$.ok') AS ok, json_extract(summary, '$.probed') AS probed,
+           json_extract(summary, '$.claudeTokens.median') AS claudeMedian, json_extract(summary, '$.toolsTokens.median') AS toolsMedian
+         FROM runs WHERE probed_at < (SELECT max(probed_at) FROM runs) ORDER BY probed_at DESC LIMIT ?`
+      )
+      .bind(limit)
+  ]);
+  const row = (latest.results as Array<{ summary: string }>)[0];
+  const points = trend.results as Array<{ probedAt: string; ok: number; probed: number; claudeMedian: number | null; toolsMedian: number }>;
+  return {
+    run: row ? (JSON.parse(row.summary) as Omit<RunSummary, K>) : null,
+    earlier: points.map((r) => ({ probedAt: r.probedAt, ok: r.ok, probed: r.probed, claudeTokens: r.claudeMedian == null ? undefined : { median: r.claudeMedian }, toolsTokens: { median: r.toolsMedian } }))
+  };
 }
 
 /** The runs from one date to another (ISO prefixes, the end excluded), oldest first, without the lists named. The monthly report reads one month this way. */

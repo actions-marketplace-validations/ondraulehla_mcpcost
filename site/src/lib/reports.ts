@@ -27,6 +27,12 @@ export const REPORTS: Report[] = [
   }
 ];
 
+/** The next month as an ISO prefix, for the end of a half-open range. */
+export function nextMonth(month: string): string {
+  const [y, m] = month.split('-').map(Number);
+  return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+}
+
 /** The day after an ISO date, for the end of a half-open range. */
 export function nextDay(day: string): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
