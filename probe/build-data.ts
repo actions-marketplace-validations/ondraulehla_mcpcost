@@ -149,7 +149,10 @@ const stdioFile = args.stdio && existsSync(args.stdio) ? (JSON.parse(await readF
 /** Packages that stand in for gated remote servers, by the remote server's name. Not rows of their own. */
 const derivedByName = new Map<string, StdioRow>();
 for (const r of stdioFile?.rows ?? []) if (r.derivedFor) derivedByName.set(r.derivedFor, r);
-const stdioRows: RawRow[] = (stdioFile?.rows ?? []).filter((r) => !r.derivedFor).map((r) => {
+// The stdio run is hours older than the remote probe. An entry that got a remote URL in between (a new version) has
+// both; the remote probe of today's registry wins, and an entry that left the registry in between is not shown.
+const remoteNames = new Set(run.rows.map((r) => r.name));
+const stdioRows: RawRow[] = (stdioFile?.rows ?? []).filter((r) => !r.derivedFor && !remoteNames.has(r.name) && registry.has(r.name)).map((r) => {
   const kind = r.kind ?? 'npm';
   const host = kind === 'npm' ? 'npmjs.com' : 'pypi.org';
   const url = kind === 'npm' ? `npm:${r.identifier}${r.version ? `@${r.version}` : ''}` : `pypi:${r.identifier}${r.version ? `==${r.version}` : ''}`;
@@ -221,6 +224,13 @@ const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
 });
 
 rows.push(...carried);
+// One row per entry: the evidence check refuses a file with an entry twice, and D1 would keep only one of them.
+{
+  const seen = new Set<string>();
+  const unique = rows.filter((r) => (seen.has(r.name) ? false : (seen.add(r.name), true)));
+  if (unique.length < rows.length) console.error(`::warning::${rows.length - unique.length} rows named an entry twice; the first one is kept`);
+  rows.splice(0, rows.length, ...unique);
+}
 
 /**
  * failingSince: the first probe of the current run of failed probes. A server that fails today and failed at its
@@ -279,10 +289,11 @@ function unprobedRow(s: RegistryEntry['server'], meta: RegistryEntry['meta'] | u
       reason = `The entry has only a ${t} package. The probe runs npm and PyPI packages, OCI images and MCPB bundles only.`;
     }
   } else if (s.remotes?.length) {
-    url = s.remotes[0].url;
+    const callable = s.remotes.find((r) => r.type === 'streamable-http' || r.type === 'sse');
+    url = (callable ?? s.remotes[0]).url;
     host = hostOf(url);
-    transport = s.remotes[0].type;
-    reason = 'The entry has a remote of a kind that the probe does not call.';
+    transport = (callable ?? s.remotes[0]).type;
+    reason = callable ? 'A new entry. The next daily probe calls it.' : 'The entry has a remote of a kind that the probe does not call.';
   }
   return {
     name: s.name, title: s.title, description: s.description?.slice(0, 200), url, host, transport: transport as ServerRow['transport'],
