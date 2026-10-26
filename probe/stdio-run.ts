@@ -17,6 +17,7 @@ import { priceTools } from '../packages/mcpcost/src/probe.js';
 import { probeStdioRaw } from '../packages/mcpcost/src/stdio.js';
 import type { RawTool } from '../packages/mcpcost/src/core.js';
 import { envNamesFromError } from '../packages/mcpcost/src/env-hints.js';
+import { classify, type StdioStatus } from './stdio-classify.js';
 
 const run = promisify(execFile);
 const { values: args } = parseArgs({
@@ -43,7 +44,6 @@ const { values: args } = parseArgs({
   }
 });
 
-type StdioStatus = ProbeResult['status'] | 'install_failed' | 'no_bin' | 'needs_env' | 'needs_args' | 'needs_network' | 'crashed';
 interface Target { name: string; pkg: RegistryPackage; updatedAt: string; derivedFor?: string }
 type Kind = 'npm' | 'pypi' | 'oci' | 'mcpb';
 /** The package an entry is probed by when it lists several kinds: npm and PyPI first, then an MCPB bundle, then an OCI image. */
@@ -204,23 +204,6 @@ async function install(t: Target, dir: string): Promise<{ command: string[] } | 
   const binName = bins.find((b) => b.toLowerCase().replace(/_/g, '-') === want) ?? bins.find((b) => want.includes(b.toLowerCase().replace(/_/g, '-'))) ?? bins[0];
   if (!binName) return { status: 'no_bin', error: 'package installs no console script' };
   return { command: [`/work/bin/${binName}`] };
-}
-
-/** The status a failed start means, from what the server wrote: the same rules for every kind of package. */
-function classify(result: ProbeResult): { status: StdioStatus; text: string } {
-  const text = `${result.error ?? ''}`;
-  let status: StdioStatus = result.status;
-  if (status !== 'ok' && /api[_ -]?key|token|credential|unauthori[sz]ed|missing required|environment variable|must be set|must use|is required|not configured|is invalid|invalid url|not recognized|placeholder|please set|config/i.test(text)) status = 'needs_env';
-  if (status !== 'ok' && /^usage:|\busage:|unknown command|missing argument|expected a command|too few arguments/im.test(text)) status = 'needs_args';
-  // Closed before initialize with a stack trace or an import error: the server crashed on start.
-  if (status === 'error' && /Connection closed/.test(text)) status = 'crashed';
-  // A bridge to a remote server (mcp-remote and friends) cannot work with the network off; that is a remote server in disguise.
-  if (status !== 'ok' && /mcp-remote|ENOTFOUND|getaddrinfo|ECONNREFUSED|fetch failed|StreamableHTTPClientTransport|SSEClientTransport|Temporary failure in name resolution|Network is unreachable/.test(text)) status = 'needs_network';
-  if (status !== 'ok' && /ModuleNotFoundError|ImportError|Cannot find module|ERR_MODULE_NOT_FOUND|SyntaxError|TypeError|ReferenceError|Traceback/.test(text)) status = 'crashed';
-  // A binary for another system (a macOS-only MCPB bundle, an arm64 image): nothing here can run it.
-  // Or a command that the image does not have: the entry's arguments name a program that is not there.
-  if (status !== 'ok' && /ENOEXEC|exec format error|cannot execute binary file|executable file not found in \$PATH/i.test(text)) status = 'no_bin';
-  return { status, text };
 }
 
 /**
