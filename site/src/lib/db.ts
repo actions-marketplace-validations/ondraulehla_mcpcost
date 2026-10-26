@@ -307,6 +307,39 @@ export async function getSiblings(hash: string, except: string, limit = 12): Pro
   return results;
 }
 
+/**
+ * Everything the server page reads, in one round trip: the row, its history, the servers with the same tool set,
+ * whether it ever answered, and the latest run without its long lists. The page made them in two awaits and a third
+ * one for a server that never answered; each await costs CPU in the D1 client.
+ */
+export async function serverPage(name: string): Promise<{
+  server: ServerRecord | null;
+  history: ProbeRecord[];
+  siblings: Array<Pick<ServerRecord, 'name' | 'host' | 'status'>>;
+  everAnswered: boolean;
+  run: Omit<RunSummary, 'topHosts' | 'changes' | 'heaviest'> | null;
+}> {
+  const d = db();
+  const summary = summaryWithout(['topHosts', 'changes', 'heaviest']);
+  const [server, history, siblings, answered, run] = await d.batch([
+    d.prepare('SELECT * FROM servers WHERE name = ?').bind(name),
+    d.prepare('SELECT probed_at, status, init_ms, tool_count, tools_tokens, claude_tokens FROM probes WHERE name = ? ORDER BY probed_at DESC LIMIT ?').bind(name, 60),
+    // A server with no tool set hash has no siblings: = NULL matches nothing.
+    d.prepare('SELECT name, host, status FROM servers WHERE toolset_hash = (SELECT toolset_hash FROM servers WHERE name = ?) AND name <> ? ORDER BY name LIMIT ?').bind(name, name, 12),
+    d.prepare(`SELECT 1 AS answered FROM probes WHERE name = ? AND status IN ${ANSWERED_STATUSES_SQL} LIMIT 1`).bind(name),
+    d.prepare(`SELECT ${summary.sql} AS summary FROM runs ORDER BY probed_at DESC LIMIT 1`).bind(...summary.binds)
+  ]);
+  const row = (server.results as ServerRecord[])[0] ?? null;
+  const latest = (run.results as Array<{ summary: string }>)[0];
+  return {
+    server: row,
+    history: history.results as ProbeRecord[],
+    siblings: siblings.results as Array<Pick<ServerRecord, 'name' | 'host' | 'status'>>,
+    everAnswered: (answered.results as unknown[]).length > 0,
+    run: latest ? (JSON.parse(latest.summary) as Omit<RunSummary, 'topHosts' | 'changes' | 'heaviest'>) : null
+  };
+}
+
 /** The number the board shows: the exact count when there is one, else the estimate. Two indexes in schema.sql hold this expression. */
 export const SHOWN_TOKENS = 'coalesce(claude_tokens, tools_tokens)';
 

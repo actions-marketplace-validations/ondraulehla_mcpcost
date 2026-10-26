@@ -1,18 +1,14 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { getHistory, getServer, getSiblings, latestRun, serverEverAnswered } from '../../lib/db';
+import { serverPage } from '../../lib/db';
 import { bucket, label, ms, num, tokens, date, windowShare, modelName } from '../../lib/format';
 
 const name = Astro.params.name ?? '';
-const server = await getServer(name);
+// One round trip for the row, its history, its siblings, whether it ever answered, and the latest run.
+const { server, history, siblings, everAnswered, run } = await serverPage(name);
 if (!server) {
   return new Response('Not found', { status: 404 });
 }
-const [history, siblings, run] = await Promise.all([
-  getHistory(name, 60),
-  server.toolset_hash ? getSiblings(server.toolset_hash, name) : Promise.resolve([]),
-  latestRun(['topHosts', 'changes', 'heaviest'])
-]);
 // A day at the edge: the data change once a day, and a crawl that reads every server page costs the Worker one request per page per colo, not one every three hours.
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=86400');
 
@@ -28,7 +24,7 @@ const reachable = history.filter((h) => h.status === 'ok' || h.status === 'auth'
 // A server that never answered has a page that says only "timeout" or "error". Google reads that as a soft 404,
 // so the page is noindex (links still followed) until one probe gets an answer. The sitemap applies the same rule.
 // An entry the probe does not run has no result to show, so its page is noindex as well.
-const answered = server.status !== 'unprobed' && (bucket(server.status) !== 'down' || history.some((h) => bucket(h.status) !== 'down') || (await serverEverAnswered(name)));
+const answered = server.status !== 'unprobed' && (bucket(server.status) !== 'down' || history.some((h) => bucket(h.status) !== 'down') || everAnswered);
 const robots = answered ? undefined : 'noindex, follow';
 const heading = server.title ?? server.server_name ?? name;
 /** up, gated, noanswer or down: a failing server is down after two days of failed probes, "no answer" before. */
