@@ -3,29 +3,34 @@ import Layout from '../../layouts/Layout.astro';
 import Trend from '../../components/charts/Trend.astro';
 import Histogram from '../../components/charts/Histogram.astro';
 import { runsBetween, type RunSummary } from '../../lib/db';
-import { REPORTS, nextMonth } from '../../lib/reports';
+import { REPORTS, nextDay, nextMonth } from '../../lib/reports';
 import { num, pct, date, label, bucket, modelName, authKindLabel } from '../../lib/format';
 
 /**
- * The dated report for one month. It reads the runs table only: every run of the
- * month, one query, and the page is cached for a day. No row of the servers table
- * is read, so the page costs nothing on the free tier.
+ * The dated report for one month. It reads the runs table only, in one query: the runs
+ * of the month up to the run day the report is pinned to, without their changes, which
+ * the page does not show. The page is cached for a day. No row of the servers table is
+ * read, so the page costs nothing on the free tier.
  */
 const report = REPORTS.find((r) => r.month === '2026-10')!;
-const all = await runsBetween(report.month, nextMonth(report.month));
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=86400');
 
 // Sample runs (a test of the probe over 200 servers) and broken runs (2026-10-14: the runner timed out
 // on half the registry) stay out of the series. The series ends with the run the dataset is built from.
-const runs: RunSummary[] = [];
-let best = 0;
-for (const r of all) {
-  if (r.probed < 1000 || r.ok < 0.7 * best) continue;
-  best = Math.max(best, r.ok);
-  runs.push(r);
+// The filter looks only at earlier runs, so the runs up to the run day give the same series as the month cut there.
+function seriesOf(all: Array<Omit<RunSummary, 'changes'>>): Array<Omit<RunSummary, 'changes'>> {
+  const out: Array<Omit<RunSummary, 'changes'>> = [];
+  let best = 0;
+  for (const r of all) {
+    if (r.probed < 1000 || r.ok < 0.7 * best) continue;
+    best = Math.max(best, r.ok);
+    out.push(r);
+  }
+  return out;
 }
-const dated = runs.filter((r) => r.probedAt.slice(0, 10) <= report.run);
-const series = dated.length ? dated : runs;
+let series = seriesOf(await runsBetween(report.month, nextDay(report.run), ['changes']));
+// A run day before the month's first full run would leave the page empty: the whole month stands in, a second query only then.
+if (!series.length) series = seriesOf(await runsBetween(report.month, nextMonth(report.month), ['changes']));
 const first = series[0] ?? null;
 const run = series[series.length - 1] ?? null;
 const site = Astro.site?.toString().replace(/\/$/, '') ?? 'https://mcpcost.ulehla.dev';
@@ -54,6 +59,13 @@ const gated = run ? run.reachable - run.ok : 0;
 const down = run ? run.probed - run.reachable : 0;
 const ct = run?.claudeTokens;
 const model = modelName(ct?.model);
+/**
+ * Alive servers with no exact count and no refused schema. From 2026-10-18 the API refused the probe's key: servers
+ * that kept their tools kept their count, but new and changed servers got none. A run with a working key leaves only a
+ * few here, and the sentence about it goes away.
+ */
+const uncounted = run && ct ? Math.max(0, run.ok - ct.counted - ct.refused) : 0;
+const keyGap = run ? uncounted > 0.05 * run.ok : false;
 const over200k = run ? run.heaviest.filter((h) => (h.claudeTokens ?? 0) > 200_000).length : 0;
 const over200kIsFloor = run ? over200k === run.heaviest.length : false;
 const authTotal = run ? Object.values(run.authKinds ?? {}).reduce((a, b) => a + b, 0) : 0;
@@ -266,7 +278,7 @@ const jsonld = run
                 </tbody>
               </table>
             </div>
-            <p class="muted small">The estimate column covers all {num(run.ok)} alive servers. {num(ct.refused)} alive servers publish a schema the endpoint refuses; they have the estimate only.</p>
+            <p class="muted small">The estimate column covers all {num(run.ok)} alive servers. {num(ct.refused)} alive servers publish a schema the endpoint refuses; they have the estimate only.{keyGap && <> {num(uncounted)} more alive servers have no exact count in this run. That is an error on our side: from 2026-10-18 the API refused the key of the probe. Servers that kept their tools kept their count, but new and changed servers got none. The exact columns cover the {num(ct.counted)} counted servers, and the heaviest servers below can miss some of the new ones.</>}</p>
             {ct.histogram && (
               <>
                 <h3>Servers per cost band</h3>
@@ -485,8 +497,10 @@ const jsonld = run
         {report.evidence && (
           <>
             <h3>The same run as re-check evidence for the registry</h3>
-            <p>The official registry discusses a periodic re-check of its entries (<a href="https://github.com/modelcontextprotocol/registry/issues/1715" rel="noopener">issue #1715</a>). This file is this run in the row shape agreed there, so a registry job can merge it with evidence from other sources: <code>entry</code>, <code>checked_at</code>, <code>check</code> (<code>endpoint</code> for a remote server, <code>package</code> for an npm or PyPI server started in a container), <code>state</code> and <code>evidence</code>. The state is one of five: <code>alive</code> (initialize and tools/list succeeded), <code>auth</code> (reachable, needs credentials or payment), <code>transient</code> (the endpoint exists but did not serve this run: timeout, 429, 5xx, refused), <code>dead</code> (no DNS, TLS failure, 404, not MCP; a package that does not install), <code>unknown</code> (a package that needs values or a network to start). The evidence holds the probe status by cause, the target, the HTTP status, the auth scheme and kind, the protocol version, the tool count and the first line of the error.</p>
+            <p>The official registry discusses a periodic re-check of its entries (<a href="https://github.com/modelcontextprotocol/registry/issues/1715" rel="noopener">issue #1715</a>). This file is this run in the row shape agreed there, so a registry job can merge it with evidence from other sources: <code>entry</code>, <code>checked_at</code>, <code>check</code> (<code>endpoint</code> for a remote server, <code>package</code> for an npm or PyPI server started in a container), <code>state</code> and <code>evidence</code>. The state is one of five: <code>alive</code> (initialize and tools/list succeeded), <code>auth</code> (reachable, needs credentials or payment), <code>transient</code> (no valid answer in this run: a timeout, 429, 5xx or a refused connection, or a dead cause seen for less than two days), <code>dead</code> (no DNS, TLS failure, 404, not MCP, in every check for two days or more; a package that does not install), <code>unknown</code> (a package that needs values or a network to start, or a URL with placeholders that each user fills in). Each row also has the entry <code>version</code> when the entry did not change after the check. The evidence holds the probe status by cause, the target, the HTTP status, the auth scheme and kind, the protocol version, the tool count, the first failed check and the first line of the error.</p>
+            <p class="muted small">Corrected on 2026-10-26. The first file called 191 entries dead whose URL has placeholders that each user fills in, such as https://&#123;tenant&#125;.example.com/mcp, and it called a dead cause dead after one failed check. Now such a URL is unknown, and a dead cause counts after two days of failed checks, from the runs since 2026-10-18: 1 206 rows fewer are dead. The board follows the same rules from 2026-10-26.</p>
             <p class="download"><a href={report.evidence.path} download>Download mcpcost-evidence-{report.month}.json.gz</a> <span class="muted small">({report.evidence.size}, CC BY 4.0, the same licence and citation)</span></p>
+            <p>The newest run in the same shape is always at <a href="/data/mcpcost-evidence-latest.json.gz"><code>/data/mcpcost-evidence-latest.json.gz</code></a>. It changes after each daily run. Its index, <a href="/data/mcpcost-evidence-latest.index.json"><code>mcpcost-evidence-latest.index.json</code></a>, gives the run date, the number of rows, the size and the SHA-256.</p>
           </>
         )}
         <h3>Licence and citation</h3>

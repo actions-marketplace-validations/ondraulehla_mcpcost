@@ -4,6 +4,7 @@
  * row lifts and shows its tooltip. A table twin sits under "as a table".
  * One series, one colour, unless an item carries a status tone.
  */
+import { grouped } from '../../lib/format';
 export interface BarItem {
   label: string;
   value: number;
@@ -11,7 +12,7 @@ export interface BarItem {
   sub?: string;
   href?: string;
   /** Status tone; absent means the single-series accent. */
-  tone?: 'up' | 'gated' | 'down';
+  tone?: 'up' | 'gated' | 'noanswer' | 'down' | 'unprobed';
   /** Text at the tip instead of the formatted value. */
   display?: string;
   /** Text for the tooltip and the table's second column. */
@@ -27,7 +28,7 @@ interface Props {
 }
 const { items, columns, id } = Astro.props;
 const max = Astro.props.max ?? Math.max(1, ...items.map((i) => i.value));
-const fmt = (n: number) => n.toLocaleString('en-US').replace(/,/g, ' ');
+const fmt = (n: number) => grouped(n, ' ');
 ---
 
 <figure class="chart bars" id={id}>

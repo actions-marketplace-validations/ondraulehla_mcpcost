@@ -9,6 +9,8 @@ export const STATUS_LABEL: Record<string, string> = {
   server_error: 'server error',
   protocol_error: 'not MCP',
   newer_protocol: 'newer protocol',
+  needs_url: 'needs your URL',
+  unprobed: 'not probed',
   timeout: 'timeout',
   dns: 'no DNS',
   tls: 'TLS error',
@@ -34,11 +36,20 @@ export function authKindLabel(kind: string | null | undefined): string {
   return AUTH_KIND_LABEL[kind ?? 'unknown'] ?? kind ?? 'unknown';
 }
 
-/** Three buckets for colours and filters. */
-export function bucket(status: string): 'up' | 'gated' | 'down' {
+export type Bucket = 'up' | 'gated' | 'noanswer' | 'down' | 'unprobed';
+
+/**
+ * The bucket of a result, for colours and filters. With the row's failing_since (null or a date) a failing server is
+ * down only when its down_since is set, which the probe sets after two days of failed probes (isConfirmedDown), and
+ * "no answer" before that. Without failing_since (a history row, a live check) every failing result is down, as one
+ * probe can say nothing more.
+ */
+export function bucket(status: string, failingSince?: string | null, downSince?: string | null): Bucket {
   if (status === 'ok') return 'up';
+  if (status === 'unprobed') return 'unprobed';
   if (GATED_STATUSES.has(status)) return 'gated';
-  return 'down';
+  if (failingSince === undefined) return 'down';
+  return downSince ? 'down' : 'noanswer';
 }
 
 export function label(status: string): string {
@@ -52,9 +63,20 @@ export function tokens(n: number | null | undefined): string {
   return `${Math.round(n / 1000)}k`;
 }
 
+/**
+ * n.toLocaleString('en-US') with `separator` in place of the commas. toLocaleString builds a number format on every
+ * call, about 15 µs, and the changes page made 1 400 calls, 60 % of its CPU time; so an integer, nearly every number
+ * here, is grouped by hand, to the same text.
+ */
+export function grouped(n: number, separator: string): string {
+  if (Number.isSafeInteger(n) && !Object.is(n, -0)) return (n < 0 ? '-' : '') + String(Math.abs(n)).replace(/\B(?=(\d{3})+$)/g, separator);
+  return n.toLocaleString('en-US').replace(/,/g, separator);
+}
+
+/** A number with a narrow no-break space between the thousands. */
 export function num(n: number | null | undefined): string {
   if (n === null || n === undefined) return '';
-  return n.toLocaleString('en-US').replace(/,/g, ' ');
+  return grouped(n, '\u202f');
 }
 
 export function ms(n: number | null | undefined): string {

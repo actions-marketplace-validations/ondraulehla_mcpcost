@@ -1,15 +1,18 @@
 ---
+import { GATED_STATUSES } from '../../../packages/mcpcost/src/types.ts';
 import Layout from '../layouts/Layout.astro';
 import { latestRun, headline } from '../lib/db';
 import { num, pct, tokens, date, modelName } from '../lib/format';
 
-const run = await latestRun();
+const run = await latestRun(['topHosts', 'changes', 'heaviest']);
 const cost = run ? headline(run) : null;
 const inModel = cost?.exact ? ` in ${modelName(cost.model)}` : '';
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=3600');
 const up = run?.ok ?? 0;
-const gated = run ? (run.byStatus.auth ?? 0) + (run.byStatus.payment ?? 0) + (run.byStatus.newer_protocol ?? 0) : 0;
-const down = run ? run.probed - up - gated : 0;
+const gated = run ? [...GATED_STATUSES].reduce((a, s) => a + (run.byStatus[s] ?? 0), 0) : 0;
+/** Failed for less than two days: no answer, not down yet. Runs before 2026-10-26 have no such count. */
+const noAnswer = run ? Object.values(run.noAnswer ?? {}).reduce((a, n) => a + n, 0) : 0;
+const down = run ? run.probed - up - gated - noAnswer : 0;
 
 // The product and the website, named "mcpcost", so search engines read the one-word query as a brand query.
 const description =
@@ -78,13 +81,13 @@ const jsonld = {
       <h2 id="today-h" class="panel-title">The registry today</h2>
       <div class="stats">
         <div class="stat"><b>{pct(up, run.probed)}</b><span>alive</span></div>
-        <div class="stat"><b>{pct(gated, run.probed)}</b><span>need auth, payment, env or args</span></div>
-        <div class="stat"><b>{pct(down, run.probed)}</b><span>down or broken</span></div>
+        <div class="stat"><b>{pct(gated, run.probed)}</b><span>need auth, payment, setup or a URL of your own</span></div>
+        <div class="stat"><b>{pct(down, run.probed)}</b><span>down for two days or more</span></div>
         <div class="stat"><b>{tokens(cost!.stats.median)}</b><span>median tokens per server{inModel}</span></div>
         <div class="stat"><b>{tokens(cost!.stats.p90)}</b><span>90th percentile</span></div>
         <div class="stat"><b>{tokens(cost!.stats.max)}</b><span>heaviest server</span></div>
       </div>
-      <p class="muted small">{num(run.probed)} servers · probed {date(run.probedAt)} · <a href="/statistics">statistics</a> · <a href="/changes">what changed</a></p>
+      <p class="muted small">{num(run.probed)} servers{noAnswer > 0 && <> · {pct(noAnswer, run.probed)} <a href="/servers?status=noanswer">no answer</a> for less than two days, not counted as down</>} · probed {date(run.probedAt)} · <a href="/statistics">statistics</a> · <a href="/changes">what changed</a></p>
     </section>
   )}
 
@@ -100,8 +103,10 @@ const jsonld = {
   .today .stats { margin-top: 0; }
   .why { margin: 2.5rem 0 0; padding: 1rem 1.25rem; border: 1px solid var(--line); font-size: 0.95rem; line-height: 1.625; color: var(--ink-muted); }
   /* the command with a copy cell, like the e-mail cell of ulehla.dev */
-  .copy-row { display: flex; align-items: stretch; border: 1px solid var(--line); background: var(--panel); }
-  .copy-row pre { flex: 1; min-width: 0; margin: 0; border: 0; background: transparent; }
+  /* The same box as the check form next to it: one height, one background, one inset. */
+  .copy-row { display: flex; align-items: stretch; border: 1px solid var(--line); background: var(--surface); }
+  .copy-row pre { flex: 1; min-width: 0; margin: 0; border: 0; background: transparent; padding: 0.75rem 0.875rem; font-family: var(--font-mono); font-size: 0.95rem; line-height: 1.5; color: var(--ink); }
+  .actions-grid .checkform input { line-height: 1.5; }
   .copy-row .copy { border: 0; border-left: 1px solid var(--line); padding: 0 1.25rem; background-color: transparent; color: var(--accent); font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.15em; text-transform: uppercase; font-weight: 600; cursor: pointer; background-image: linear-gradient(var(--ink), var(--ink)); background-position: bottom; background-repeat: no-repeat; background-size: 100% 0%; transition: background-size 0.28s var(--ease-out-quint), color 0.18s 60ms; }
   .copy-row .copy:hover, .copy-row .copy:focus-visible { color: var(--surface); background-size: 100% 100%; }
   @media (width <= 760px) {

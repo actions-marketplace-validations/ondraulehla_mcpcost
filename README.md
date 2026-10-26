@@ -86,6 +86,7 @@ The plugin adds one skill, `/mcpcost:measure`, which runs `npx mcpcost` on your 
 ## For agents and scripts
 
 - JSON: `/api/s/<name>.json`, `/api/lookup.json?url=…` (the board's row for an endpoint URL, no probe), `/api/servers.json?q=…&status=ok&sort=tokens`, `/api/check.json?url=…`, `/api/summary.json`. The list API takes at most 6 requests in 10 seconds from one address; its answers are cached for three hours.
+- Re-check evidence for the registry, the newest run: `/data/mcpcost-evidence-latest.json.gz` (the row shape of modelcontextprotocol/registry#1715, changes after each daily run), with its index `/data/mcpcost-evidence-latest.index.json`.
 - MCP server over Streamable HTTP, no auth: `https://mcpcost.ulehla.dev/mcp` with the tools `lookup_server`, `search_servers`, `compare_servers`, `check_server`, `registry_summary`. The manifest for the registry is `site/server.json`.
 - `/llms.txt` lists all of it. `/tokens` answers the general question: how many context tokens does an MCP server cost.
 
@@ -128,9 +129,9 @@ The registry is lumpy. 16 161 of 16 534 hosts publish one server. Five hosts pub
 
 ## The monthly report and the dataset
 
-[/report/2026-10](https://mcpcost.ulehla.dev/report/2026-10) is *The state of the MCP registry, October 2026*: the registry in numbers, what changed between the first full run and the run of 2026-10-24, token cost, auth, the lumps, protocol versions, what the registry does not catch, and the method in six sentences. The page reads only the `runs` table (every run of the month, one query) and is cached for a day, so it costs nothing on the free tier. `/report` lists the months; `site/src/lib/reports.ts` has one entry per report with the day of the run it is pinned to. The dataset that goes with it, `data/mcpcost-2026-10.json.gz` on the site, has one row per probed server: name, host, transport, status, HTTP status, auth scheme and kind, protocol version, tool count, the o200k estimate, the exact Claude counts and the probe time. A row's numbers are what `/api/s/<name>.json` gives for that server on that day. The licence is CC BY 4.0; the document carries the licence, the field list and a citation at the top. `probe/dataset.ts` writes `data/latest/dataset.json` and its gzip on every daily run (kept in the run artifact), and `--publish site/public/data/mcpcost-YYYY-MM.json.gz` copies the gzip into the site when it is under 10 MB: a static file is served before the Worker and costs no request. A bigger file would go out as a GitHub release asset instead. To publish a month: run the probe or download the run artifact into `data/latest`, run `node --import tsx probe/dataset.ts --publish site/public/data/mcpcost-YYYY-MM.json.gz`, add the month to `reports.ts`, write the page, and commit the file with it.
+[/report/2026-10](https://mcpcost.ulehla.dev/report/2026-10) is *The state of the MCP registry, October 2026*: the registry in numbers, what changed between the first full run and the run of 2026-10-24, token cost, auth, the lumps, protocol versions, what the registry does not catch, and the method in six sentences. The page reads only the `runs` table (the runs of the month up to the run day, one query) and is cached for a day, so it costs nothing on the free tier. `/report` lists the months; `site/src/lib/reports.ts` has one entry per report with the day of the run it is pinned to. The dataset that goes with it, `data/mcpcost-2026-10.json.gz` on the site, has one row per probed server: name, host, transport, status, HTTP status, auth scheme and kind, protocol version, tool count, the o200k estimate, the exact Claude counts and the probe time. A row's numbers are what `/api/s/<name>.json` gives for that server on that day. The licence is CC BY 4.0; the document carries the licence, the field list and a citation at the top. `probe/dataset.ts` writes `data/latest/dataset.json` and its gzip on every daily run (kept in the run artifact), and `--publish site/public/data/mcpcost-YYYY-MM.json.gz` copies the gzip into the site when it is under 10 MB: a static file is served before the Worker and costs no request. A bigger file would go out as a GitHub release asset instead. To publish a month: run the probe or download the run artifact into `data/latest`, run `node --import tsx probe/dataset.ts --publish site/public/data/mcpcost-YYYY-MM.json.gz`, add the month to `reports.ts`, write the page, and commit the file with it.
 
-The same run goes out as re-check evidence for the registry, in the row shape agreed in [modelcontextprotocol/registry#1715](https://github.com/modelcontextprotocol/registry/issues/1715): `entry`, `checked_at`, `check` (endpoint or package), `state` (alive, auth, transient, dead, unknown) and `evidence`. `probe/dataset.ts` writes it daily next to the dataset, and the month's copy is `/data/mcpcost-evidence-YYYY-MM.json.gz`.
+The same run goes out as re-check evidence for the registry, in the row shape agreed in [modelcontextprotocol/registry#1715](https://github.com/modelcontextprotocol/registry/issues/1715): `entry`, `checked_at`, `check` (endpoint or package), `state` (alive, auth, transient, dead, unknown) and `evidence`. `probe/dataset.ts` writes it daily next to the dataset, and the month's copy is `/data/mcpcost-evidence-YYYY-MM.json.gz`. The newest run is always at `/data/mcpcost-evidence-latest.json.gz`, with `/data/mcpcost-evidence-latest.index.json` next to it (run date, entries per state and per check, size, SHA-256, shape). Neither file is in git. The probe keeps the file as the artifact `evidence-<run id>`, and `deploy.yml` puts it into `site/public/data` before every build: after each successful probe run, and on each push, so a push does not take it off the site. `probe/evidence-latest.ts` refuses a file that is not whole, and the site then keeps the file it has. A deploy after a probe run builds main as it is, the same as a manual deploy, and it is its own workflow run, so it cannot fail the probe.
 
 ## How it works
 
@@ -182,6 +183,10 @@ npm run db:schema:local && npm run db:import:local
 npm run dev
 ```
 
+The MCP endpoint answers `initialize`, `tools/list`, `ping` and the notifications from `site/src/lib/mcp-snapshot.json`, without the SDK; every other request goes to the SDK. The snapshot must be the SDK's own answers, or the site build fails: after a change to a tool definition, run `npm run mcp:snapshot -w site` and commit the new file in the same commit. `npm test -w site`, which the build runs too, holds the two answers side by side, byte for byte.
+
+A shared link shows a card: a 1200x630 PNG in `site/public/og/`. There is a default card, and a card each for the October report, Compare and Statistics. `site/src/lib/og.ts` lists the cards and their text. The layout puts the card of a page into `og:image` and `twitter:image`; a page can also give the layout an image of its own. `npm run og -w site` draws the cards again with satori and resvg (as WebAssembly). It runs offline, with the fonts from `node_modules` and the colour tokens of `Layout.astro`. `npm test -w site` fails when a committed card is not what the script draws now: after a change to a card, a font or a colour token, commit the new PNGs in the same commit. A card has no daily numbers, because they go out of date. The cards are static files, so they are served before the Worker and cost no request. To use the default card as the social preview of the GitHub repository, upload `site/public/og/default.png` in the repository settings, under Social preview.
+
 The alert mails need a sending domain: either Cloudflare Email Sending (Workers Paid plan, then the `send_email` binding in `site/wrangler.jsonc`) or Resend (verify the domain there and `npx wrangler secret put RESEND_API_KEY`). Without one, the watch form says that the confirmation mail could not be sent.
 
 Deploying needs a Cloudflare account with a D1 database named `mcpcost` (`wrangler d1 create mcpcost`, then put the id in `site/wrangler.jsonc`). The workflows expect the repository secrets `CLOUDFLARE_API_TOKEN` (Workers Scripts: Edit, D1: Edit) and `CLOUDFLARE_ACCOUNT_ID`. Both workflows apply `site/schema.sql` and the pending files in `site/migrations/` on every run. The two indexes on the shown token count (migrations 007 and 008) are the exception: each build writes a row per server, so the probe workflow applies one a day before the import and gives the import the rest of the write budget. A new database needs them applied by hand once.
@@ -212,11 +217,17 @@ CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… node site/edge/watch.mjs     
 CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… node site/edge/watch.mjs 2026-10-22T22:00:00Z 2026-10-23T06:00:00Z   # one night
 ```
 
+A run started by hand with `quiet` on only writes the report: a look back at a past window does not open an issue or turn red for an hour that was already reported.
+
+```bash
+gh workflow run watch.yml -f from=2026-10-24T19:00:00Z -f quiet=true
+```
+
 ### The old host
 
 The site was mcp-pulse.ulehla.dev until 2026-10-15. The old host stays a route of the Worker, and the middleware in `site/src/middleware.ts` answers every request on it with a 301 to mcpcost.ulehla.dev.
 
-Static assets are served before the Worker, and the Astro adapter serves prerendered pages before the middleware too, so a file in `site/public/` or a prerendered page answers 200 on the old host. `run_worker_first` in `wrangler.jsonc` does not change that. So robots.txt, llms.txt and the methodology page are routes, and every page a crawler reads goes through the middleware. Only the favicon, the fonts under `/_astro/` and the search engine verification file remain static.
+Static assets are served before the Worker, and the Astro adapter serves prerendered pages before the middleware too, so a file in `site/public/` or a prerendered page answers 200 on the old host. `run_worker_first` in `wrangler.jsonc` does not change that. So robots.txt, llms.txt and the methodology page are routes, and every page a crawler reads goes through the middleware. Only the favicon, the fonts under `/_astro/`, the social cards under `/og/`, the datasets under `/data/` and the search engine verification file remain static.
 
 To redirect those as well, with no Worker invocation at all, add a Redirect Rule to the ulehla.dev zone in the Cloudflare dashboard (Rules, Redirect Rules, Create rule):
 
@@ -224,6 +235,34 @@ To redirect those as well, with no Worker invocation at all, add a Redirect Rule
 - Then: Dynamic redirect, expression `concat("https://mcpcost.ulehla.dev", http.request.uri.path)`, status code 301, preserve query string on
 
 Redirect Rules run before the Worker and before static assets, so the rule covers every path. The middleware stays as the fallback for the workers.dev host, which the zone rule does not see.
+
+## Releases
+
+A tag `v0.Y.Z` starts the Release workflow (`.github/workflows/release.yml`). It checks that the version in the five files is the version of the tag (`node scripts/version.mjs --check`), runs the tests and `npm run check -w site`, and packs the package. Then it publishes the package to npm with provenance, publishes `site/server.json` to the MCP registry and makes the GitHub release. It needs no npm token, no OTP and no `mcp-publisher login`: npm trusts the workflow file (trusted publishing), and the registry takes the GitHub OIDC token of the run.
+
+One time, on npmjs.com. Do it on the day of the first release: a new trusted publisher expires when it does not publish within 2 days.
+
+1. Open the package `mcpcost`, then Settings. In the Trusted Publisher section, select GitHub Actions.
+2. Organization or user: `ondraulehla`. Repository: `mcpcost`. Workflow filename: `release.yml`. Environment name: empty.
+3. Under Allowed actions, allow `npm publish`. A trusted publisher made after 2026-09-03 allows only `npm stage publish`, and a staged version waits for an approval with 2FA.
+4. Save. The same from the shell, with npm 11.15.0 or later and 2FA: `npm trust github mcpcost --file release.yml --repo ondraulehla/mcpcost --allow-publish`.
+
+After the first release, Settings, Publishing access, "Require two-factor authentication and disallow tokens" stops all publishes with a token. The workflow continues to publish.
+
+A release:
+
+```bash
+node scripts/version.mjs patch       # or minor, or 0.3.5: sets the version in the five files
+git commit -am "mcpcost 0.3.5: …"    # the message of this commit becomes the release notes
+git push origin main
+git tag v0.3.5 && git push origin v0.3.5
+```
+
+- To test the setup before the tag: Actions, Release, Run workflow, with the "Dry run" box selected. It runs the checks, `npm publish --dry-run` and the registry login, and publishes nothing. The warning "npm did not accept this workflow" means that the trusted publisher on npmjs.com does not match. The dry run does not check the allowed actions.
+- An annotated tag (`git tag -a v0.3.5 -m "…"`) gives its message as the release notes.
+- When a run fails, run the failed jobs again. Each publish step skips a version that npm or the registry has already.
+- A run from main without "Dry run" is a release without a tag push: the release makes the tag on that commit.
+- A package release is never the Latest release (`--latest=false`). So the Latest release of the repository stays the release of the GitHub Action (v1.1.0), which its Marketplace page shows. The Action has its own releases, v1.x.y, published to the Marketplace from the release form on GitHub, and its tag `v1` moves to the newest one. The workflow does not touch them. Only a tag v0.Y.Z starts it, so the package stays below 1.0.0 until it has a tag scheme of its own.
 
 ## Licence
 

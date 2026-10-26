@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { countForServer, ClaudeCountError, CLAUDE_MODEL } from '../../../packages/mcpcost/src/claude.ts';
+import { countForServer, ClaudeCountError, isSchemaRefusal, CLAUDE_MODEL } from '../../../packages/mcpcost/src/claude.ts';
 import { payloadBytes, type ToolLike } from '../../../packages/mcpcost/src/payload.ts';
 
 export interface LiveClaudeCount {
@@ -14,8 +14,8 @@ const MAX_BYTES = 4_000_000;
 
 /**
  * Exact count for a live check. Uses the free count_tokens endpoint with the
- * Worker's ANTHROPIC_API_KEY secret. Returns null when there is no key, so the
- * page falls back to the estimate. Never calls a model.
+ * Worker's ANTHROPIC_API_KEY secret. Returns null when there is no key or no
+ * answer, so the page falls back to the estimate. Never calls a model.
  */
 export async function liveClaudeCount(tools: ToolLike[], serverName: string): Promise<LiveClaudeCount | null> {
   const apiKey = (env as unknown as { ANTHROPIC_API_KEY?: string }).ANTHROPIC_API_KEY;
@@ -26,6 +26,10 @@ export async function liveClaudeCount(tools: ToolLike[], serverName: string): Pr
   try {
     return await countForServer(tools, serverName, { apiKey, retries: 1, timeoutMs: 8_000 });
   } catch (e) {
-    return { model: CLAUDE_MODEL, error: e instanceof ClaudeCountError ? e.message : 'count_tokens did not answer' };
+    // Only a refused schema is a fact about the server, so only that goes into the answer. A refused key or a slow
+    // endpoint says nothing about the server: the check shows the estimate, and the Worker log keeps the reason.
+    if (e instanceof ClaudeCountError && isSchemaRefusal(e)) return { model: CLAUDE_MODEL, error: e.message };
+    console.error(`count_tokens for a live check failed: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
   }
 }

@@ -6,7 +6,7 @@ export const CHUNK = 5_000;
 /** A sitemap index: the static pages plus one chunk per 5 000 rowids of the servers table, only the chunks with rows in them. */
 export const GET: APIRoute = async ({ site }) => {
   const base = (site ?? new URL('https://mcpcost.ulehla.dev')).toString().replace(/\/$/, '');
-  const run = await latestRun();
+  const run = await latestRun(['topHosts', 'changes', 'heaviest']);
   const lastmod = run?.probedAt.slice(0, 10) ?? new Date().toISOString().slice(0, 10);
   const chunks = await serverSitemapChunks(CHUNK, lastmod);
   const entries = [

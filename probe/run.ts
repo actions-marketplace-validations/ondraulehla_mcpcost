@@ -7,10 +7,11 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { fetchRegistry, hostOf, primaryRemote, CLAUDE_MODEL } from '../packages/mcpcost/src/index.js';
+import { fetchRegistry, hostOf, remoteCandidates, isFailing, CLAUDE_MODEL } from '../packages/mcpcost/src/index.js';
+import type { RemoteTemplate } from '../packages/mcpcost/src/index.js';
 import { probeRemoteRaw } from '../packages/mcpcost/src/core.js';
 import { priceTools } from '../packages/mcpcost/src/probe.js';
-import { createClaudeCounter, payloadHash } from './claude-cache.js';
+import { createClaudeCounter, payloadHash, reportKeyError } from './claude-cache.js';
 import { createGeminiCounter } from './gemini-cache.js';
 import { loadCredentials, saveCredentials, credentialsFor, type CredentialStore, type FileProvider } from '../packages/mcpcost/src/credentials.js';
 import type { ProbeResult, RegistryEntry } from '../packages/mcpcost/src/index.js';
@@ -54,6 +55,10 @@ interface Target {
   host: string;
   updatedAt: string;
   status: string;
+  /** The entry's other endpoints, tried in order when this one does not give a valid answer. */
+  alternates?: Array<{ url: string; type: 'streamable-http' | 'sse' }>;
+  /** Set when every endpoint has a placeholder that each user fills in: the target is not probed. */
+  template?: RemoteTemplate;
 }
 
 const credentials: CredentialStore | null = args.credentials && existsSync(args.credentials) ? await loadCredentials(args.credentials) : null;
@@ -118,9 +123,15 @@ function mulberry32(seed: number) {
 function pickTargets(entries: RegistryEntry[]): Target[] {
   const all: Target[] = [];
   for (const e of entries) {
-    const remote = primaryRemote(e);
-    if (!remote) continue;
-    all.push({ name: e.server.name, url: remote.url, type: remote.type, host: hostOf(remote.url), updatedAt: e.meta.updatedAt, status: e.meta.status });
+    const { candidates, template } = remoteCandidates(e);
+    const [first, ...rest] = candidates;
+    if (first) {
+      all.push({ name: e.server.name, url: first.url, type: first.type, host: hostOf(first.url), updatedAt: e.meta.updatedAt, status: e.meta.status, ...(rest.length ? { alternates: rest.slice(0, 2).map(({ url, type }) => ({ url, type })) } : {}) });
+    } else if (template) {
+      // The host part of a template can itself be a placeholder ({api_host}); keep it as written.
+      const host = template.url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split(/[/?#]/)[0] || template.url;
+      all.push({ name: e.server.name, url: template.url, type: template.type, host, updatedAt: e.meta.updatedAt, status: e.meta.status, template });
+    }
   }
   if (args.all) return all;
   const rand = mulberry32(Number(args.seed));
@@ -157,9 +168,21 @@ async function runAll(targets: Target[]): Promise<Array<Target & { result: Probe
       const [target] = queue.splice(idx, 1);
       busyHosts.add(target.host);
       try {
-        const creds = credentials ? credentialsFor(credentials, target.url) : undefined;
+        let creds = credentials ? credentialsFor(credentials, target.url) : undefined;
         if (creds?.authProvider) providers.push(creds.authProvider);
-        const { result, tools } = await probeRemoteRaw({ url: target.url, type: target.type }, { timeoutMs, headers: creds?.headers, authProvider: creds?.authProvider });
+        let { result, tools } = await probeRemoteRaw({ url: target.url, type: target.type }, { timeoutMs, headers: creds?.headers, authProvider: creds?.authProvider });
+        let answered = { url: target.url, type: target.type };
+        // An entry with several endpoints is judged by the first one that answers: the others are the same server.
+        for (const alt of isFailing(result.status) ? target.alternates ?? [] : []) {
+          const altCreds = credentials ? credentialsFor(credentials, alt.url) : undefined;
+          if (altCreds?.authProvider) providers.push(altCreds.authProvider);
+          const second = await probeRemoteRaw(alt, { timeoutMs, headers: altCreds?.headers, authProvider: altCreds?.authProvider });
+          if (isFailing(second.result.status)) continue;
+          ({ result, tools } = second);
+          answered = alt;
+          creds = altCreds;
+          break;
+        }
         priceTools(result, tools);
         let hash: string | undefined;
         if (result.status === 'ok' && tools.length) {
@@ -168,7 +191,7 @@ async function runAll(targets: Target[]): Promise<Array<Target & { result: Probe
           result.claude = await claude.count(target.name, tools, hash);
           result.gemini = await gemini.count(target.name, tools, hash);
         }
-        out.push({ ...target, result, payloadHash: hash, withCredentials: creds ? true : undefined });
+        out.push({ ...target, url: answered.url, type: answered.type, host: hostOf(answered.url), result, payloadHash: hash, withCredentials: creds ? true : undefined });
       } finally {
         busyHosts.delete(target.host);
         done++;
@@ -222,7 +245,20 @@ if (entries.length > registryEntries.length) {
 }
 const targets = pickTargets(entries);
 console.error(`${entries.length} registry entries, ${targets.length} targets, concurrency ${concurrency}, timeout ${timeoutMs}ms`);
-let rows = await runAll(targets);
+/**
+ * A URL with a placeholder that each user fills in (https://{tenant}.example.com/mcp) is not called: the literal URL
+ * has no DNS name or no route, and that is not a fact about the server. The row says what the user must supply.
+ */
+function needsUrl(t: Target): Target & { result: ProbeResult } {
+  const names = t.template!.missing.map((n) => `{${n}}`).join(', ');
+  const error = t.template!.selfHosted
+    ? `The URL points to the user's own machine by default (${names}): each user runs the server and sets the URL.`
+    : `The URL has placeholders that each user fills in: ${names}.`;
+  return { ...t, result: { url: t.url, transport: t.type, probedAt: new Date().toISOString(), status: 'needs_url', latencyMs: {}, error } };
+}
+const templated = targets.filter((t) => t.template).map(needsUrl);
+if (templated.length) console.error(`${templated.length} targets have only URL templates: not probed (needs_url)`);
+let rows: Array<Target & { result: ProbeResult; payloadHash?: string; withCredentials?: boolean }> = [...(await runAll(targets.filter((t) => !t.template))), ...templated];
 // A transient fault on the runner's side shows up as a wave of timeouts on servers that answered yesterday.
 // Those get a second, slower attempt; a server that fails twice keeps its timeout.
 const previousStatus = new Map<string, string>();
@@ -243,7 +279,11 @@ if (credentials && args.credentials && providers.some((p) => p.changed)) {
   await saveCredentials(credentials, args.credentials);
   console.error('credentials: refreshed tokens written back');
 }
-if (claude.enabled) { const c = claude.stats(); console.error(`Claude counts: ${c.counted} servers counted now, ${c.reused} reused from the previous run, ${c.skipped} left for the next run (deadline)`); }
+if (claude.enabled) {
+  const c = claude.stats();
+  console.error(`Claude counts: ${c.counted} servers counted now, ${c.reused} reused from the previous run, ${c.skipped} left for the next run (${c.keyError ? 'the API refused the key' : 'deadline'})`);
+  await reportKeyError(c.keyError);
+}
 else console.error('ANTHROPIC_API_KEY is not set: no exact Claude counts in this run.');
 if (gemini.enabled) { const g = gemini.stats(); console.error(`Gemini counts: ${g.counted} servers counted now, ${g.reused} reused from the previous run, ${g.skipped} left for the next run (deadline)`); }
 else console.error('GEMINI_API_KEY is not set: no exact Gemini counts in this run.');

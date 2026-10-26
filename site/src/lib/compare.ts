@@ -27,7 +27,7 @@ export async function compareOnBoard(ids: string[], format: CompareFormat = 'jso
       if (!s) return unknownRow(id);
       const tokens = s.claude_tokens ?? s.tools_tokens;
       return {
-        name: s.name, host: s.host, status: s.status, statusLabel: label(s.status), authKind: s.auth_kind,
+        name: s.name, host: s.host, status: s.status, failingSince: s.failing_since, downSince: s.down_since, statusLabel: label(s.status), authKind: s.auth_kind,
         toolCount: s.tool_count, claudeTokens: s.claude_tokens, toolsTokens: s.tools_tokens, tokens, exact: s.claude_tokens != null,
         shareOf200k: tokens != null ? Number(((tokens / 200_000) * 100).toFixed(2)) : null,
         initMs: s.init_ms, protocolVersion: s.protocol_version, probedAt: s.probed_at, page: `${SITE}/s/${s.name}`

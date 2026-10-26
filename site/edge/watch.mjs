@@ -274,6 +274,10 @@ const byAgent = new Map();
 const byShape = new Map();
 const byStatus = new Map();
 const byNetShape = new Map();
+/** CPU milliseconds per URL shape: the Workers Free plan stops a Worker that keeps going over 10 ms a request (error 1102). */
+const FREE_CPU_MS = 10;
+const cpuByShape = new Map();
+const cpuAll = [];
 for (const e of logs.events) {
   const request = under(e, 'request') ?? {};
   const url = typeof request.url === 'string' ? request.url : under(e, 'url');
@@ -300,6 +304,11 @@ for (const e of logs.events) {
   // A crawler behind a browser's agent string names itself at the end; show both ends.
   bump(byAgent, `${k}: ${agent.length > 100 ? `${agent.slice(0, 48)} … ${agent.slice(-48)}` : agent || '-'}`);
   bump(byShape, s);
+  const cpu = Number(under(e, 'cpuTimeMs'));
+  if (Number.isFinite(cpu)) {
+    cpuAll.push(cpu);
+    (cpuByShape.get(s) ?? cpuByShape.set(s, []).get(s)).push(cpu);
+  }
   bump(byStatus, String(status));
   bump(byNetShape, `${network.slice(0, 30)} · ${k} · ${s.replace(/\?.*$/, '?…')} · ${status}`);
 }
@@ -323,6 +332,26 @@ else {
   table('By URL shape', byShape, 'shape', 15);
   table('By response status', byStatus, 'status', 8);
   table('Network × agent kind × shape × status', byNetShape, 'who, what, how', 20);
+}
+const quantile = (xs, q) => {
+  if (!xs.length) return 0;
+  const sorted = [...xs].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+};
+if (cpuAll.length) {
+  const over = cpuAll.filter((c) => c > FREE_CPU_MS).length;
+  say(`## CPU time per request`);
+  say();
+  say(`${fmt(over)} of ${fmt(cpuAll.length)} requests (${Math.round((over / cpuAll.length) * 100)} %) took more than ${FREE_CPU_MS} ms of CPU, the Workers Free plan's limit. Median ${quantile(cpuAll, 0.5)} ms, 90th percentile ${quantile(cpuAll, 0.9)} ms. The shapes that cost the most CPU in all:`);
+  say();
+  say(`| shape | requests | median ms | p90 ms | max ms | over ${FREE_CPU_MS} ms |`);
+  say('|---|---:|---:|---:|---:|---:|');
+  const rowsCpu = [...cpuByShape.entries()].map(([shape, xs]) => ({ shape, xs, total: xs.reduce((a, b) => a + b, 0) })).sort((a, b) => b.total - a.total).slice(0, 12);
+  for (const r of rowsCpu) {
+    const o = r.xs.filter((c) => c > FREE_CPU_MS).length;
+    say(`| ${r.shape.replace(/\|/g, '\\|')} | ${fmt(r.xs.length)} | ${quantile(r.xs, 0.5)} | ${quantile(r.xs, 0.9)} | ${Math.max(...r.xs)} | ${Math.round((o / r.xs.length) * 100)} % |`);
+  }
+  say();
 }
 if (queries.error) say(`The D1 query analytics could not be read: ${queries.error}`);
 else if (queries.length) {

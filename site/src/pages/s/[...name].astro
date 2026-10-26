@@ -11,7 +11,7 @@ if (!server) {
 const [history, siblings, run] = await Promise.all([
   getHistory(name, 60),
   server.toolset_hash ? getSiblings(server.toolset_hash, name) : Promise.resolve([]),
-  latestRun()
+  latestRun(['topHosts', 'changes', 'heaviest'])
 ]);
 // A day at the edge: the data change once a day, and a crawl that reads every server page costs the Worker one request per page per colo, not one every three hours.
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=86400');
@@ -27,9 +27,13 @@ const badgeHtml = `<a href="${site}/s/${name}"><img src="${site}/badge/${name}.s
 const reachable = history.filter((h) => h.status === 'ok' || h.status === 'auth' || h.status === 'payment').length;
 // A server that never answered has a page that says only "timeout" or "error". Google reads that as a soft 404,
 // so the page is noindex (links still followed) until one probe gets an answer. The sitemap applies the same rule.
-const answered = bucket(server.status) !== 'down' || history.some((h) => bucket(h.status) !== 'down') || (await serverEverAnswered(name));
+// An entry the probe does not run has no result to show, so its page is noindex as well.
+const answered = server.status !== 'unprobed' && (bucket(server.status) !== 'down' || history.some((h) => bucket(h.status) !== 'down') || (await serverEverAnswered(name)));
 const robots = answered ? undefined : 'noindex, follow';
 const heading = server.title ?? server.server_name ?? name;
+/** up, gated, noanswer or down: a failing server is down after two days of failed probes, "no answer" before. */
+const group = bucket(server.status, server.failing_since, server.down_since);
+const failingSince = group === 'down' || group === 'noanswer' ? (server.failing_since ?? server.probed_at) : null;
 const ok = server.status === 'ok';
 const exact = ok && server.claude_tokens != null;
 const model = modelName(server.claude_model);
@@ -61,6 +65,13 @@ const probeNow = server.transport !== 'stdio' ? `/check?target=${encodeURICompon
 
 /** What the publisher can do about the result. One or two sentences per cause. */
 const hints: string[] = [];
+if (group === 'noanswer') {
+  hints.push(server.transport === 'stdio'
+    ? `The package did not start as an MCP server at its probe on ${date(server.probed_at)}. One failed probe is not an outage: the board calls a package down when it fails again at its next probe, a week later.`
+    : `No valid answer since ${date(failingSince)}. One failed probe is not an outage: the board calls a server down after two days without a valid answer. The next probe runs within a day.`);
+} else if (group === 'down') {
+  hints.push(`No valid answer since ${date(failingSince)}, in every probe since then.`);
+}
 switch (server.status) {
   case 'ok':
     if (heavy) {
@@ -76,6 +87,12 @@ switch (server.status) {
     break;
   case 'payment':
     hints.push('The server answers HTTP 402 to initialize. The probe records it as paid and does not list its tools.');
+    break;
+  case 'unprobed':
+    hints.push(`${server.error ?? 'The probe does not run this entry yet.'} The entry is on the board so that the list holds the whole registry and says what it does not check.`);
+    break;
+  case 'needs_url':
+    hints.push('Every URL of the registry entry has a placeholder that each user fills in, such as a tenant, a project or a host of their own. Without that value there is nothing to call, so the probe does not call the URL, and the entry is not counted as down. A client asks the user for the value.');
     break;
   case 'not_found':
     hints.push(`The endpoint answers HTTP ${server.http_status ?? 404}. The registry entry points to a URL that is not an MCP endpoint any more. Publish a new version of the registry entry with the current URL.`);
@@ -136,7 +153,15 @@ const answer = ok
     : `${name} costs about ${num(server.tools_tokens)} tokens of context per session (o200k_base estimate${server.claude_error ? ', Claude refused the schema' : ''}). It has ${num(server.tool_count)} tool definitions. That is ${share} % of a 200k window. Measured ${date(server.probed_at)}.`
   : derived
     ? `${name} needs auth, so the daily probe cannot list its tools. The publisher's package ${derived.name} has ${num(derived.tools)} tool definitions that cost ${num(derived.cost)} tokens of context per session${derived.exact ? ` in ${derivedModel}` : ' (o200k_base estimate)'}, ${derivedShare} % of a 200k window. The tool definitions were read from the open-source package in a container, not from the authenticated server. Measured ${date(derived.probedAt)}.`
-    : `${name} did not answer the probe on ${date(server.probed_at)}. Result: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}.`;
+    : server.status === 'needs_url'
+      ? `${name} has only URL templates in the official MCP registry: each user fills in an address of their own, so the probe does not call it.`
+      : server.status === 'unprobed'
+        ? `${name} is in the official MCP registry. ${server.error ?? 'The probe does not run it yet.'}`
+      : group === 'down'
+        ? `${name} has given no valid answer since ${date(failingSince)}. Result: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}.`
+        : group === 'noanswer'
+          ? `${name} gave no valid answer in the probe of ${date(server.probed_at)}. Result: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}. One failed probe is not an outage.`
+          : `${name}: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}, probed ${date(server.probed_at)}.`;
 const pageUrl = `${site}/s/${name}`;
 const jsonld = {
   '@context': 'https://schema.org',
@@ -173,8 +198,8 @@ const jsonld = {
   {server.description && <p class="lede">{server.description}</p>}
 
   <p style="margin-top:22px">
-    <span class={`tag big ${bucket(server.status)}`}>{label(server.status)}</span>
-    <span class="muted small"> probed {date(run?.probedAt ?? server.probed_at)}{run && server.probed_at.slice(0, 10) < run.probedAt.slice(0, 10) && <> · unchanged since {date(server.probed_at)}</>}{server.http_status && <> · HTTP {server.http_status}</>}{server.auth_scheme && <> · {server.auth_scheme}</>}{server.measured_with_credentials ? <> · measured with credentials</> : null}</span>
+    <span class={`tag big ${group}`}>{label(server.status)}</span>
+    <span class="muted small">{group === 'down' && <> down since {date(failingSince)} ·</>}{group === 'noanswer' && <> no valid answer since {date(failingSince)} ·</>}{group === 'unprobed' ? <> in the official registry, not probed</> : <> probed {date(run?.probedAt ?? server.probed_at)}{run && server.probed_at.slice(0, 10) < run.probedAt.slice(0, 10) && <> · unchanged since {date(server.probed_at)}</>}</>}{server.http_status && <> · HTTP {server.http_status}</>}{server.auth_scheme && <> · {server.auth_scheme}</>}{server.measured_with_credentials ? <> · measured with credentials</> : null}</span>
   </p>
 
   {server.status === 'ok' && (
@@ -197,7 +222,7 @@ const jsonld = {
       <p class="muted small" style="margin:10px 0 0">The server needs auth, so these tool definitions were read from the publisher's open-source package <span class="mono">{derived.registry}:{derived.name}</span>, started in a container with placeholder values and the network off, on {date(derived.probedAt)}. Tool definitions do not depend on the token, so this is what an authorized user loads, unless the server hides tools by plan or role.</p>
     </>
   )}
-  {server.status !== 'ok' && server.error && <pre>{server.error}</pre>}
+  {server.status !== 'ok' && server.status !== 'unprobed' && server.error && <pre>{server.error}</pre>}
 
   <dl class="facts">
     {server.transport === 'stdio'
@@ -241,7 +266,7 @@ const jsonld = {
   {topTools.length > 0 && (
     <section class="panel" aria-labelledby="tools-h">
       <h2 id="tools-h" class="panel-title">Most expensive tools</h2>
-      <p class="muted small">{exact && server.tools_tokens ? `The Claude column scales the o200k estimate of each tool by this server's ratio of exact to estimate, ${(server.claude_tokens! / server.tools_tokens).toFixed(2)}×.` : 'Estimates with the o200k_base tokenizer.'}</p>
+      <p class="muted small">{exact && server.tools_tokens ? `The Claude column scales the o200k estimate of each tool by this server's ratio of exact to estimate, ${((server.claude_tokens as number) / server.tools_tokens).toFixed(2)}×.` : 'Estimates with the o200k_base tokenizer.'}</p>
       <div class="frame">
         <table>
           <thead><tr><th>Tool</th>{exact && server.tools_tokens && <th class="num">≈ Claude tokens</th>}<th class="num">o200k estimate</th><th class="num">Share of this server</th></tr></thead>

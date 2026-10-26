@@ -21,8 +21,8 @@ const robots = ids.length ? 'noindex, follow' : undefined;
 const mcpArgs = JSON.stringify({ servers: ids, format: 'markdown' });
 
 const rows = comparison?.servers ?? [];
-/** A registry name breaks after its slash, not inside a word. */
-const parts = (name: string) => name.split('/');
+/** A registry name breaks after a dot, a slash or a hyphen, never inside a word. */
+const parts = (name: string) => name.split(/(?<=[./-])/);
 const byName = (n: string | null) => rows.find((r) => r.name === n);
 const cheapest = byName(comparison?.cheapest ?? null);
 const dearest = byName(comparison?.mostExpensive ?? null);
@@ -57,8 +57,8 @@ const why = (r: CompareRow): string => (r.status === 'unknown' ? 'not on the boa
   {comparison && (
     <>
       <div class="stats cmp-stats">
-        <div class="stat"><b>{cheapest ? num(cheapest.tokens) : '—'}</b><span>{cheapest ? <>tokens, the cheapest: <a href={`/s/${cheapest.name}`} class="mono">{parts(cheapest.name).map((p, i) => <>{i > 0 && <>/<wbr /></>}{p}</>)}</a></> : 'cheapest: needs two measured servers'}</span></div>
-        <div class="stat"><b>{dearest ? num(dearest.tokens) : '—'}</b><span>{dearest ? <>tokens, the most expensive: <a href={`/s/${dearest.name}`} class="mono">{parts(dearest.name).map((p, i) => <>{i > 0 && <>/<wbr /></>}{p}</>)}</a></> : 'most expensive: needs two measured servers'}</span></div>
+        <div class="stat"><b>{cheapest ? num(cheapest.tokens) : '—'}</b><span>{cheapest ? <>tokens, the cheapest: <a href={`/s/${cheapest.name}`} class="mono">{parts(cheapest.name).map((p) => <>{p}<wbr /></>)}</a></> : 'cheapest: needs two measured servers'}</span></div>
+        <div class="stat"><b>{dearest ? num(dearest.tokens) : '—'}</b><span>{dearest ? <>tokens, the most expensive: <a href={`/s/${dearest.name}`} class="mono">{parts(dearest.name).map((p) => <>{p}<wbr /></>)}</a></> : 'most expensive: needs two measured servers'}</span></div>
         <div class="stat"><b>{comparison.tokenSpread != null ? num(comparison.tokenSpread) : '—'}</b><span>tokens between them</span></div>
         <div class="stat"><b>{comparison.measured} of {rows.length}</b><span>have a token count</span></div>
       </div>
@@ -70,7 +70,7 @@ const why = (r: CompareRow): string => (r.status === 'unknown' ? 'not on the boa
               <th scope="col" class="cmp-label"><span class="visually-hidden">Fact</span></th>
               {rows.map((r) => (
                 <th scope="col">
-                  {r.page ? <a href={r.page.replace('https://mcpcost.ulehla.dev', '')} class="name">{parts(r.name).map((p, i) => <>{i > 0 && <>/<wbr /></>}{p}</>)}</a> : <span class="name">{parts(r.name).map((p, i) => <>{i > 0 && <>/<wbr /></>}{p}</>)}</span>}
+                  {r.page ? <a href={r.page.replace('https://mcpcost.ulehla.dev', '')} class="name">{parts(r.name).map((p) => <>{p}<wbr /></>)}</a> : <span class="name">{parts(r.name).map((p) => <>{p}<wbr /></>)}</span>}
                   {r.host && <span class="host">{r.host}</span>}
                 </th>
               ))}
@@ -79,7 +79,7 @@ const why = (r: CompareRow): string => (r.status === 'unknown' ? 'not on the boa
           <tbody>
             <tr>
               <th scope="row">Status</th>
-              {rows.map((r) => <td><span class={`tag ${r.status === 'unknown' ? 'down' : bucket(r.status)}`}>{r.status === 'unknown' ? 'not on the board' : r.statusLabel}</span></td>)}
+              {rows.map((r) => <td><span class={`tag ${r.status === 'unknown' ? 'down' : bucket(r.status, r.failingSince ?? null, r.downSince ?? null)}`}>{r.status === 'unknown' ? 'not on the board' : r.statusLabel}</span></td>)}
             </tr>
             <tr>
               <th scope="row">Access</th>
@@ -144,34 +144,34 @@ const why = (r: CompareRow): string => (r.status === 'unknown' ? 'not on the boa
   .cmp-stats .stat span a { color: var(--ink); text-decoration-color: var(--line); overflow-wrap: break-word; }
 
   .cmp-frame { margin-top: 1px; }
-  table.cmp { min-width: calc(11rem + var(--cols) * 11rem); table-layout: fixed; }
+  table.cmp { min-width: calc(9.5rem + var(--cols) * 10.5rem); table-layout: fixed; }
   table.cmp col { width: auto; }
   table.cmp th, table.cmp td { padding: 0.8rem 1rem; }
-  table.cmp thead th + th, table.cmp tbody td { border-left: 1px solid var(--line); }
-  table.cmp thead th + th { border-left-color: color-mix(in oklab, var(--accent) 30%, var(--line)); }
-  table.cmp tbody td:nth-child(even) { background: color-mix(in oklab, var(--ink) 2.5%, transparent); }
-  table.cmp tbody tr:hover td:nth-child(even) { background: color-mix(in oklab, var(--accent) 6%, transparent); }
+  /* Each server is a column with its own edge: a divider between servers, and every other column tinted. */
+  table.cmp thead th + th, table.cmp tbody td { border-left: 1px solid color-mix(in oklab, var(--ink) 16%, transparent); }
+  table.cmp thead th + th { border-left-color: color-mix(in oklab, var(--accent) 40%, transparent); }
+  table.cmp tbody td:nth-child(odd) { background: color-mix(in oklab, var(--ink) 4%, transparent); }
+  table.cmp thead th:nth-child(odd):not(.cmp-label) { background: color-mix(in oklab, var(--accent) 13%, var(--surface)); }
+  table.cmp tbody tr:hover td { background: color-mix(in oklab, var(--accent) 5%, transparent); }
+  table.cmp tbody tr:hover td:nth-child(odd) { background: color-mix(in oklab, var(--accent) 8%, transparent); }
   table.cmp thead th { vertical-align: top; text-transform: none; letter-spacing: 0; font-family: var(--font-sans); white-space: normal; }
-  table.cmp thead th .name { display: block; font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600; letter-spacing: 0; color: var(--ink); overflow-wrap: break-word; text-decoration: none; }
+  table.cmp thead th .name { display: block; font-family: var(--font-mono); font-size: 0.82rem; font-weight: 600; letter-spacing: 0; line-height: 1.35; color: var(--ink); overflow-wrap: break-word; word-break: normal; hyphens: none; text-decoration: none; }
   table.cmp thead th a.name:hover { color: var(--accent); }
   table.cmp thead th .host { display: block; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.72rem; font-weight: 400; color: var(--ink-faint); overflow-wrap: anywhere; }
-  table.cmp .cmp-label, table.cmp tbody th { width: 11rem; position: sticky; left: 0; z-index: 1; background: var(--surface); }
+  table.cmp .cmp-label, table.cmp tbody th { width: 9.5rem; position: sticky; left: 0; z-index: 1; background: var(--surface); }
   table.cmp thead .cmp-label { background: color-mix(in oklab, var(--accent) 8%, var(--surface)); }
-  table.cmp tbody th { text-align: left; font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-muted); border-top: 1px solid var(--line); border-bottom: 0; border-right: 1px solid var(--line); background: var(--surface); vertical-align: top; }
+  table.cmp tbody th { text-align: left; white-space: normal; font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-muted); border-top: 1px solid var(--line); border-bottom: 0; border-right: 1px solid var(--line); background: var(--surface); vertical-align: top; }
   table.cmp tbody tr:first-child th { border-top: 0; }
   table.cmp tbody th .sub { display: block; margin-top: 0.3rem; font-family: var(--font-sans); font-size: 0.75rem; letter-spacing: 0; text-transform: none; color: var(--ink-faint); font-weight: 400; }
   table.cmp td { color: var(--ink); font-size: 0.9rem; }
   table.cmp td.num { font-size: 0.95rem; }
   table.cmp td b { font-family: var(--font-display); font-weight: 600; font-size: 1.25rem; letter-spacing: -0.02em; }
   table.cmp td .sub { display: block; margin-top: 0.2rem; font-family: var(--font-sans); font-size: 0.75rem; color: var(--ink-faint); white-space: normal; }
-  table.cmp td.best { background: var(--up-soft); box-shadow: inset 3px 0 0 var(--up); }
+  table.cmp tbody td.best, table.cmp tbody tr:hover td.best { background: var(--up-soft); box-shadow: inset 3px 0 0 var(--up); }
   table.cmp td.best .sub { color: var(--up); }
-  table.cmp td.worst { background: color-mix(in oklab, var(--accent) 7%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
+  table.cmp tbody td.worst, table.cmp tbody tr:hover td.worst { background: color-mix(in oklab, var(--accent) 12%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
   table.cmp td.worst .sub { color: var(--accent-strong); }
   table.cmp .none { color: var(--ink-faint); cursor: help; }
-  table.cmp tbody tr:hover td { background: color-mix(in oklab, var(--accent) 4%, transparent); }
-  table.cmp tbody tr:hover td.best { background: var(--up-soft); }
-  table.cmp tbody tr:hover td.worst { background: color-mix(in oklab, var(--accent) 10%, transparent); }
   .cmp-note { margin-top: 0.875rem; }
   .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   @media (max-width: 640px) {

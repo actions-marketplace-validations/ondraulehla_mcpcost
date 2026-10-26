@@ -18,8 +18,14 @@ CREATE TABLE IF NOT EXISTS servers (
   website TEXT,
   registry_status TEXT,
   registry_updated_at TEXT,
+  -- The version of the registry entry that was probed. See migrations/011-failing-since-version.sql.
+  version TEXT,
   probed_at TEXT NOT NULL,
   status TEXT NOT NULL,
+  -- The first probe of the current run of failed probes. A server is down after two days of them, see isConfirmedDown.
+  failing_since TEXT,
+  -- failing_since once the server is down (isConfirmedDown at the real probe time), else null. See migrations/012-down-since.sql.
+  down_since TEXT,
   http_status INTEGER,
   auth_scheme TEXT,
   -- The publisher's guide to getting access: resource_documentation of the OAuth protected-resource metadata (migration 009).

@@ -11,8 +11,24 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { GATED_STATUSES } from '../packages/mcpcost/src/index.js';
+import { GATED_STATUSES, hostOf, isConfirmedDown, isFailing, isSchemaRefusal } from '../packages/mcpcost/src/index.js';
+import { downChange, failingSinceOf } from './rows.js';
 import type { ProbeResult, RegistryEntry } from '../packages/mcpcost/src/index.js';
+
+const PACKAGE_HOST: Record<string, string> = { npm: 'npmjs.com', pypi: 'pypi.org', nuget: 'nuget.org', cargo: 'crates.io' };
+/** docker.io/user/image:tag, ghcr.io/org/image:1.0, or user/image (Docker Hub). */
+function ociHost(identifier: string): string {
+  const first = identifier.split('/')[0];
+  return identifier.includes('/') && /[.:]/.test(first) ? first : 'docker.io';
+}
+/** The host a package server is listed under: the package registry, the image registry, or the host of the bundle URL. */
+function packageHost(kind: string, identifier: string): string {
+  return kind === 'oci' ? ociHost(identifier) : kind === 'mcpb' ? hostOf(identifier) : (PACKAGE_HOST[kind] ?? kind);
+}
+/** The board's address of a package: npm:name@version, pypi:name==version, oci:image, mcpb:url. */
+function packageUrl(kind: string, identifier: string, version?: string): string {
+  return kind === 'npm' ? `npm:${identifier}${version ? `@${version}` : ''}` : kind === 'pypi' ? `pypi:${identifier}${version ? `==${version}` : ''}` : `${kind}:${identifier}`;
+}
 
 const { values: args } = parseArgs({
   options: {
@@ -23,6 +39,8 @@ const { values: args } = parseArgs({
     previous: { type: 'string' },
     /** A stdio run file from probe/stdio-run.ts: package servers probed in containers. */
     stdio: { type: 'string' },
+    /** A dump of the board (name, status, failing_since) from D1: where failing_since comes from before servers.json has it. */
+    'd1-status': { type: 'string' },
     /** Import even when far fewer servers answered than last time. */
     force: { type: 'boolean', default: false }
   }
@@ -46,7 +64,7 @@ interface StdioRow {
   name: string;
   /** Set when the package stands in for a gated remote server: its tool set goes on that server's row. */
   derivedFor?: string;
-  kind: 'npm' | 'pypi';
+  kind: 'npm' | 'pypi' | 'oci' | 'mcpb';
   identifier: string;
   version?: string;
   status: string;
@@ -62,13 +80,20 @@ export interface ServerRow {
   description?: string;
   url: string;
   host: string;
-  transport: 'streamable-http' | 'sse' | 'stdio';
+  /** none: a registry entry with nothing the probe can connect to (status unprobed). */
+  transport: 'streamable-http' | 'sse' | 'stdio' | 'none';
   repo?: string;
   website?: string;
   registryStatus: string;
   registryUpdatedAt: string;
+  /** The version of the registry entry that was probed (the latest one). */
+  version?: string;
   probedAt: string;
   status: string;
+  /** The first probe of the current run of failed probes (ISO time); unset while the server answers or is gated. */
+  failingSince?: string;
+  /** failingSince once the server is down: isConfirmedDown at this row's real probe time. The board reads it. */
+  downSince?: string;
   httpStatus?: number;
   authScheme?: string;
   /** The publisher's guide to getting access, from the OAuth protected-resource metadata. */
@@ -105,7 +130,7 @@ export interface ServerRow {
   measuredWithCredentials?: boolean;
   /** For a gated remote server: the tool set of the publisher's open-source package, measured in a container. */
   derivedPackage?: {
-    registry: 'npm' | 'pypi';
+    registry: 'npm' | 'pypi' | 'oci' | 'mcpb';
     name: string;
     status: string;
     probedAt: string;
@@ -139,10 +164,13 @@ const stdioFile = args.stdio && existsSync(args.stdio) ? (JSON.parse(await readF
 /** Packages that stand in for gated remote servers, by the remote server's name. Not rows of their own. */
 const derivedByName = new Map<string, StdioRow>();
 for (const r of stdioFile?.rows ?? []) if (r.derivedFor) derivedByName.set(r.derivedFor, r);
-const stdioRows: RawRow[] = (stdioFile?.rows ?? []).filter((r) => !r.derivedFor).map((r) => {
+// The stdio run is hours older than the remote probe. An entry that got a remote URL in between (a new version) has
+// both; the remote probe of today's registry wins, and an entry that left the registry in between is not shown.
+const remoteNames = new Set(run.rows.map((r) => r.name));
+const stdioRows: RawRow[] = (stdioFile?.rows ?? []).filter((r) => !r.derivedFor && !remoteNames.has(r.name) && registry.has(r.name)).map((r) => {
   const kind = r.kind ?? 'npm';
-  const host = kind === 'npm' ? 'npmjs.com' : 'pypi.org';
-  const url = kind === 'npm' ? `npm:${r.identifier}${r.version ? `@${r.version}` : ''}` : `pypi:${r.identifier}${r.version ? `==${r.version}` : ''}`;
+  const host = packageHost(kind, r.identifier);
+  const url = packageUrl(kind, r.identifier, r.version);
   const result: ProbeResult = r.result ?? { url, transport: 'stdio', probedAt: stdioFile!.probedAt, status: r.status as ProbeResult['status'], latencyMs: {}, error: r.error };
   result.url = url;
   result.transport = 'stdio';
@@ -153,7 +181,11 @@ const stdioRows: RawRow[] = (stdioFile?.rows ?? []).filter((r) => !r.derivedFor)
 });
 const probedNow = new Set([...run.rows, ...stdioRows].map((r) => r.name));
 const previousForCarry = args.previous && existsSync(args.previous) ? (JSON.parse(await readFile(args.previous, 'utf8')) as ServerRow[]) : [];
-const carried: ServerRow[] = previousForCarry.filter((r) => r.transport === 'stdio' && !probedNow.has(r.name) && registry.has(r.name));
+// A carried row keeps its count. An error that is not a refused schema (the API refused the key) is not a fact about the
+// package, so it goes, and the row shows the estimate until its day of the stdio cycle counts it again.
+const carried: ServerRow[] = previousForCarry
+  .filter((r) => r.transport === 'stdio' && r.status !== 'unprobed' && !probedNow.has(r.name) && registry.has(r.name))
+  .map((r) => (r.claudeError && !isSchemaRefusal(r.claudeError) && r.claudeTokens == null ? { ...r, claudeError: undefined, claudeModel: undefined, claudeMeasuredAt: undefined } : r));
 
 const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
   const s = registry.get(r.name);
@@ -172,6 +204,7 @@ const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
     website: s?.websiteUrl,
     registryStatus: r.status,
     registryUpdatedAt: r.updatedAt,
+    version: s?.version,
     probedAt: res.probedAt,
     status: res.status,
     httpStatus: res.httpStatus,
@@ -206,6 +239,81 @@ const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
 });
 
 rows.push(...carried);
+// One row per entry: the evidence check refuses a file with an entry twice, and D1 would keep only one of them.
+{
+  const seen = new Set<string>();
+  const unique = rows.filter((r) => (seen.has(r.name) ? false : (seen.add(r.name), true)));
+  if (unique.length < rows.length) console.error(`::warning::${rows.length - unique.length} rows named an entry twice; the first one is kept`);
+  rows.splice(0, rows.length, ...unique);
+}
+
+/**
+ * failingSince: the first probe of the current run of failed probes. A server that fails today and failed at its
+ * previous probe keeps the date it had; one that answered last time starts today. Before servers.json carried the
+ * field, the D1 dump has it (seeded once from the probes history), and else the previous probe is the lower bound.
+ * A server is down only when isConfirmedDown says so: one failed probe is "no answer", not an outage.
+ */
+const d1FailingSince = new Map<string, string>();
+if (args['d1-status'] && existsSync(args['d1-status'])) {
+  const raw = JSON.parse(await readFile(args['d1-status'], 'utf8')) as Array<{ results?: Array<{ name: string; failing_since?: string | null }> }>;
+  for (const r of raw.flatMap((x) => x.results ?? [])) if (r.failing_since) d1FailingSince.set(r.name, r.failing_since);
+}
+const previousByName = new Map(previousForCarry.map((r) => [r.name, r]));
+for (const r of rows) {
+  r.failingSince = failingSinceOf(r, previousByName.get(r.name), d1FailingSince.get(r.name));
+  r.downSince = isConfirmedDown(r.status, r.failingSince, r.probedAt) ? r.failingSince : undefined;
+}
+
+/**
+ * Every registry entry is on the board. An entry the probe cannot run yet gets a row with the status unprobed and
+ * the reason: only an OCI image, an MCPB bundle, a NuGet or Cargo package, or nothing to connect to. So the list holds
+ * the whole registry and says what it does not check. These rows are not in the counts of probed servers, the hosts,
+ * the dataset or the evidence.
+ */
+const PACKAGE_ORDER = ['npm', 'pypi', 'oci', 'mcpb', 'nuget', 'cargo'];
+function unprobedRow(s: RegistryEntry['server'], meta: RegistryEntry['meta'] | undefined, probedAt: string): ServerRow {
+  const pkg = [...(s.packages ?? [])].sort((a, b) => (PACKAGE_ORDER.indexOf(a.registryType) + 99) % 99 - (PACKAGE_ORDER.indexOf(b.registryType) + 99) % 99)[0];
+  let url = '';
+  let host = 'registry.modelcontextprotocol.io';
+  let transport = 'none';
+  let reason = 'The entry has no remote URL and no package: there is nothing to connect to.';
+  if (pkg) {
+    const t = pkg.registryType;
+    transport = 'stdio';
+    const stdio = (pkg.transport?.type ?? 'stdio') === 'stdio';
+    if (t === 'oci' || t === 'mcpb' || t === 'npm' || t === 'pypi') {
+      url = packageUrl(t, pkg.identifier, pkg.version);
+      host = packageHost(t, pkg.identifier);
+      reason = !stdio
+        ? `The entry has only ${t === 'oci' ? 'an OCI image' : t === 'mcpb' ? 'an MCPB bundle' : 'a package'} that serves ${pkg.transport?.type ?? 'HTTP'}. The probe starts packages that talk over stdio only.`
+        : 'The probe starts this package on its day of the weekly cycle, or on the day after it is published. It has not run yet.';
+    } else {
+      url = `${t}:${pkg.identifier}${pkg.version ? `@${pkg.version}` : ''}`;
+      host = PACKAGE_HOST[t] ?? t;
+      reason = `The entry has only a ${t} package. The probe runs npm and PyPI packages, OCI images and MCPB bundles only.`;
+    }
+  } else if (s.remotes?.length) {
+    const callable = s.remotes.find((r) => r.type === 'streamable-http' || r.type === 'sse');
+    url = (callable ?? s.remotes[0]).url;
+    host = hostOf(url);
+    transport = (callable ?? s.remotes[0]).type;
+    reason = callable ? 'A new entry. The next daily probe calls it.' : 'The entry has a remote of a kind that the probe does not call.';
+  }
+  return {
+    name: s.name, title: s.title, description: s.description?.slice(0, 200), url, host, transport: transport as ServerRow['transport'],
+    repo: s.repository?.url, website: s.websiteUrl, registryStatus: meta?.status ?? 'active', registryUpdatedAt: meta?.updatedAt ?? '',
+    version: s.version, probedAt, status: 'unprobed', error: reason
+  };
+}
+const onBoard = new Set(rows.map((r) => r.name));
+for (const raw of registryRaw) {
+  const meta = registryMeta.get(raw.server.name);
+  if (onBoard.has(raw.server.name) || meta?.status === 'tracked') continue;
+  rows.push(unprobedRow(raw.server, meta, run.probedAt));
+}
+const probedRows = rows.filter((r) => r.status !== 'unprobed');
+/** The kind of an entry the probe did not run: the package registry of its URL, or none. */
+const unprobedKind = (r: ServerRow) => (r.url.includes(':') && !/^https?:/.test(r.url) ? r.url.slice(0, r.url.indexOf(':')) : r.url ? 'remote' : 'none');
 
 // The derived tool set of a gated remote server: today's container result, else what the previous run had.
 const previousDerived = new Map(previousForCarry.filter((r) => r.derivedPackage).map((r) => [r.name, r.derivedPackage!]));
@@ -277,7 +385,6 @@ export interface Changes {
   tokenChanges: Array<{ name: string; before: number; after: number; exact: boolean }>;
   counts: { added: number; removed: number; wentDown: number; cameBack: number; tokenChanges: number };
 }
-const LIVE = new Set(['ok', ...GATED_STATUSES]);
 function diffRuns(previousRows: ServerRow[], current: ServerRow[]): Changes {
   const prev = new Map(previousRows.map((r) => [r.name, r]));
   const now = new Map(current.map((r) => [r.name, r]));
@@ -290,8 +397,9 @@ function diffRuns(previousRows: ServerRow[], current: ServerRow[]): Changes {
   for (const r of current) {
     const p = prev.get(r.name);
     if (!p) continue;
-    if (LIVE.has(p.status) && !LIVE.has(r.status)) wentDown.push({ name: r.name, from: p.status, to: r.status });
-    if (!LIVE.has(p.status) && LIVE.has(r.status)) cameBack.push({ name: r.name, from: p.status, to: r.status });
+    const change = downChange(p, r, d1FailingSince.get(p.name));
+    if (change === 'went-down') wentDown.push({ name: r.name, from: p.status, to: r.status });
+    if (change === 'came-back') cameBack.push({ name: r.name, from: p.status, to: r.status });
     const exact = p.claudeTokens != null && r.claudeTokens != null;
     const before = exact ? p.claudeTokens! : p.toolsTokens;
     const after = exact ? r.claudeTokens! : r.toolsTokens;
@@ -313,7 +421,7 @@ function diffRuns(previousRows: ServerRow[], current: ServerRow[]): Changes {
 const previousRows = args.previous && existsSync(args.previous) ? (JSON.parse(await readFile(args.previous, 'utf8')) as ServerRow[]) : null;
 const changes = previousRows ? diffRuns(previousRows, rows) : undefined;
 
-const ok = rows.filter((r) => r.status === 'ok');
+const ok = probedRows.filter((r) => r.status === 'ok');
 const tokens = ok.map((r) => r.toolsTokens ?? 0);
 const counted = ok.filter((r) => r.claudeTokens != null);
 const claude = counted.map((r) => r.claudeTokens!);
@@ -330,12 +438,14 @@ const histogram = (xs: number[]) => {
 };
 const uniqueToolsets = new Set(ok.map((r) => r.toolsetHash)).size;
 const hostMap = new Map<string, ServerRow[]>();
-for (const r of rows) (hostMap.get(r.host) ?? hostMap.set(r.host, []).get(r.host)!).push(r);
+for (const r of probedRows) (hostMap.get(r.host) ?? hostMap.set(r.host, []).get(r.host)!).push(r);
 const hosts = [...hostMap.entries()]
   .map(([host, list]) => ({
     host,
     servers: list.length,
     byStatus: count(list, (r) => r.status),
+    down: list.filter((r) => isConfirmedDown(r.status, r.failingSince, r.probedAt)).length,
+    noAnswer: list.filter((r) => isFailing(r.status) && !isConfirmedDown(r.status, r.failingSince, r.probedAt)).length,
     uniqueToolsets: new Set(list.filter((r) => r.toolsetHash).map((r) => r.toolsetHash)).size,
     medianTokens: quantile(list.filter((r) => r.status === 'ok').map((r) => r.toolsTokens ?? 0), 0.5)
   }))
@@ -347,7 +457,10 @@ const topHosts = hosts.slice(0, 500).map((h) => ({
   servers: h.servers,
   ok: h.byStatus.ok ?? 0,
   gated: [...GATED_STATUSES].reduce((a, k) => a + (h.byStatus[k] ?? 0), 0),
-  dead: h.servers - (h.byStatus.ok ?? 0) - [...GATED_STATUSES].reduce((a, k) => a + (h.byStatus[k] ?? 0), 0),
+  /** Down for two days or more (isConfirmedDown). */
+  dead: h.down,
+  /** No valid answer in this run, for less than two days. */
+  noAnswer: h.noAnswer,
   uniqueToolsets: h.uniqueToolsets,
   medianTokens: h.medianTokens
 }));
@@ -359,24 +472,28 @@ const summary = {
   tracked: registryRaw.filter((r) => r._meta['io.modelcontextprotocol.registry/official']?.status === 'tracked').length,
   registryWithRemote: registryRaw.filter((r) => r.server.remotes?.length).length,
   registryWithPackage: registryRaw.filter((r) => !r.server.remotes?.length && r.server.packages?.some((p) => p.registryType === 'npm' || p.registryType === 'pypi')).length,
-  stdioProbed: rows.filter((r) => r.transport === 'stdio').length,
+  stdioProbed: probedRows.filter((r) => r.transport === 'stdio').length,
   stdioToday: stdioRows.length,
-  probed: rows.length,
+  probed: probedRows.length,
+  /** Registry entries the probe does not run yet, by kind: oci, mcpb, nuget, cargo, npm or pypi (new), remote, none. */
+  unprobed: count(rows.filter((r) => r.status === 'unprobed'), unprobedKind),
   byStatus: count(rows, (r) => r.status),
-  reachable: ok.length + rows.filter((r) => GATED_STATUSES.has(r.status)).length,
+  /** The failing servers that are not down yet: fewer than DOWN_AFTER_DAYS days without a valid answer, by status. */
+  noAnswer: count(rows.filter((r) => isFailing(r.status) && !isConfirmedDown(r.status, r.failingSince, r.probedAt)), (r) => r.status),
+  reachable: ok.length + probedRows.filter((r) => GATED_STATUSES.has(r.status)).length,
   ok: ok.length,
   uniqueToolsets,
   duplicateServers: ok.length - uniqueToolsets,
   protocols: count(ok, (r) => r.protocolVersion),
   authSchemes: count(rows.filter((r) => r.status === 'auth'), (r) => r.authScheme ?? 'none'),
   authKinds: count(rows.filter((r) => r.status === 'auth'), (r) => r.authKind ?? 'unknown'),
-  transports: count(rows, (r) => r.transport),
+  transports: count(probedRows, (r) => r.transport),
   toolsTokens: { median: quantile(tokens, 0.5), p90: quantile(tokens, 0.9), p99: quantile(tokens, 0.99), max: Math.max(0, ...tokens), total: tokens.reduce((a, b) => a + b, 0) },
   claudeTokens: counted.length
     ? {
         model: claudeModel,
         counted: counted.length,
-        refused: ok.filter((r) => r.claudeError).length,
+        refused: ok.filter((r) => isSchemaRefusal(r.claudeError)).length,
         histogram: histogram(claude),
         median: quantile(claude, 0.5), p90: quantile(claude, 0.9), p99: quantile(claude, 0.99), max: Math.max(0, ...claude), total: claude.reduce((a, b) => a + b, 0),
         claudeCode: { median: quantile(claudeCc, 0.5), p90: quantile(claudeCc, 0.9), p99: quantile(claudeCc, 0.99), max: Math.max(0, ...claudeCc), total: claudeCc.reduce((a, b) => a + b, 0) },

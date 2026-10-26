@@ -1,10 +1,23 @@
 export type RemoteTransport = 'streamable-http' | 'sse';
 export type ProbeTransport = RemoteTransport | 'stdio';
 
+/** A value for a {placeholder} in a remote URL, as the registry entry declares it. */
+export interface RegistryVariable {
+  description?: string;
+  isRequired?: boolean;
+  isSecret?: boolean;
+  default?: string;
+  choices?: string[];
+  format?: string;
+}
+
 export interface RegistryRemote {
   type: RemoteTransport;
+  /** The endpoint. It can hold {placeholders} that a client fills in, for example https://{tenant}.example.com/mcp. */
   url: string;
   headers?: Array<{ name: string; description?: string; isRequired?: boolean; isSecret?: boolean }>;
+  /** The values for the placeholders in url, by name. */
+  variables?: Record<string, RegistryVariable>;
 }
 
 export interface RegistryArgument {
@@ -20,8 +33,11 @@ export interface RegistryArgument {
 
 export interface RegistryPackage {
   registryType: string;
+  /** The package name; for OCI the image reference, for MCPB the URL of the bundle. */
   identifier: string;
   version?: string;
+  /** For an MCPB bundle: the SHA-256 of the file, hex. */
+  fileSha256?: string;
   runtimeHint?: string;
   transport?: { type: string; url?: string };
   runtimeArguments?: RegistryArgument[];
@@ -64,6 +80,10 @@ export type ProbeStatus =
   | 'tls'
   | 'refused'
   | 'error'
+  // The registry URL has {placeholders} with no usable value: each user fills in their own. Not probed.
+  | 'needs_url'
+  // A registry entry the probe cannot run yet: only an MCPB bundle, an OCI image, a NuGet or Cargo package, or nothing to connect to.
+  | 'unprobed'
   // package (stdio) servers only
   | 'install_failed'
   | 'no_bin'
@@ -72,8 +92,30 @@ export type ProbeStatus =
   | 'needs_network'
   | 'crashed';
 
-/** Reachable but not usable without something from the user: credentials, arguments, a network, or a newer SDK. */
-export const GATED_STATUSES: ReadonlySet<string> = new Set(['auth', 'payment', 'newer_protocol', 'needs_env', 'needs_args', 'needs_network']);
+/** Reachable but not usable without something from the user: credentials, arguments, a network, a URL of their own, or a newer SDK. */
+export const GATED_STATUSES: ReadonlySet<string> = new Set(['auth', 'payment', 'newer_protocol', 'needs_env', 'needs_args', 'needs_network', 'needs_url']);
+
+/** A result that is neither alive nor gated: the server did not give a valid answer in this probe. An entry the probe did not run has no result. */
+export function isFailing(status: string): boolean {
+  return status !== 'ok' && status !== 'unprobed' && !GATED_STATUSES.has(status);
+}
+
+/**
+ * Calendar days of failed probes before a server counts as down. One failed probe is not an outage: a timeout, a
+ * 429 or a 5xx on one day can be the server's bad hour or the probe's own network.
+ */
+export const DOWN_AFTER_DAYS = 2;
+
+/**
+ * True when the server has failed in every probe since failingSince, and failingSince is at least DOWN_AFTER_DAYS
+ * calendar days (UTC) before this probe. A daily server is down on its third day without a valid answer; a package
+ * server, probed once a week, at its second failed probe.
+ */
+export function isConfirmedDown(status: string, failingSince: string | null | undefined, probedAt: string | null | undefined): boolean {
+  if (!isFailing(status) || !failingSince || !probedAt) return false;
+  const day = (iso: string) => Date.parse(`${iso.slice(0, 10)}T00:00:00Z`);
+  return (day(probedAt) - day(failingSince)) / 86_400_000 >= DOWN_AFTER_DAYS;
+}
 
 export interface ToolCost {
   name: string;

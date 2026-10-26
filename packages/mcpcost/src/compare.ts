@@ -13,6 +13,10 @@ export interface CompareRow {
   host?: string | null;
   /** The probe status; "unknown" when the board has no such server. */
   status: string;
+  /** For a server with no valid answer: the first probe of its current run of failed probes. */
+  failingSince?: string | null;
+  /** failingSince once the server is down, after two days of failed probes; else null. */
+  downSince?: string | null;
   statusLabel?: string | null;
   /** oauth-dcr, oauth, token, unknown; only for a server that needs auth. */
   authKind?: string | null;

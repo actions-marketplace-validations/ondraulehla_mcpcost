@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { claudeCodePrefix, countClaudeTokens, countForServer, ClaudeCountError, toApiTools } from '../src/claude.js';
+import { claudeCodePrefix, countClaudeTokens, countForServer, ClaudeCountError, isSchemaRefusal, toApiTools } from '../src/claude.js';
 
 /** A fake count_tokens: 10 tokens per tool plus 1 per character of every name, plus 50 for the message and the tool-use prompt. */
 function fakeFetch(calls: object[] = []): typeof fetch {
@@ -80,5 +80,27 @@ describe('claudeCodePrefix', () => {
     expect(claudeCodePrefix('io.github.acme/fs-server')).toBe('mcp__fs-server__');
     expect(claudeCodePrefix('github')).toBe('mcp__github__');
     expect(claudeCodePrefix('mcp.deepwiki.com')).toBe('mcp__mcp_deepwiki_com__');
+  });
+});
+
+describe('isSchemaRefusal', () => {
+  it('is true for the answers that name the tools, as the API gives them', () => {
+    expect(isSchemaRefusal('tools.4.custom.input_schema: input_schema does not support oneOf, allOf, or anyOf at the top level')).toBe(true);
+    expect(isSchemaRefusal('tools: Tool names must be unique.')).toBe(true);
+    expect(isSchemaRefusal("tools.1.custom.input_schema.properties: Property keys should match pattern '^[a-zA-Z0-9_.-]{1,64}$'")).toBe(true);
+    expect(isSchemaRefusal(new ClaudeCountError('tools.0.custom.input_schema: JSON schema is invalid.', 400))).toBe(true);
+  });
+
+  it('is false for an answer about the key, the workspace or the model, and for no error', () => {
+    expect(isSchemaRefusal('This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header with the ID of the workspace to use.')).toBe(false);
+    expect(isSchemaRefusal('invalid x-api-key')).toBe(false);
+    expect(isSchemaRefusal(new ClaudeCountError('model: claude-opus-5-5', 404))).toBe(false);
+    expect(isSchemaRefusal(undefined)).toBe(false);
+    expect(isSchemaRefusal('')).toBe(false);
+  });
+
+  it('is false for a rate limit or a server error, whatever the text', () => {
+    expect(isSchemaRefusal(new ClaudeCountError('tools: busy', 429))).toBe(false);
+    expect(isSchemaRefusal(new ClaudeCountError('tools: overloaded', 529))).toBe(false);
   });
 });

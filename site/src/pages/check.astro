@@ -173,8 +173,9 @@ const site = Astro.site?.toString().replace(/\/$/, '') ?? '';
           const td2 = document.createElement('td');
           td2.className = 'num';
           td2.textContent = fmt(c.tokens);
-          tr.append(td1, td2);
-          body.append(tr);
+          // The Workers types give Element an append of their own (HTMLRewriter), which hides the DOM's.
+          (tr as ParentNode).append(td1, td2);
+          (body as ParentNode).append(tr);
         }
         table.hidden = false;
       }

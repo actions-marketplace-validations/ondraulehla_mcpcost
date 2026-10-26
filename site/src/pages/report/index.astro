@@ -4,7 +4,7 @@ import { latestRun } from '../../lib/db';
 import { REPORTS, monthName } from '../../lib/reports';
 import { num, date } from '../../lib/format';
 
-const run = await latestRun();
+const run = await latestRun(['topHosts', 'changes', 'heaviest']);
 Astro.response.headers.set('cache-control', 'public, max-age=300, s-maxage=86400');
 const reports = [...REPORTS].reverse();
 ---

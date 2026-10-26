@@ -1,13 +1,14 @@
 import type { APIRoute } from 'astro';
-import { recentRuns } from '../lib/db';
+import { recentChanges } from '../lib/db';
+import { grouped } from '../lib/format';
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-const num = (n: number) => n.toLocaleString('en-US').replace(/,/g, ' ');
+const num = (n: number) => grouped(n, ' ');
 
 /** One Atom entry per run: the counts and the biggest tool set changes. */
 export const GET: APIRoute = async ({ site }) => {
   const base = (site ?? new URL('https://mcpcost.ulehla.dev')).toString().replace(/\/$/, '');
-  const runs = (await recentRuns(14)).filter((r) => r.changes);
+  const runs = (await recentChanges(14)).filter((r) => r.changes);
   const entries = runs.map((run) => {
     const c = run.changes!;
     const day = run.probedAt.slice(0, 10);

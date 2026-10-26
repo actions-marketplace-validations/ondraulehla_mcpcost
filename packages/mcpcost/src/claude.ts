@@ -76,6 +76,19 @@ export class ClaudeCountError extends Error {
   }
 }
 
+/**
+ * True when the API refused the tool definitions themselves. That is a fact about the server, and it stays until the
+ * tools change. The tools are the only part of the request that comes from the server, and the API names the field
+ * that it refuses: "tools.4.custom.input_schema: ..." or "tools: Tool names must be unique.". All other refusals are
+ * about the request around the tools (the key, the workspace, the model, the account) and say nothing about the server.
+ * A stored message has no status, so a string counts as a 400.
+ */
+export function isSchemaRefusal(error: { status: number; message: string } | string | null | undefined): boolean {
+  if (!error) return false;
+  const { status, message } = typeof error === 'string' ? { status: 400, message: error } : error;
+  return status >= 400 && status < 500 && status !== 429 && (/^tools\b/.test(message) || message.includes('input_schema'));
+}
+
 const MARKER = { name: 'mcp_pulse_marker', description: '', input_schema: { type: 'object', properties: {} } };
 const MESSAGES = [{ role: 'user', content: 'hi' }];
 

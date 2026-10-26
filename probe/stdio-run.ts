@@ -5,6 +5,7 @@
  * Needs the image: docker build -t mcpcost-stdio probe/stdio
  */
 import { execFile } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -13,15 +14,17 @@ import { parseArgs } from 'node:util';
 import { promisify } from 'node:util';
 import type { RegistryEntry, RegistryPackage, ProbeResult } from '../packages/mcpcost/src/index.js';
 import { priceTools } from '../packages/mcpcost/src/probe.js';
+import { probeStdioRaw } from '../packages/mcpcost/src/stdio.js';
 import type { RawTool } from '../packages/mcpcost/src/core.js';
 import { envNamesFromError } from '../packages/mcpcost/src/env-hints.js';
+import { classify, type StdioStatus } from './stdio-classify.js';
 
 const run = promisify(execFile);
 const { values: args } = parseArgs({
   options: {
     /** Probe only this many of the selected targets; empty means all. */
     sample: { type: 'string', default: '' },
-    /** npm, pypi or both. */
+    /** The package kinds to probe: npm, pypi, oci, mcpb, comma-separated. */
     kind: { type: 'string', default: 'npm,pypi' },
     /** Only the shard of names whose hash falls on this day of a 7-day cycle (0-6); empty means all. */
     shard: { type: 'string', default: '' },
@@ -41,9 +44,10 @@ const { values: args } = parseArgs({
   }
 });
 
-type StdioStatus = ProbeResult['status'] | 'install_failed' | 'no_bin' | 'needs_env' | 'needs_args' | 'needs_network' | 'crashed';
 interface Target { name: string; pkg: RegistryPackage; updatedAt: string; derivedFor?: string }
-type Kind = 'npm' | 'pypi';
+type Kind = 'npm' | 'pypi' | 'oci' | 'mcpb';
+/** The package an entry is probed by when it lists several kinds: npm and PyPI first, then an MCPB bundle, then an OCI image. */
+const KIND_ORDER: Kind[] = ['npm', 'pypi', 'mcpb', 'oci'];
 interface Row {
   name: string;
   /** The remote server this package stands in for: the row is its tool set, not a server of its own. */
@@ -70,7 +74,9 @@ async function loadTargets(): Promise<Target[]> {
   let all: Target[] = [];
   for (const r of raw) {
     if (r.server.remotes?.length) continue;
-    const pkg = r.server.packages?.find((p) => kinds.has(p.registryType) && (p.transport?.type ?? 'stdio') === 'stdio');
+    const pkg = (r.server.packages ?? [])
+      .filter((p) => kinds.has(p.registryType) && (p.transport?.type ?? 'stdio') === 'stdio')
+      .sort((a, b) => KIND_ORDER.indexOf(a.registryType as Kind) - KIND_ORDER.indexOf(b.registryType as Kind))[0];
     if (!pkg) continue;
     all.push({ name: r.server.name, pkg, updatedAt: r._meta['io.modelcontextprotocol.registry/official']?.updatedAt ?? '' });
   }
@@ -78,7 +84,15 @@ async function loadTargets(): Promise<Target[]> {
     const want = new Set((await readFile(args.names, 'utf8')).split('\n').map((l) => l.trim()).filter(Boolean));
     return all.filter((t) => want.has(t.name));
   }
-  if (args.shard !== '') all = all.filter((t) => shardOf(t.name) === Number(args.shard));
+  if (args.shard !== '') {
+    // A package published or updated in the last 36 hours is probed today, whatever its day of the cycle: a new server
+    // is on the board the day after it appears, not up to a week later, and a new version is checked at once.
+    const day = Number(args.shard);
+    const since = Date.now() - FRESH_HOURS * 3_600_000;
+    const fresh = all.filter((t) => shardOf(t.name) !== day && t.updatedAt && Date.parse(t.updatedAt) >= since).slice(0, FRESH_MAX);
+    all = [...all.filter((t) => shardOf(t.name) === day), ...fresh];
+    if (fresh.length) console.error(`${fresh.length} packages published or updated in the last ${FRESH_HOURS} hours are added to today's shard`);
+  }
   all.sort((a, b) => a.name.localeCompare(b.name));
   // Packages derived for gated remote servers: a few hundred, probed every run, so no shard.
   let derived: Target[] = [];
@@ -101,6 +115,10 @@ async function loadTargets(): Promise<Target[]> {
   const list = args.sample ? all.slice(0, Number(args.sample)) : all;
   return [...list, ...derived];
 }
+
+/** Packages published or updated within this many hours join today's shard; at most FRESH_MAX of them a day. */
+const FRESH_HOURS = 36;
+const FRESH_MAX = 1500;
 
 /** Which day of a seven-day cycle a server is probed on: a stable hash of its name. */
 export function shardOf(name: string): number {
@@ -188,19 +206,133 @@ async function install(t: Target, dir: string): Promise<{ command: string[] } | 
   return { command: [`/work/bin/${binName}`] };
 }
 
+/**
+ * An OCI image: pulled with the network on, then started as `docker run -i` with the network off, no capabilities
+ * and the same limits as a package. The probe client runs on this machine and talks to the container over stdin and
+ * stdout. Only the package arguments of the entry are passed: its runtime arguments are docker options (mounts, a
+ * network, privileges) that the probe does not give a stranger's image.
+ */
+async function probeOci(t: Target, row: Row): Promise<Row> {
+  const image = t.pkg.identifier;
+  const { args: cliArgs, missing } = buildArgs({ ...t.pkg, runtimeArguments: [] });
+  if (missing.length) { row.status = 'needs_args'; row.error = `requires ${missing.join(', ')}`; return row; }
+  const t0 = Date.now();
+  try {
+    await withTimeout(run('docker', ['pull', '--quiet', image], { maxBuffer: 4e6 }), Number(args['install-timeout']), 'pull');
+  } catch (e) {
+    const msg = String((e as { stderr?: string }).stderr ?? e);
+    row.status = /not found|manifest unknown|does not exist|repository .* not found|pull access denied|denied|unauthorized/i.test(msg) ? 'not_found' : 'install_failed';
+    row.error = msg.trim().split('\n').slice(-2).join(' ').slice(0, 300);
+    return row;
+  }
+  row.installMs = Date.now() - t0;
+  const env = buildEnv(t.pkg);
+  const name = `mcpcost-${randomUUID().slice(0, 8)}`;
+  try {
+    const probeWith = async (vars: Record<string, string>) => {
+      const envArgs = Object.entries(vars).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
+      const dockerRun = dockerArgs(['-i', '--name', name, '--pull', 'never', '--network', 'none', '--cap-drop', 'ALL', '--tmpfs', '/tmp', ...envArgs, image, ...cliArgs]);
+      row.command = ['docker', ...dockerRun];
+      const { result, tools } = await withTimeout(probeStdioRaw({ command: 'docker', args: dockerRun }, { timeoutMs: Number(args['probe-timeout']) }), Number(args['probe-timeout']) + 20_000, 'probe');
+      priceTools(result, tools);
+      await run('docker', ['rm', '-f', name]).catch(() => undefined);
+      return { parsed: { result, tools }, ...classify(result) };
+    };
+    let attempt = await probeWith(env);
+    if (attempt.status === 'needs_env' || attempt.status === 'crashed') {
+      const wanted = envNamesFromError(attempt.text).filter((n) => !(n in env));
+      if (wanted.length) {
+        for (const n of wanted) env[n] = 'mcpcost-placeholder';
+        const again = await probeWith(env);
+        if (again.status === 'ok' || again.status !== attempt.status) attempt = again;
+      }
+    }
+    row.env = Object.keys(env);
+    row.result = attempt.parsed.result;
+    row.tools = attempt.parsed.tools;
+    row.status = attempt.status;
+    if (row.status !== 'ok') row.error = attempt.text.slice(0, 300);
+    return row;
+  } finally {
+    await run('docker', ['rm', '-f', name]).catch(() => undefined);
+    await run('docker', ['rmi', '-f', image]).catch(() => undefined);
+  }
+}
+
+/** The largest MCPB bundle the probe downloads. */
+const MCPB_MAX_BYTES = 200_000_000;
+
+/**
+ * An MCPB bundle: downloaded with the network on, checked against the SHA-256 that the registry lists, and unpacked
+ * into the work directory as bundle/. Its manifest says how to start it (server.mcp_config, with the Linux override);
+ * ${__dirname} is the bundle, ${user_config.*} a placeholder or the default, and the rest of the ${...} variables empty.
+ */
+async function installMcpb(t: Target, dir: string): Promise<{ command: string[]; env: Record<string, string> } | { status: StdioStatus; error: string }> {
+  let res: Response;
+  try {
+    res = await fetch(t.pkg.identifier, { redirect: 'follow', signal: AbortSignal.timeout(Number(args['install-timeout'])) });
+  } catch (e) {
+    return { status: 'install_failed', error: `download failed: ${String(e).slice(0, 200)}` };
+  }
+  if (!res.ok) return { status: res.status === 404 || res.status === 410 ? 'not_found' : 'install_failed', error: `download answered HTTP ${res.status}` };
+  if (Number(res.headers.get('content-length') ?? 0) > MCPB_MAX_BYTES) return { status: 'install_failed', error: `the bundle is over ${MCPB_MAX_BYTES / 1e6} MB` };
+  const file = Buffer.from(await res.arrayBuffer());
+  if (file.length > MCPB_MAX_BYTES) return { status: 'install_failed', error: `the bundle is over ${MCPB_MAX_BYTES / 1e6} MB` };
+  if (t.pkg.fileSha256 && createHash('sha256').update(file).digest('hex') !== t.pkg.fileSha256.toLowerCase()) return { status: 'install_failed', error: 'the bundle does not match the SHA-256 in the registry entry' };
+  await writeFile(join(dir, 'bundle.mcpb'), file);
+  try {
+    // unzip keeps every path inside bundle/: it drops a leading / and refuses ../ parts.
+    await run('unzip', ['-q', '-o', join(dir, 'bundle.mcpb'), '-d', join(dir, 'bundle')], { maxBuffer: 4e6 });
+  } catch (e) {
+    return { status: 'install_failed', error: `not a zip file: ${String((e as { stderr?: string }).stderr ?? e).trim().slice(0, 200)}` };
+  }
+  type Config = { command?: string; args?: string[]; env?: Record<string, string> };
+  let manifest: { server?: { type?: string; entry_point?: string; mcp_config?: Config & { platform_overrides?: Record<string, Config> } }; user_config?: Record<string, { default?: unknown }> };
+  try { manifest = JSON.parse(await readFile(join(dir, 'bundle', 'manifest.json'), 'utf8')); } catch { return { status: 'install_failed', error: 'the bundle has no manifest.json' }; }
+  const base = manifest.server?.mcp_config;
+  const config: Config = { ...base, ...(base?.platform_overrides?.linux ?? {}) };
+  const fill = (v: string) =>
+    v.replace(/\$\{([^}]+)\}/g, (_, key: string) => {
+      if (key === '__dirname') return '/work/bundle';
+      if (key.startsWith('user_config.')) {
+        const d = manifest.user_config?.[key.slice('user_config.'.length)]?.default;
+        return d == null ? 'mcpcost-placeholder' : Array.isArray(d) ? d.join(',') : String(d);
+      }
+      if (key === 'HOME' || key === 'TMPDIR' || key === 'DOCUMENTS' || key === 'DESKTOP' || key === 'DOWNLOADS') return '/tmp';
+      return '';
+    });
+  let command = config.command ? fill(config.command) : '';
+  if (!command && manifest.server?.entry_point) command = manifest.server.type === 'python' ? 'python3' : manifest.server.type === 'node' ? 'node' : `/work/bundle/${manifest.server.entry_point}`;
+  if (!command) return { status: 'no_bin', error: 'the manifest says no command and no entry point' };
+  if (command === 'python') command = 'python3';
+  const cmdArgs = (config.args ?? (config.command ? [] : manifest.server?.entry_point && (manifest.server.type === 'python' || manifest.server.type === 'node') ? [`/work/bundle/${manifest.server.entry_point}`] : [])).map(fill);
+  const env = Object.fromEntries(Object.entries(config.env ?? {}).map(([k, v]) => [k, fill(String(v))]));
+  return { command: [command, ...cmdArgs], env };
+}
+
 async function probeOne(t: Target): Promise<Row> {
   const row: Row = { name: t.name, derivedFor: t.derivedFor, kind: t.pkg.registryType as Kind, identifier: t.pkg.identifier, version: t.pkg.version, status: 'error' };
+  if (row.kind === 'oci') {
+    try {
+      return await probeOci(t, row);
+    } catch (e) {
+      row.status = /timed out/.test(String(e)) ? 'timeout' : 'error';
+      row.error = String((e as { stderr?: string }).stderr ?? e).slice(-300);
+      return row;
+    }
+  }
   const dir = await mkdtemp(join(tmpdir(), 'mcpcost-stdio-'));
   try {
-    const { args: cliArgs, missing } = buildArgs(t.pkg);
+    const { args: cliArgs, missing } = row.kind === 'mcpb' ? { args: [] as string[], missing: [] as string[] } : buildArgs(t.pkg);
     if (missing.length) { row.status = 'needs_args'; row.error = `requires ${missing.join(', ')}`; return row; }
     const t0 = Date.now();
-    const installed = await install(t, dir);
+    const installed = row.kind === 'mcpb' ? await installMcpb(t, dir) : await install(t, dir);
     if ('status' in installed) { row.status = installed.status; row.error = installed.error; return row; }
     row.installMs = Date.now() - t0;
     const command = [...installed.command, ...cliArgs];
     row.command = command;
-    const env = buildEnv(t.pkg);
+    const bundleEnv: Record<string, string> = 'env' in installed ? (installed as { env: Record<string, string> }).env : {};
+    const env = { ...buildEnv(t.pkg), ...bundleEnv };
     // 3. run with the network off, read-only install, then list the tools
     const probeWith = async (vars: Record<string, string>) => {
       const envArgs = Object.entries(vars).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
@@ -210,16 +342,7 @@ async function probeOne(t: Target): Promise<Row> {
       );
       const parsed = JSON.parse(stdout.slice(stdout.indexOf('{'))) as { result: ProbeResult; tools: RawTool[] };
       priceTools(parsed.result, parsed.tools);
-      const text = `${parsed.result.error ?? ''}`;
-      let status: StdioStatus = parsed.result.status;
-      if (status !== 'ok' && /api[_ -]?key|token|credential|unauthori[sz]ed|missing required|environment variable|must be set|must use|is required|not configured|is invalid|invalid url|not recognized|placeholder|please set|config/i.test(text)) status = 'needs_env';
-      if (status !== 'ok' && /^usage:|\busage:|unknown command|missing argument|expected a command|too few arguments/im.test(text)) status = 'needs_args';
-      // Closed before initialize with a stack trace or an import error: the server crashed on start.
-      if (status === 'error' && /Connection closed/.test(text)) status = 'crashed';
-      // A bridge to a remote server (mcp-remote and friends) cannot work with the network off; that is a remote server in disguise.
-      if (status !== 'ok' && /mcp-remote|ENOTFOUND|getaddrinfo|ECONNREFUSED|fetch failed|StreamableHTTPClientTransport|SSEClientTransport|Temporary failure in name resolution|Network is unreachable/.test(text)) status = 'needs_network';
-      if (status !== 'ok' && /ModuleNotFoundError|ImportError|Cannot find module|ERR_MODULE_NOT_FOUND|SyntaxError|TypeError|ReferenceError|Traceback/.test(text)) status = 'crashed';
-      return { parsed, text, status };
+      return { parsed, ...classify(parsed.result) };
     };
     let attempt = await probeWith(env);
     // The server said which variables it wants (a derived package has no registry entry to list them): once more with those set.
@@ -247,7 +370,7 @@ async function probeOne(t: Target): Promise<Row> {
 }
 
 const targets = await loadTargets();
-console.error(`${targets.length} npm targets, concurrency ${args.concurrency}`);
+console.error(`${targets.length} package targets (${args.kind}), concurrency ${args.concurrency}`);
 const rows: Row[] = [];
 let i = 0;
 const started = Date.now();

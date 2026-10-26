@@ -23,7 +23,7 @@ export const REPORTS: Report[] = [
     run: '2026-10-24',
     from: '2026-10-03',
     dataset: { path: '/data/mcpcost-2026-10.json.gz', size: '1.2 MB' },
-    evidence: { path: '/data/mcpcost-evidence-2026-10.json.gz', size: '1.6 MB' }
+    evidence: { path: '/data/mcpcost-evidence-2026-10.json.gz', size: '1.8 MB' }
   }
 ];
 
@@ -31,6 +31,11 @@ export const REPORTS: Report[] = [
 export function nextMonth(month: string): string {
   const [y, m] = month.split('-').map(Number);
   return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+}
+
+/** The day after an ISO date, for the end of a half-open range. */
+export function nextDay(day: string): string {
+  return new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
 }
 
 /** "October 2026" for 2026-10. */

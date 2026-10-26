@@ -13,8 +13,14 @@ export interface ServerRecord {
   website: string | null;
   registry_status: string | null;
   registry_updated_at: string | null;
+  /** The version of the registry entry that was probed. Null before migration 011 ran a probe. */
+  version: string | null;
   probed_at: string;
   status: string;
+  /** The first probe of the current run of failed probes; null while the server answers or is gated. See isConfirmedDown. */
+  failing_since: string | null;
+  /** failing_since once the server is down (two days of failed probes, from the real probe times); else null. */
+  down_since: string | null;
   http_status: number | null;
   auth_scheme: string | null;
   /** The publisher's guide to getting access, from the OAuth protected-resource metadata. */
@@ -95,6 +101,10 @@ export interface RunSummary {
   registryWithRemote: number;
   probed: number;
   byStatus: Record<string, number>;
+  /** The failing servers that are not down yet (fewer than DOWN_AFTER_DAYS days of failed probes), by status; runs since 2026-10-26. */
+  noAnswer?: Record<string, number>;
+  /** Registry entries the probe does not run yet, by kind (oci, mcpb, nuget, cargo, npm, pypi, remote, none); runs since 2026-10-26. */
+  unprobed?: Record<string, number>;
   reachable: number;
   ok: number;
   uniqueToolsets: number;
@@ -122,7 +132,7 @@ export interface RunSummary {
   initMs: { median: number; p90: number };
   hosts: number;
   /** The 500 biggest hosts, from the run that wrote them (runs since 2026-10-21); older runs have the hosts table. */
-  topHosts?: Array<{ host: string; servers: number; ok: number; gated: number; dead: number; uniqueToolsets: number; medianTokens: number }>;
+  topHosts?: Array<{ host: string; servers: number; ok: number; gated: number; dead: number; noAnswer?: number; uniqueToolsets: number; medianTokens: number }>;
   /** The smallest and the largest number the board shows for an alive server (exact count, else estimate); runs since 2026-10-21. */
   shownTokens?: { min: number; max: number };
   heaviest: Array<{ name: string; toolCount: number; toolsTokens: number; claudeTokens?: number; claudeTokensCc?: number; host: string }>;
@@ -142,20 +152,67 @@ export interface RunSummary {
   };
 }
 
-/** The last runs, newest first, for the changes page and its feed. */
-export async function recentRuns(limit = 14): Promise<RunSummary[]> {
-  const { results } = await db().prepare('SELECT summary FROM runs ORDER BY probed_at DESC LIMIT ?').bind(limit).all<{ summary: string }>();
-  return results.map((r) => JSON.parse(r.summary) as RunSummary);
+/**
+ * The long lists of a run: since 2026-10-21 topHosts and changes are 72 kB of a 77 kB summary. A page that does
+ * not show a list leaves it out, and D1 removes it before the row leaves the database: the Worker gets and parses
+ * a summary of 2 kB, where parsing every list took a good part of a page's CPU time.
+ */
+export type RunList = 'topHosts' | 'changes' | 'heaviest';
+
+/** What changed in the last runs, newest first, for the changes page and its feed: the changes of each run and nothing else. */
+export async function recentChanges(limit = 14): Promise<Array<Pick<RunSummary, 'probedAt' | 'changes'>>> {
+  const { results } = await db()
+    .prepare("SELECT json_extract(summary, '$.probedAt') AS probedAt, json_extract(summary, '$.changes') AS changes FROM runs ORDER BY probed_at DESC LIMIT ?")
+    .bind(limit)
+    .all<{ probedAt: string; changes: string | null }>();
+  return results.map((r) => ({ probedAt: r.probedAt, changes: r.changes ? (JSON.parse(r.changes) as RunSummary['changes']) : undefined }));
 }
 
-/** The runs from one date to another (ISO prefixes, the end excluded), oldest first. The monthly report reads one month this way. */
-export async function runsBetween(from: string, to: string): Promise<RunSummary[]> {
-  const { results } = await db().prepare('SELECT summary FROM runs WHERE probed_at >= ? AND probed_at < ? ORDER BY probed_at').bind(from, to).all<{ summary: string }>();
-  return results.map((r) => JSON.parse(r.summary) as RunSummary);
+/** One run as a point of the run-by-run charts. */
+export type TrendPoint = Pick<RunSummary, 'probedAt' | 'ok' | 'probed'> & { claudeTokens?: { median: number }; toolsTokens: { median: number } };
+
+/** The summary column without the lists named, and the values the SQL binds for them. */
+function summaryWithout(without: RunList[]): { sql: string; binds: string[] } {
+  return without.length ? { sql: `json_remove(summary${', ?'.repeat(without.length)})`, binds: without.map((k) => `$.${k}`) } : { sql: 'summary', binds: [] };
+}
+
+/**
+ * The latest run without the lists named, and the runs before it, newest first, as points of the run-by-run
+ * charts. One round trip: D1 runs a batch as one transaction, so both answers come from the same table.
+ */
+export async function latestRunWithTrend<K extends RunList = never>(without: K[], limit: number): Promise<{ run: Omit<RunSummary, K> | null; earlier: TrendPoint[] }> {
+  const summary = summaryWithout(without);
+  const d = db();
+  const [latest, trend] = await d.batch([
+    d.prepare(`SELECT ${summary.sql} AS summary FROM runs ORDER BY probed_at DESC LIMIT 1`).bind(...summary.binds),
+    d
+      .prepare(
+        `SELECT json_extract(summary, '$.probedAt') AS probedAt, json_extract(summary, '$.ok') AS ok, json_extract(summary, '$.probed') AS probed,
+           json_extract(summary, '$.claudeTokens.median') AS claudeMedian, json_extract(summary, '$.toolsTokens.median') AS toolsMedian
+         FROM runs WHERE probed_at < (SELECT max(probed_at) FROM runs) ORDER BY probed_at DESC LIMIT ?`
+      )
+      .bind(limit)
+  ]);
+  const row = (latest.results as Array<{ summary: string }>)[0];
+  const points = trend.results as Array<{ probedAt: string; ok: number; probed: number; claudeMedian: number | null; toolsMedian: number }>;
+  return {
+    run: row ? (JSON.parse(row.summary) as Omit<RunSummary, K>) : null,
+    earlier: points.map((r) => ({ probedAt: r.probedAt, ok: r.ok, probed: r.probed, claudeTokens: r.claudeMedian == null ? undefined : { median: r.claudeMedian }, toolsTokens: { median: r.toolsMedian } }))
+  };
+}
+
+/** The runs from one date to another (ISO prefixes, the end excluded), oldest first, without the lists named. The monthly report reads one month this way. */
+export async function runsBetween<K extends RunList = never>(from: string, to: string, without: K[] = []): Promise<Array<Omit<RunSummary, K>>> {
+  const summary = summaryWithout(without);
+  const { results } = await db()
+    .prepare(`SELECT ${summary.sql} AS summary FROM runs WHERE probed_at >= ? AND probed_at < ? ORDER BY probed_at`)
+    .bind(...summary.binds, from, to)
+    .all<{ summary: string }>();
+  return results.map((r) => JSON.parse(r.summary) as Omit<RunSummary, K>);
 }
 
 /** The headline numbers: exact Claude counts when the run has them, else the estimate. */
-export function headline(run: RunSummary): { stats: TokenStats; exact: boolean; model?: string } {
+export function headline(run: Pick<RunSummary, 'claudeTokens' | 'toolsTokens'>): { stats: TokenStats; exact: boolean; model?: string } {
   return run.claudeTokens ? { stats: run.claudeTokens, exact: true, model: run.claudeTokens.model } : { stats: run.toolsTokens, exact: false };
 }
 
@@ -163,9 +220,11 @@ function db(): D1Database {
   return (env as unknown as { DB: D1Database }).DB;
 }
 
-export async function latestRun(): Promise<RunSummary | null> {
-  const row = await db().prepare('SELECT summary FROM runs ORDER BY probed_at DESC LIMIT 1').first<{ summary: string }>();
-  return row ? (JSON.parse(row.summary) as RunSummary) : null;
+/** The latest run, without the lists named in `without` (see RunList). */
+export async function latestRun<K extends RunList = never>(without: K[] = []): Promise<Omit<RunSummary, K> | null> {
+  const summary = summaryWithout(without);
+  const row = await db().prepare(`SELECT ${summary.sql} AS summary FROM runs ORDER BY probed_at DESC LIMIT 1`).bind(...summary.binds).first<{ summary: string }>();
+  return row ? (JSON.parse(row.summary) as Omit<RunSummary, K>) : null;
 }
 
 /** Well-known servers for the front page, by their registry names. Order is the display order. */
@@ -402,14 +461,14 @@ export interface ListQuery {
   /** With a cursor: the page before it instead of the page after it. */
   back?: boolean;
   /** The latest run summary, when the caller has it; the list reads it otherwise. */
-  run?: RunSummary | null;
+  run?: Pick<RunSummary, 'byStatus' | 'probed'> | null;
 }
 
 export const LIST_COLUMNS =
-  `name, title, host, transport, status, http_status, auth_scheme, protocol_version, init_ms, tool_count, tools_tokens, claude_tokens, claude_tokens_cc, toolset_siblings, registry_updated_at, derived_package, derived_status, derived_tools_tokens, derived_claude_tokens, ${SHOWN_TOKENS} AS shown_tokens`;
+  `name, title, host, transport, status, failing_since, down_since, probed_at, http_status, auth_scheme, protocol_version, init_ms, tool_count, tools_tokens, claude_tokens, claude_tokens_cc, toolset_siblings, registry_updated_at, derived_package, derived_status, derived_tools_tokens, derived_claude_tokens, ${SHOWN_TOKENS} AS shown_tokens`;
 export type ListRow = Pick<
   ServerRecord,
-  | 'name' | 'title' | 'host' | 'transport' | 'status' | 'http_status' | 'auth_scheme' | 'protocol_version'
+  | 'name' | 'title' | 'host' | 'transport' | 'status' | 'failing_since' | 'down_since' | 'probed_at' | 'http_status' | 'auth_scheme' | 'protocol_version'
   | 'init_ms' | 'tool_count' | 'tools_tokens' | 'claude_tokens' | 'claude_tokens_cc' | 'toolset_siblings' | 'registry_updated_at' | 'derived_package' | 'derived_status' | 'derived_tools_tokens' | 'derived_claude_tokens'
 > & { shown_tokens: number | null };
 
@@ -474,14 +533,30 @@ function tokenCondition(text: string | undefined): { sql: string; binds: number[
 export const MATCH_CAP = 500;
 
 /** The statuses that are not an answer: every status the board knows or the run counted, minus alive and gated. */
-function downStatuses(run: RunSummary | null): string[] {
-  return [...new Set([...Object.keys(STATUS_LABEL), ...Object.keys(run?.byStatus ?? {})])].filter((s) => s !== 'ok' && !GATED_STATUSES.has(s)).sort();
+function downStatuses(run: Pick<RunSummary, 'byStatus'> | null): string[] {
+  return [...new Set([...Object.keys(STATUS_LABEL), ...Object.keys(run?.byStatus ?? {})])].filter((s) => s !== 'ok' && s !== 'unprobed' && !GATED_STATUSES.has(s)).sort();
+}
+
+/**
+ * A failing row that is down: two days of failed probes. The probe sets down_since from the real probe times
+ * (isConfirmedDown); probed_at here is the time of the last change, so the board cannot compute it.
+ */
+const CONFIRMED_DOWN_SQL = '(down_since IS NOT NULL)';
+
+/**
+ * The failing statuses split in two: "down" is down for DOWN_AFTER_DAYS days or more, "noanswer" failed more
+ * recently. A status parameter names a group (down, noanswer) or a group and a cause (down:timeout).
+ */
+function downCondition(status: string | undefined): string | null {
+  const group = status?.split(':')[0];
+  return group === 'down' ? CONFIRMED_DOWN_SQL : group === 'noanswer' ? `NOT ${CONFIRMED_DOWN_SQL}` : null;
 }
 
 /** The statuses of a status parameter, or null for every status. */
-function statusesOf(status: string | undefined, run: RunSummary | null): string[] | null {
+function statusesOf(status: string | undefined, run: Pick<RunSummary, 'byStatus'> | null): string[] | null {
   if (!status) return null;
-  if (status === 'down') return downStatuses(run);
+  if (status === 'down' || status === 'noanswer') return downStatuses(run);
+  if (/^(down|noanswer):/.test(status)) return [status.slice(status.indexOf(':') + 1)];
   if (status === 'gated') return [...GATED_STATUSES];
   if (status === 'access') return [...ACCESS_STATUSES];
   if (status === 'setup') return [...SETUP_STATUSES];
@@ -501,7 +576,7 @@ interface ListFilter {
 }
 
 /** The filter of a list query, shared by the page and its count. */
-function listFilter(query: ListQuery, run: RunSummary | null, sort: SortSpec = SORTS[query.sort ?? DEFAULT_SORT] ?? SORTS[DEFAULT_SORT]): ListFilter {
+function listFilter(query: ListQuery, run: Pick<RunSummary, 'byStatus'> | null, sort: SortSpec = SORTS[query.sort ?? DEFAULT_SORT] ?? SORTS[DEFAULT_SORT]): ListFilter {
   const where: string[] = [];
   const binds: unknown[] = [];
   const fts: string[] = [];
@@ -530,6 +605,8 @@ function listFilter(query: ListQuery, run: RunSummary | null, sort: SortSpec = S
     where.push(band.sql);
     binds.push(...band.binds);
   }
+  const down = downCondition(query.status);
+  if (down) where.push(down);
   return { fts: fts.length ? fts.join(' AND ') : null, statuses: statusesOf(query.status, run), where, binds, sortWhere: sort.where || null };
 }
 
@@ -563,6 +640,8 @@ function statusCondition(statuses: string[] | null, walk: boolean): { sql: strin
 export interface StatusCount {
   /** Rows of this status under every other filter, the token range included. */
   n: number;
+  /** Of those, the rows that failed for less than DOWN_AFTER_DAYS days: "no answer", not down. */
+  na: number;
   /** The smallest and the largest shown token count of this status under the other filters, the token range left out. */
   lo: number | null;
   hi: number | null;
@@ -574,13 +653,16 @@ export async function countByStatus(query: Omit<ListQuery, 'status'>): Promise<{
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const band = tokenCondition(query.tokens);
   const count = band ? `count(*) FILTER (WHERE ${band.sql})` : 'count(*)';
+  const notDown = band ? `count(*) FILTER (WHERE ${band.sql} AND NOT ${CONFIRMED_DOWN_SQL})` : `count(*) FILTER (WHERE NOT ${CONFIRMED_DOWN_SQL})`;
   const { results } = await db()
-    .prepare(`SELECT status, ${count} AS n, count(*) AS rows_seen, min(${SHOWN_TOKENS}) AS lo, max(${SHOWN_TOKENS}) AS hi FROM ${from.sql} ${whereSql} GROUP BY status`)
-    // The FILTER clause stands before the FROM, and the FROM before the WHERE, so their values bind in that order.
-    .bind(...(band?.binds ?? []), ...from.binds, ...binds)
-    .all<{ status: string; n: number; rows_seen: number; lo: number | null; hi: number | null }>();
+    .prepare(`SELECT status, ${count} AS n, ${notDown} AS na, count(*) AS rows_seen, min(${SHOWN_TOKENS}) AS lo, max(${SHOWN_TOKENS}) AS hi FROM ${from.sql} ${whereSql} GROUP BY status`)
+    // The FILTER clauses stand before the FROM, and the FROM before the WHERE, so their values bind in that order.
+    .bind(...(band?.binds ?? []), ...(band?.binds ?? []), ...from.binds, ...binds)
+    .all<{ status: string; n: number; na: number; rows_seen: number; lo: number | null; hi: number | null }>();
   const seen = results.reduce((a, r) => a + r.rows_seen, 0);
-  return { counts: Object.fromEntries(results.map((r) => [r.status, { n: r.n, lo: r.lo, hi: r.hi }])), capped: fts !== null && seen > MATCH_CAP };
+  // na counts only for a failing status: an alive or gated row has no failing_since, and is never "no answer".
+  const failing = (status: string) => status !== 'ok' && status !== 'unprobed' && !GATED_STATUSES.has(status);
+  return { counts: Object.fromEntries(results.map((r) => [r.status, { n: r.n, na: failing(r.status) ? r.na : 0, lo: r.lo, hi: r.hi }])), capped: fts !== null && seen > MATCH_CAP };
 }
 
 /** Which indexes on the shown number exist: migration 007 builds the one with the status, 008 the one without. Asked once in ten minutes per isolate. */
@@ -629,7 +711,7 @@ export interface SortPlan {
  * other sorts (the estimate, the init time, the protocol, the registry date) have no index: on a big list
  * the list keeps the Tokens order and the page says why.
  */
-export function sortPlan(query: Pick<ListQuery, 'q' | 'host' | 'status' | 'sort'>, run: RunSummary | null): SortPlan {
+export function sortPlan(query: Pick<ListQuery, 'q' | 'host' | 'status' | 'sort'>, run: Pick<RunSummary, 'byStatus' | 'probed'> | null): SortPlan {
   const key: SortKey = query.sort && SORTS[query.sort] ? query.sort : DEFAULT_SORT;
   const statuses = statusesOf(query.status, run);
   const searched = Boolean((query.q && ftsQuery(query.q)) || (query.host && [...query.host.trim()].length >= 3));
@@ -651,7 +733,7 @@ function mergedOrderBy(sort: SortSpec, reverse: boolean, order?: string): string
 }
 
 export async function listServers(query: ListQuery): Promise<ListResult> {
-  const run = query.run === undefined ? await latestRun() : query.run;
+  const run = query.run === undefined ? await latestRun(['topHosts', 'changes', 'heaviest']) : query.run;
   const plan = sortPlan(query, run);
   const statuses = statusesOf(query.status, run);
   const sort = await effectiveSort(SORTS[plan.key], statuses !== null);
@@ -729,26 +811,29 @@ export async function serverSitemapChunks(size: number, lastmod: string): Promis
 }
 
 /**
- * The servers of one sitemap chunk: a rowid range, so the read touches only its own rows.
+ * The <url> lines of one sitemap chunk, made by D1: a rowid range, so the read touches only its own rows.
  * A server that never answered a probe stays out: its page says only "timeout" or "error", and
  * Google reads such a page as a soft 404. The EXISTS runs for the servers that are down now only.
+ * D1 writes the lines, so the Worker parses one string, not 5 000 rows, and builds no line itself; building
+ * them was most of a chunk's 15 ms of CPU at the median. `prefix` is the escaped URL before the name.
  */
-export async function serversInSitemapChunk(chunk: number, size: number): Promise<Array<{ name: string; probed_at: string }>> {
-  const { results } = await db()
+export async function sitemapChunkLines(chunk: number, size: number, prefix: string): Promise<string> {
+  const row = await db()
     .prepare(
-      `SELECT name, probed_at FROM servers WHERE rowid >= ? AND rowid < ?
+      `SELECT group_concat('  <url><loc>' || ? || replace(replace(replace(replace(name, '&', '&amp;'), '<', '&lt;'), '>', '&gt;'), '"', '&quot;')
+           || '</loc><lastmod>' || substr(probed_at, 1, 10) || '</lastmod></url>', char(10) ORDER BY rowid) AS lines
+         FROM servers WHERE rowid >= ? AND rowid < ?
          AND (status IN ${ANSWERED_STATUSES_SQL}
-           OR EXISTS (SELECT 1 FROM probes WHERE probes.name = servers.name AND probes.status IN ${ANSWERED_STATUSES_SQL}))
-         ORDER BY rowid`
+           OR EXISTS (SELECT 1 FROM probes WHERE probes.name = servers.name AND probes.status IN ${ANSWERED_STATUSES_SQL}))`
     )
-    .bind(chunk * size, (chunk + 1) * size)
-    .all<{ name: string; probed_at: string }>();
-  return results;
+    .bind(prefix, chunk * size, (chunk + 1) * size)
+    .first<{ lines: string | null }>();
+  return row?.lines ?? '';
 }
 
 /** The biggest hosts: from the run summary when the run carries them, else from the hosts table of older runs. */
-export async function listHosts(limit = 300, run?: RunSummary | null): Promise<HostRecord[]> {
-  const r = run === undefined ? await latestRun() : run;
+export async function listHosts(limit = 300, run?: Pick<RunSummary, 'topHosts' | 'probedAt'> | null): Promise<HostRecord[]> {
+  const r = run === undefined ? await latestRun(['changes', 'heaviest']) : run;
   if (r?.topHosts) {
     return r.topHosts.slice(0, limit).map((h) => ({ host: h.host, servers: h.servers, ok: h.ok, auth: h.gated, dead: h.dead, unique_toolsets: h.uniqueToolsets, median_tokens: h.medianTokens, probed_at: r.probedAt }));
   }
