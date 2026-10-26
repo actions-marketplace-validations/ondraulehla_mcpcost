@@ -15,6 +15,21 @@ import { GATED_STATUSES, hostOf, isConfirmedDown, isFailing, isSchemaRefusal } f
 import { downChange, failingSinceOf } from './rows.js';
 import type { ProbeResult, RegistryEntry } from '../packages/mcpcost/src/index.js';
 
+const PACKAGE_HOST: Record<string, string> = { npm: 'npmjs.com', pypi: 'pypi.org', nuget: 'nuget.org', cargo: 'crates.io' };
+/** docker.io/user/image:tag, ghcr.io/org/image:1.0, or user/image (Docker Hub). */
+function ociHost(identifier: string): string {
+  const first = identifier.split('/')[0];
+  return identifier.includes('/') && /[.:]/.test(first) ? first : 'docker.io';
+}
+/** The host a package server is listed under: the package registry, the image registry, or the host of the bundle URL. */
+function packageHost(kind: string, identifier: string): string {
+  return kind === 'oci' ? ociHost(identifier) : kind === 'mcpb' ? hostOf(identifier) : (PACKAGE_HOST[kind] ?? kind);
+}
+/** The board's address of a package: npm:name@version, pypi:name==version, oci:image, mcpb:url. */
+function packageUrl(kind: string, identifier: string, version?: string): string {
+  return kind === 'npm' ? `npm:${identifier}${version ? `@${version}` : ''}` : kind === 'pypi' ? `pypi:${identifier}${version ? `==${version}` : ''}` : `${kind}:${identifier}`;
+}
+
 const { values: args } = parseArgs({
   options: {
     in: { type: 'string' },
@@ -49,7 +64,7 @@ interface StdioRow {
   name: string;
   /** Set when the package stands in for a gated remote server: its tool set goes on that server's row. */
   derivedFor?: string;
-  kind: 'npm' | 'pypi';
+  kind: 'npm' | 'pypi' | 'oci' | 'mcpb';
   identifier: string;
   version?: string;
   status: string;
@@ -115,7 +130,7 @@ export interface ServerRow {
   measuredWithCredentials?: boolean;
   /** For a gated remote server: the tool set of the publisher's open-source package, measured in a container. */
   derivedPackage?: {
-    registry: 'npm' | 'pypi';
+    registry: 'npm' | 'pypi' | 'oci' | 'mcpb';
     name: string;
     status: string;
     probedAt: string;
@@ -154,8 +169,8 @@ for (const r of stdioFile?.rows ?? []) if (r.derivedFor) derivedByName.set(r.der
 const remoteNames = new Set(run.rows.map((r) => r.name));
 const stdioRows: RawRow[] = (stdioFile?.rows ?? []).filter((r) => !r.derivedFor && !remoteNames.has(r.name) && registry.has(r.name)).map((r) => {
   const kind = r.kind ?? 'npm';
-  const host = kind === 'npm' ? 'npmjs.com' : 'pypi.org';
-  const url = kind === 'npm' ? `npm:${r.identifier}${r.version ? `@${r.version}` : ''}` : `pypi:${r.identifier}${r.version ? `==${r.version}` : ''}`;
+  const host = packageHost(kind, r.identifier);
+  const url = packageUrl(kind, r.identifier, r.version);
   const result: ProbeResult = r.result ?? { url, transport: 'stdio', probedAt: stdioFile!.probedAt, status: r.status as ProbeResult['status'], latencyMs: {}, error: r.error };
   result.url = url;
   result.transport = 'stdio';
@@ -255,13 +270,7 @@ for (const r of rows) {
  * the whole registry and says what it does not check. These rows are not in the counts of probed servers, the hosts,
  * the dataset or the evidence.
  */
-const PACKAGE_HOST: Record<string, string> = { npm: 'npmjs.com', pypi: 'pypi.org', nuget: 'nuget.org', cargo: 'crates.io' };
 const PACKAGE_ORDER = ['npm', 'pypi', 'oci', 'mcpb', 'nuget', 'cargo'];
-/** docker.io/user/image:tag, ghcr.io/org/image:1.0, or user/image (Docker Hub). */
-const ociHost = (identifier: string) => {
-  const first = identifier.split('/')[0];
-  return identifier.includes('/') && /[.:]/.test(first) ? first : 'docker.io';
-};
 function unprobedRow(s: RegistryEntry['server'], meta: RegistryEntry['meta'] | undefined, probedAt: string): ServerRow {
   const pkg = [...(s.packages ?? [])].sort((a, b) => (PACKAGE_ORDER.indexOf(a.registryType) + 99) % 99 - (PACKAGE_ORDER.indexOf(b.registryType) + 99) % 99)[0];
   let url = '';
@@ -271,18 +280,13 @@ function unprobedRow(s: RegistryEntry['server'], meta: RegistryEntry['meta'] | u
   if (pkg) {
     const t = pkg.registryType;
     transport = 'stdio';
-    if (t === 'oci') {
-      url = `oci:${pkg.identifier}`;
-      host = ociHost(pkg.identifier);
-      reason = 'The entry has only an OCI (Docker) image. The probe does not run OCI images yet.';
-    } else if (t === 'mcpb') {
-      url = `mcpb:${pkg.identifier}`;
-      host = hostOf(pkg.identifier);
-      reason = 'The entry has only an MCPB bundle. The probe does not run MCPB bundles yet.';
-    } else if (t === 'npm' || t === 'pypi') {
-      url = t === 'npm' ? `npm:${pkg.identifier}${pkg.version ? `@${pkg.version}` : ''}` : `pypi:${pkg.identifier}${pkg.version ? `==${pkg.version}` : ''}`;
-      host = PACKAGE_HOST[t];
-      reason = 'A new package. The probe starts it on the day after it is published, and then once a week.';
+    const stdio = (pkg.transport?.type ?? 'stdio') === 'stdio';
+    if (t === 'oci' || t === 'mcpb' || t === 'npm' || t === 'pypi') {
+      url = packageUrl(t, pkg.identifier, pkg.version);
+      host = packageHost(t, pkg.identifier);
+      reason = !stdio
+        ? `The entry has only ${t === 'oci' ? 'an OCI image' : t === 'mcpb' ? 'an MCPB bundle' : 'a package'} that serves ${pkg.transport?.type ?? 'HTTP'}. The probe starts packages that talk over stdio only.`
+        : 'The probe starts this package on its day of the weekly cycle, or on the day after it is published. It has not run yet.';
     } else {
       url = `${t}:${pkg.identifier}${pkg.version ? `@${pkg.version}` : ''}`;
       host = PACKAGE_HOST[t] ?? t;

@@ -33,8 +33,11 @@ export interface RegistryArgument {
 
 export interface RegistryPackage {
   registryType: string;
+  /** The package name; for OCI the image reference, for MCPB the URL of the bundle. */
   identifier: string;
   version?: string;
+  /** For an MCPB bundle: the SHA-256 of the file, hex. */
+  fileSha256?: string;
   runtimeHint?: string;
   transport?: { type: string; url?: string };
   runtimeArguments?: RegistryArgument[];

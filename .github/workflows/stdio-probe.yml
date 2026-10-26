@@ -1,6 +1,6 @@
 name: Package servers (stdio)
-# Probes one seventh of the npm and PyPI servers in the registry each day, each
-# package in its own container with the network off. No secrets in this
+# Probes one seventh of the npm, PyPI, OCI and MCPB servers in the registry each
+# day, each package in its own container with the network off. No secrets in this
 # workflow: the daily probe picks up the artifact and counts tokens.
 on:
   schedule:
@@ -73,7 +73,7 @@ jobs:
         run: |
           shard="${{ inputs.shard }}"; [ -z "$shard" ] && shard=$(( $(date -u +%j) % 7 ))
           sample="${{ inputs.sample }}"
-          node --import tsx probe/stdio-run.ts --kind npm,pypi --shard "$shard" --part "${{ matrix.part }}/20" ${sample:+--sample "$sample"} --derived data/cache/derived-packages.json --concurrency 2 --out "data/raw/stdio-part-${{ matrix.part }}.json"
+          node --import tsx probe/stdio-run.ts --kind npm,pypi,oci,mcpb --shard "$shard" --part "${{ matrix.part }}/20" ${sample:+--sample "$sample"} --derived data/cache/derived-packages.json --concurrency 2 --out "data/raw/stdio-part-${{ matrix.part }}.json"
       - uses: actions/upload-artifact@v4
         with:
           name: stdio-part-${{ matrix.part }}
