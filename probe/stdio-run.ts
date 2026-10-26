@@ -18,6 +18,7 @@ import { probeStdioRaw } from '../packages/mcpcost/src/stdio.js';
 import type { RawTool } from '../packages/mcpcost/src/core.js';
 import { envNamesFromError } from '../packages/mcpcost/src/env-hints.js';
 import { classify, type StdioStatus } from './stdio-classify.js';
+import { shardOf } from './shard.js';
 
 const run = promisify(execFile);
 const { values: args } = parseArgs({
@@ -120,12 +121,7 @@ async function loadTargets(): Promise<Target[]> {
 const FRESH_HOURS = 36;
 const FRESH_MAX = 1500;
 
-/** Which day of a seven-day cycle a server is probed on: a stable hash of its name. */
-export function shardOf(name: string): number {
-  let h = 2166136261;
-  for (const c of name) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); }
-  return (h >>> 0) % 7;
-}
+export { shardOf } from './shard.js';
 
 /** Command-line arguments from the registry entry: fixed values and defaults; a required one without a value stops the probe. */
 function buildArgs(pkg: RegistryPackage): { args: string[]; missing: string[] } {
