@@ -71,7 +71,8 @@ jobs:
           d=$(find data/cache -name derived-packages.json | head -1); test -n "$d" && { [ "$d" = data/cache/derived-packages.json ] || cp "$d" data/cache/derived-packages.json; } || echo "::notice::No derived packages yet."
       - name: Probe this part of today's shard
         run: |
-          shard="${{ inputs.shard }}"; [ -z "$shard" ] && shard=$(( $(date -u +%j) % 7 ))
+          # 10#: the day of the year is decimal; 008 would be read as octal and fail.
+          shard="${{ inputs.shard }}"; [ -z "$shard" ] && shard=$(( 10#$(date -u +%j) % 7 ))
           sample="${{ inputs.sample }}"
           node --import tsx probe/stdio-run.ts --kind npm,pypi,oci,mcpb --shard "$shard" --part "${{ matrix.part }}/20" ${sample:+--sample "$sample"} --derived data/cache/derived-packages.json --concurrency 2 --out "data/raw/stdio-part-${{ matrix.part }}.json"
       - uses: actions/upload-artifact@v4

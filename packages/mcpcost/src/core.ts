@@ -239,6 +239,9 @@ export async function measure(transport: Transport, result: ProbeResult, timeout
   return tools;
 }
 
+/** A host that limits the requests of a client says so, also in a JSON-RPC error with HTTP 200: "Discovery rate limit reached". */
+const RATE_LIMIT = /rate[ -]?limit|too many requests|quota (?:exceeded|reached)|limit (?:exceeded|reached)/i;
+
 export function classify(message: string | undefined, first: Observed | undefined): ProbeStatus {
   const text = message ?? '';
   // The server speaks a protocol version that this SDK does not support yet.
@@ -247,7 +250,7 @@ export function classify(message: string | undefined, first: Observed | undefine
     if (first.status === 401 || first.status === 403) return 'auth';
     if (first.status === 402) return 'payment';
     if (first.status === 404 || first.status === 405 || first.status === 410) return 'not_found';
-    if (first.status === 429) return 'rate_limited';
+    if (first.status === 429 || RATE_LIMIT.test(text)) return 'rate_limited';
     // Inside Cloudflare Workers a failed origin fetch comes back as a 52x/530 page.
     if (first.status === 530 || /error code: 10(00|16)/.test(text)) return 'dns';
     if (first.status === 522 || first.status === 524) return 'timeout';
@@ -263,5 +266,6 @@ export function classify(message: string | undefined, first: Observed | undefine
   if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(text)) return 'dns';
   if (/CERT_|certificate|TLS|SSL|ERR_TLS/i.test(text)) return 'tls';
   if (/ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|UND_ERR_SOCKET/i.test(text)) return 'refused';
+  if (RATE_LIMIT.test(text)) return 'rate_limited';
   return 'error';
 }

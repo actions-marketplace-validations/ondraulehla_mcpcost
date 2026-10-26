@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { isLocalHost, remoteCandidates } from '../src/registry.js';
 import { isConfirmedDown, isFailing } from '../src/types.js';
+import { classify } from '../src/core.js';
 import type { RegistryEntry, RegistryRemote } from '../src/types.js';
 
 const entry = (...remotes: RegistryRemote[]): RegistryEntry => ({
@@ -63,5 +64,15 @@ describe('isConfirmedDown', () => {
     expect(isConfirmedDown('not_found', undefined, '2026-10-25T00:00:00Z')).toBe(false);
     expect(isFailing('needs_url')).toBe(false);
     expect(isFailing('crashed')).toBe(true);
+  });
+});
+
+describe('a rate limit', () => {
+  it('is rate_limited also in a JSON-RPC error with HTTP 200, and never down', () => {
+    const pipeworx = 'Streamable HTTP error: Error POSTing to endpoint: {"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Discovery rate limit reached (500/day for anonymous)"}}';
+    expect(classify(pipeworx, { status: 200 } as never)).toBe('rate_limited');
+    expect(classify('Too Many Requests', undefined)).toBe('rate_limited');
+    expect(classify('{"error":{"message":"Method not found"}}', { status: 200 } as never)).toBe('protocol_error');
+    expect(isConfirmedDown('rate_limited', '2026-10-01T00:00:00Z', '2026-10-26T00:00:00Z')).toBe(false);
   });
 });

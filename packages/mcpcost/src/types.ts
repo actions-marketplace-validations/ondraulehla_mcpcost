@@ -109,10 +109,10 @@ export const DOWN_AFTER_DAYS = 2;
 /**
  * True when the server has failed in every probe since failingSince, and failingSince is at least DOWN_AFTER_DAYS
  * calendar days (UTC) before this probe. A daily server is down on its third day without a valid answer; a package
- * server, probed once a week, at its second failed probe.
+ * server, probed once a week, at its second failed probe. A rate limit is never down: the server answered.
  */
 export function isConfirmedDown(status: string, failingSince: string | null | undefined, probedAt: string | null | undefined): boolean {
-  if (!isFailing(status) || !failingSince || !probedAt) return false;
+  if (!isFailing(status) || status === 'rate_limited' || !failingSince || !probedAt) return false;
   const day = (iso: string) => Date.parse(`${iso.slice(0, 10)}T00:00:00Z`);
   return (day(probedAt) - day(failingSince)) / 86_400_000 >= DOWN_AFTER_DAYS;
 }

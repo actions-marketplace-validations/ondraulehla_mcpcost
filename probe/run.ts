@@ -12,6 +12,7 @@ import type { RemoteTemplate } from '../packages/mcpcost/src/index.js';
 import { probeRemoteRaw } from '../packages/mcpcost/src/core.js';
 import { priceTools } from '../packages/mcpcost/src/probe.js';
 import { createClaudeCounter, payloadHash, reportKeyError } from './claude-cache.js';
+import { shardOf, todayShard } from './shard.js';
 import { createGeminiCounter } from './gemini-cache.js';
 import { loadCredentials, saveCredentials, credentialsFor, type CredentialStore, type FileProvider } from '../packages/mcpcost/src/credentials.js';
 import type { ProbeResult, RegistryEntry } from '../packages/mcpcost/src/index.js';
@@ -120,6 +121,9 @@ function mulberry32(seed: number) {
   };
 }
 
+/** A host with this many entries or more is probed one seventh of its entries a day. */
+const BIG_HOST = 200;
+
 function pickTargets(entries: RegistryEntry[]): Target[] {
   const all: Target[] = [];
   for (const e of entries) {
@@ -133,7 +137,17 @@ function pickTargets(entries: RegistryEntry[]): Target[] {
       all.push({ name: e.server.name, url: template.url, type: template.type, host, updatedAt: e.meta.updatedAt, status: e.meta.status, template });
     }
   }
-  if (args.all) return all;
+  if (args.all) {
+    // A host with hundreds of entries gets as many requests a day, and some limit anonymous clients (pipeworx: 500 a
+    // day). Its entries are probed on their day of the seven-day cycle; build-data carries the others from the run before.
+    const perHostAll = new Map<string, number>();
+    for (const t of all) if (!t.template) perHostAll.set(t.host, (perHostAll.get(t.host) ?? 0) + 1);
+    const day = todayShard();
+    const big = new Set([...perHostAll].filter(([, n]) => n >= BIG_HOST).map(([h]) => h));
+    const kept = all.filter((t) => t.template || !big.has(t.host) || shardOf(t.name) === day);
+    if (big.size) console.error(`${big.size} hosts with ${BIG_HOST} or more entries are probed one seventh a day: ${all.length - kept.length} entries wait for their day (${[...big].join(', ')})`);
+    return kept;
+  }
   const rand = mulberry32(Number(args.seed));
   for (let i = all.length - 1; i > 0; i--) {
     const j = Math.floor(rand() * (i + 1));

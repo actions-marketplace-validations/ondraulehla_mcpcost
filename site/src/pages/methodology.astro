@@ -45,7 +45,7 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
     <dt>needs your URL</dt><dd>Every endpoint of the entry has a placeholder with no usable value, for example a tenant or a host of the user's own. We do not call it.</dd>
     <dt>timeout, no DNS, TLS error, refused, server error, rate limited</dt><dd>Transport failures. We name each one after its cause.</dd>
   </dl>
-  <p id="down">One failed probe is not an outage: a timeout, a 429 or a 5xx can be a bad hour of the server or a fault of our own network. A server with no valid answer is <b>no answer</b> until it has failed on two calendar days in a row; from the third day it is <b>down</b>, and its page says since when. A package server is probed once a week, so it is down when it fails again at its next probe. The re-check evidence for the registry follows the same rule: a dead cause counts as dead only after two days.</p>
+  <p id="down">One failed probe is not an outage: a timeout, a 429 or a 5xx can be a bad hour of the server or a fault of our own network. A server with no valid answer is <b>no answer</b> until it has failed on two calendar days in a row; from the third day it is <b>down</b>, and its page says since when. A package server is probed once a week, so it is down when it fails again at its next probe. A rate limit, HTTP 429 or a reply that says so, is never down: the server answered. A host with 200 entries or more gets one seventh of them probed a day, so the probe stays under the limits such hosts set; the other entries keep the result of their last probe. The re-check evidence for the registry follows the same rule: a dead cause counts as dead only after two days.</p>
   </section>
 
   <section class="panel" aria-labelledby="tokens-h" id="tokens">

@@ -65,7 +65,7 @@ const probeNow = server.transport !== 'stdio' ? `/check?target=${encodeURICompon
 
 /** What the publisher can do about the result. One or two sentences per cause. */
 const hints: string[] = [];
-if (group === 'noanswer') {
+if (group === 'noanswer' && server.status !== 'rate_limited') {
   hints.push(server.transport === 'stdio'
     ? `The package did not start as an MCP server at its probe on ${date(server.probed_at)}. One failed probe is not an outage: the board calls a package down when it fails again at its next probe, a week later.`
     : `No valid answer since ${date(failingSince)}. One failed probe is not an outage: the board calls a server down after two days without a valid answer. The next probe runs within a day.`);
@@ -119,7 +119,7 @@ switch (server.status) {
     hints.push(`The server answers HTTP ${server.http_status ?? '5xx'} on initialize. The error output, if any, is above.`);
     break;
   case 'rate_limited':
-    hints.push('The server answers HTTP 429. The probe sends one request at a time per host and one probe a day per server, so the limit is very low or shared with other users.');
+    hints.push('The server answered that it limits the requests of a client: HTTP 429, or a rate limit in its reply. The server is there, so the board does not count it as down. The probe sends one request at a time per host and probes a host with hundreds of entries on one day of seven, so the limit is low or shared with other users.');
     break;
   case 'install_failed':
     hints.push('npx or uvx could not install the package. The package name in the registry entry is wrong, the package is not published, or the install needs a build step.');

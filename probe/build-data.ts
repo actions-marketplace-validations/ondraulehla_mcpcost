@@ -184,7 +184,9 @@ const previousForCarry = args.previous && existsSync(args.previous) ? (JSON.pars
 // A carried row keeps its count. An error that is not a refused schema (the API refused the key) is not a fact about the
 // package, so it goes, and the row shows the estimate until its day of the stdio cycle counts it again.
 const carried: ServerRow[] = previousForCarry
-  .filter((r) => r.transport === 'stdio' && r.status !== 'unprobed' && !probedNow.has(r.name) && registry.has(r.name))
+  // A package not in today's shard, and an entry of a big host not on its day (probe/run.ts, BIG_HOST), keep the row
+  // of the run before while the registry still lists them.
+  .filter((r) => r.status !== 'unprobed' && !probedNow.has(r.name) && registry.has(r.name))
   .map((r) => (r.claudeError && !isSchemaRefusal(r.claudeError) && r.claudeTokens == null ? { ...r, claudeError: undefined, claudeModel: undefined, claudeMeasuredAt: undefined } : r));
 
 const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
@@ -344,7 +346,8 @@ for (const r of rows) {
  */
 if (previousForCarry.length && !args.force) {
   const prevOk = previousForCarry.filter((r) => r.transport !== 'stdio' && r.status === 'ok').length;
-  const nowOk = run.rows.filter((r) => r.result.status === 'ok').length;
+  // The carried rows of the big hosts count too: the previous run held them as well.
+  const nowOk = run.rows.filter((r) => r.result.status === 'ok').length + carried.filter((r) => r.transport !== 'stdio' && r.status === 'ok').length;
   const timeouts = run.rows.filter((r) => r.result.status === 'timeout').length;
   if (nowOk < 0.7 * prevOk || timeouts > 0.2 * run.rows.length) {
     console.error(`::error::This run looks broken: ${nowOk} alive against ${prevOk} last time, ${timeouts} timeouts of ${run.rows.length}. Not importing.`);
