@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { env } from 'cloudflare:workers';
 import { memoryD1, type MemoryD1 } from './d1';
-import { countByStatus, latestRun, latestRunWithTrend, listServers, recentChanges, runsBetween, sitemapChunkLines } from '../src/lib/db';
+import { countByStatus, latestRun, latestRunWithTrend, listServers, recentChanges, runsBetween, serverPage, sitemapChunkLines } from '../src/lib/db';
 import { GATED_STATUSES } from '../../packages/mcpcost/src/types';
 
 /**
@@ -157,5 +157,35 @@ describe('down and no answer in the list', () => {
     expect(counts.dns).toMatchObject({ n: 1, na: 1 });
     expect(counts.ok).toMatchObject({ n: 1, na: 0 });
     expect(counts.needs_url).toMatchObject({ n: 1, na: 0 });
+  });
+});
+
+describe('the server page in one round trip', () => {
+  beforeEach(() => {
+    insertRuns(summary('2026-10-24', 25_509, true));
+    const server = db.sql.prepare("INSERT INTO servers (name, url, host, transport, probed_at, status, toolset_hash) VALUES (?, 'https://x.example/mcp', 'x.example', 'streamable-http', '2026-10-25T08:30:00.000Z', ?, ?)");
+    server.run('a/one', 'ok', 'h1');
+    server.run('b/twin', 'ok', 'h1');
+    server.run('c/alone', 'timeout', null);
+    const probe = db.sql.prepare('INSERT INTO probes (name, probed_at, status) VALUES (?, ?, ?)');
+    probe.run('a/one', '2026-10-24T08:00:00.000Z', 'ok');
+    probe.run('a/one', '2026-10-25T08:00:00.000Z', 'ok');
+    probe.run('c/alone', '2026-10-25T08:00:00.000Z', 'timeout');
+  });
+
+  it('gives the row, the history newest first, the siblings by tool set and the run without its lists', async () => {
+    const page = await serverPage('a/one');
+    expect(page.server?.name).toBe('a/one');
+    expect(page.history.map((h) => h.probed_at)).toEqual(['2026-10-25T08:00:00.000Z', '2026-10-24T08:00:00.000Z']);
+    expect(page.siblings.map((s) => s.name)).toEqual(['b/twin']);
+    expect(page.everAnswered).toBe(true);
+    expect(page.run && 'topHosts' in page.run).toBe(false);
+  });
+
+  it('has no siblings without a tool set, knows a server that never answered, and gives null for an unknown name', async () => {
+    const page = await serverPage('c/alone');
+    expect(page.siblings).toEqual([]);
+    expect(page.everAnswered).toBe(false);
+    expect((await serverPage('nobody/here')).server).toBeNull();
   });
 });
