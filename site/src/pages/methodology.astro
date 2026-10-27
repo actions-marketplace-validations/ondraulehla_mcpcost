@@ -93,6 +93,9 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
     <p>
       A URL that is not in the registry can be tracked from <a href="/check">/check</a>. The daily probe then measures it with the registry servers, under the name <code>url/&lt;host&gt;/&lt;path&gt;</code>, with a page, a badge, a feed and alerts like any other server.
     </p>
+    <p>
+      Some official servers of known vendors are not in the registry. The probe also reads two public catalogs under the MIT license once a day: <a href="https://hub.docker.com/mcp" rel="noopener">Docker's MCP Catalog</a> and <a href="https://github.com/punkpeye/awesome-remote-mcp-servers" rel="noopener">awesome-remote-mcp-servers</a>. Each remote endpoint in them that no registry entry has, under either transport path (<code>/mcp</code> or <code>/sse</code>), gets a page under the same <code>url/</code> name, with a link to the catalog. These servers, and the ones tracked from /check, are in the list and the search, but not in the statistics, the changes, the report, the dataset or the re-check evidence: those are about the official registry.
+    </p>
   </section>
 
   <section class="panel" aria-labelledby="retries-h">

@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS servers (
   website TEXT,
   registry_status TEXT,
   registry_updated_at TEXT,
+  -- For a server outside the registry (registry_status "listed"): the catalogs that list it, JSON [{"name","url"}]. See migrations/013-listed-in.sql.
+  listed_in TEXT,
   -- The version of the registry entry that was probed. See migrations/011-failing-since-version.sql.
   version TEXT,
   probed_at TEXT NOT NULL,

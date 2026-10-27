@@ -1,0 +1,77 @@
+name: Profile the Worker
+# A CPU profile of the deployed Worker from Cloudflare's production profiler, while this run sends the requests to
+# profile: server pages from the sitemap, a cache miss each the first time (a render) and a hit after that. The
+# profiler samples an isolate that is loaded already, so the first requests go before the capture and the rest during
+# it. Read the artifact with `go tool pprof -top cpu.pprof`. A run costs a few dozen renders and their D1 reads.
+on:
+  workflow_dispatch:
+    inputs:
+      pages:
+        description: 'Server pages to request, each a render the first time'
+        required: false
+        default: '80'
+      duration:
+        description: 'Capture length in milliseconds, 1000 to 50000'
+        required: false
+        default: '45000'
+permissions:
+  contents: read
+concurrency:
+  group: profile
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      SITE: https://mcpcost.ulehla.dev
+      PAGES: ${{ inputs.pages }}
+      DURATION: ${{ inputs.duration }}
+    steps:
+      - name: Capture a CPU profile while requesting pages
+        run: |
+          set -u
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/workers"
+          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          id=$(curl -sf "$api/mcpcost" -H "$auth" | jq -r '.result.id // empty')
+          [ -n "$id" ] || { echo "::error::The Worker mcpcost was not found"; exit 1; }
+          # The sitemap's chunks are rowid ranges, and some are empty: take pages from the first chunks that have them.
+          curl -sf "$SITE/sitemap.xml" | grep -o "$SITE/sitemap-[0-9]*\.xml" | shuf | while read -r m; do curl -sf "$m" | grep -o "$SITE/s/[^<]*" || true; done | head -n 3000 | shuf -n "$PAGES" > pages.txt
+          echo "$(wc -l < pages.txt) pages"
+          req() { curl -s -o /dev/null -w "%{http_code}\t%{time_total}\t%header{x-cache}\t%header{cf-ray}\t$1\n" "$1" >> requests.txt; }
+          # A loaded isolate in this location first, for the profiler to find.
+          req "$SITE/"
+          head -3 pages.txt | while read -r u; do req "$u"; done
+          curl -s -X POST "$api/$id/versions/latest/profile" -H "$auth" -H 'Content-Type: application/json' \
+            --data "{\"duration_ms\": $DURATION}" -o capture.out -w '%{http_code}\n' > capture.status &
+          capture=$!
+          sleep 1
+          # Every page once (a miss, unless a reader came first), then again and again (hits) until the capture ends.
+          tail -n +4 pages.txt | while read -r u; do req "$u"; done
+          while kill -0 "$capture" 2>/dev/null; do
+            while read -r u; do kill -0 "$capture" 2>/dev/null || break; req "$u"; done < pages.txt
+          done
+          wait "$capture"
+          echo "capture: HTTP $(cat capture.status)"
+          # The profile comes as pprof, gzipped or not; an error comes as JSON.
+          if gzip -t capture.out 2>/dev/null; then gunzip -c capture.out > cpu.pprof; else cp capture.out cpu.pprof; fi
+          if [ "$(head -c 1 cpu.pprof)" = "{" ]; then cat cpu.pprof; echo; exit 1; fi
+          {
+            echo "## Requests during the capture"
+            echo
+            echo '| x-cache | requests | median s |'
+            echo '|---|---:|---:|'
+            awk -F'\t' '{print ($3 == "" ? "-" : $3), $2}' requests.txt | sort -k1,1 -k2,2n | awk '{n[$1]++; t[$1, n[$1]] = $2} END {for (k in n) printf "| %s | %d | %s |\n", k, n[k], t[k, int((n[k] + 1) / 2)]}'
+            echo
+            echo "Data centres: $(awk -F'\t' '{split($4, r, "-"); print r[2]}' requests.txt | sort | uniq -c | sort -rn | awk '{printf "%s %s, ", $2, $1}')"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: worker-cpu-profile
+          path: |
+            cpu.pprof
+            requests.txt
+            pages.txt
+          retention-days: 3

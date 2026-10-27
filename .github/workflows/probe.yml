@@ -192,6 +192,7 @@ jobs:
           if [ "$(has auth_kind)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/010-auth-kind.sql; echo "migration 010 applied"; fi
           if [ "$(has failing_since)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/011-failing-since-version.sql; echo "migration 011 applied"; fi
           if [ "$(has down_since)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/012-down-since.sql; echo "migration 012 applied"; fi
+          if [ "$(has listed_in)" = "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/013-listed-in.sql; echo "migration 013 applied"; fi
           idx=$(npx wrangler d1 execute mcp-pulse --remote --json --command "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='servers_init_name'" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].results[0].n))')
           if [ "$idx" != "0" ]; then npx wrangler d1 execute mcp-pulse --remote --file=migrations/006-fewer-indexes.sql; echo "migration 006 applied"; fi
       - name: Import into D1

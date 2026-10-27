@@ -17,6 +17,11 @@ on:
         type: boolean
         required: false
         default: false
+      events:
+        description: 'Also keep one line per request (shape, status, CPU and wall time, data centre; no address or agent string) as an artifact, for a closer look at the CPU'
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
   issues: write
@@ -61,7 +66,15 @@ jobs:
         continue-on-error: true
         env:
           WATCH_REPORT_FILE: ${{ runner.temp }}/watch.md
+          WATCH_EVENTS_FILE: ${{ inputs.events && format('{0}/events.json', runner.temp) || '' }}
         run: node site/edge/watch.mjs "${{ steps.window.outputs.from }}" "${{ inputs.to }}"
+      - name: Keep the request lines
+        if: ${{ inputs.events }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: watch-events
+          path: ${{ runner.temp }}/events.json
+          retention-days: 3
       - name: Open or update the edge-watch issue
         if: ${{ steps.watch.outcome == 'failure' && steps.watch.outputs.alarm != '' && !inputs.quiet }}
         env:

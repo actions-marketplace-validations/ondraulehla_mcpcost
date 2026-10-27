@@ -1,6 +1,6 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { serverPage } from '../../lib/db';
+import { serverPage, listingsOf } from '../../lib/db';
 import { bucket, label, ms, num, tokens, date, windowShare, modelName } from '../../lib/format';
 
 const name = Astro.params.name ?? '';
@@ -27,6 +27,11 @@ const reachable = history.filter((h) => h.status === 'ok' || h.status === 'auth'
 const answered = server.status !== 'unprobed' && (bucket(server.status) !== 'down' || history.some((h) => bucket(h.status) !== 'down') || everAnswered);
 const robots = answered ? undefined : 'noindex, follow';
 const heading = server.title ?? server.server_name ?? name;
+/** The catalogs that list a server from outside the registry (registry_status "listed"). */
+const listings = listingsOf(server);
+const listed = server.registry_status === 'listed';
+/** How the title and the summary name the server: the registry name, or for a catalog's server its title and host, which people search for. */
+const who = listed && server.title ? `${server.title} MCP server (${server.host})` : name;
 /** up, gated, noanswer or down: a failing server is down after two days of failed probes, "no answer" before. */
 const group = bucket(server.status, server.failing_since, server.down_since);
 const failingSince = group === 'down' || group === 'noanswer' ? (server.failing_since ?? server.probed_at) : null;
@@ -138,26 +143,31 @@ switch (server.status) {
   default:
     hints.push('The probe could not complete the handshake. The error output is above.');
 }
+// Smithery ends its MCP connection proxy on 2026-10-31 (https://smithery.ai/future): its hosted URLs stop working then.
+if (server.host === 'server.smithery.ai' || server.host.endsWith('.run.tools')) {
+  const ended = new Date().toISOString().slice(0, 10) >= '2026-10-31';
+  hints.unshift(`Smithery ${ended ? 'stopped' : 'stops'} its MCP connection proxy on 31 October 2026. URLs on server.smithery.ai and run.tools ${ended ? 'do not work any more' : 'stop working then'}. Publish a new version of the registry entry with the server's own URL.`);
+}
 const pageTitle = ok
-  ? `${name}: ${num(cost)} tokens of context${exact ? ` in ${model}` : ''}, ${num(server.tool_count)} tools, alive`
+  ? `${who}: ${num(cost)} tokens of context${exact ? ` in ${model}` : ''}, ${num(server.tool_count)} tools, alive`
   : derived
-    ? `${name}: ${label(server.status)}, ${num(derived.cost)} tokens of context from the publisher's package, ${num(derived.tools)} tools`
-    : `${name}: ${label(server.status)}`;
+    ? `${who}: ${label(server.status)}, ${num(derived.cost)} tokens of context from the publisher's package, ${num(derived.tools)} tools`
+    : `${who}: ${label(server.status)}`;
 const answer = ok
   ? exact
-    ? `${name} costs ${num(server.claude_tokens)} tokens of context per session in ${model}. In Claude Code it costs ${num(server.claude_tokens_cc ?? server.claude_tokens)} tokens. It has ${num(server.tool_count)} tool definitions. That is ${share} % of a 200k window. Measured ${date(server.claude_measured_at ?? server.probed_at)}.`
-    : `${name} costs about ${num(server.tools_tokens)} tokens of context per session (o200k_base estimate${server.claude_error ? ', Claude refused the schema' : ''}). It has ${num(server.tool_count)} tool definitions. That is ${share} % of a 200k window. Measured ${date(server.probed_at)}.`
+    ? `${who} costs ${num(server.claude_tokens)} tokens of context per session in ${model}. In Claude Code it costs ${num(server.claude_tokens_cc ?? server.claude_tokens)} tokens. It has ${num(server.tool_count)} tool definitions. That is ${share} % of a 200k window. Measured ${date(server.claude_measured_at ?? server.probed_at)}.`
+    : `${who} costs about ${num(server.tools_tokens)} tokens of context per session (o200k_base estimate${server.claude_error ? ', Claude refused the schema' : ''}). It has ${num(server.tool_count)} tool definitions. That is ${share} % of a 200k window. Measured ${date(server.probed_at)}.`
   : derived
-    ? `${name} needs auth, so the daily probe cannot list its tools. The publisher's package ${derived.name} has ${num(derived.tools)} tool definitions that cost ${num(derived.cost)} tokens of context per session${derived.exact ? ` in ${derivedModel}` : ' (o200k_base estimate)'}, ${derivedShare} % of a 200k window. The tool definitions were read from the open-source package in a container, not from the authenticated server. Measured ${date(derived.probedAt)}.`
+    ? `${who} needs auth, so the daily probe cannot list its tools. The publisher's package ${derived.name} has ${num(derived.tools)} tool definitions that cost ${num(derived.cost)} tokens of context per session${derived.exact ? ` in ${derivedModel}` : ' (o200k_base estimate)'}, ${derivedShare} % of a 200k window. The tool definitions were read from the open-source package in a container, not from the authenticated server. Measured ${date(derived.probedAt)}.`
     : server.status === 'needs_url'
-      ? `${name} has only URL templates in the official MCP registry: each user fills in an address of their own, so the probe does not call it.`
+      ? `${who} has only URL templates in the official MCP registry: each user fills in an address of their own, so the probe does not call it.`
       : server.status === 'unprobed'
-        ? `${name} is in the official MCP registry. ${server.error ?? 'The probe does not run it yet.'}`
+        ? `${who} is in the official MCP registry. ${server.error ?? 'The probe does not run it yet.'}`
       : group === 'down'
-        ? `${name} has given no valid answer since ${date(failingSince)}. Result: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}.`
+        ? `${who} has given no valid answer since ${date(failingSince)}. Result: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}.`
         : group === 'noanswer'
-          ? `${name} gave no valid answer in the probe of ${date(server.probed_at)}. Result: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}. One failed probe is not an outage.`
-          : `${name}: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}, probed ${date(server.probed_at)}.`;
+          ? `${who} gave no valid answer in the probe of ${date(server.probed_at)}. Result: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}. One failed probe is not an outage.`
+          : `${who}: ${label(server.status)}${server.http_status ? ` (HTTP ${server.http_status})` : ''}, probed ${date(server.probed_at)}.`;
 const pageUrl = `${site}/s/${name}`;
 const jsonld = {
   '@context': 'https://schema.org',
@@ -253,7 +263,9 @@ const jsonld = {
     )}
     {server.repo && <><dt>Repository</dt><dd><a href={server.repo} rel="noopener" class="break">{server.repo}</a></dd></>}
     {server.website && <><dt>Website</dt><dd><a href={server.website} rel="noopener" class="break">{server.website}</a></dd></>}
-    {server.registry_status === 'tracked'
+    {listed
+      ? <><dt>Registry</dt><dd>Not in the official registry. Listed in {listings.map((l, i) => <>{i ? ' and ' : ''}<a href={l.url} rel="noopener">{l.name}</a></>)}, so the daily probe measures it with the registry servers. <a href="https://registry.modelcontextprotocol.io" rel="noopener">Publish it</a> and it gets its registry name here.</dd></>
+      : server.registry_status === 'tracked'
       ? <><dt>Registry</dt><dd>Not in the official registry. Tracked on request since {date(server.registry_updated_at)}. <a href="https://registry.modelcontextprotocol.io" rel="noopener">Publish it</a> and it gets its registry name here.</dd></>
       : <><dt>Registry</dt><dd>{server.registry_status}, updated {date(server.registry_updated_at)} · <a href={`https://registry.modelcontextprotocol.io/v0/servers?search=${encodeURIComponent(name)}`} rel="noopener">registry entry</a></dd></>}
     {history.length > 1 && <><dt>Changes</dt><dd>{history.length} recorded, reachable in {reachable} of them. A row is added when the result, the tool count or the cost changes.</dd></>}

@@ -278,6 +278,16 @@ const byNetShape = new Map();
 const FREE_CPU_MS = 10;
 const cpuByShape = new Map();
 const cpuAll = [];
+/** One line per request for a closer look at the CPU (WATCH_EVENTS_FILE): shape, status and times, no address, agent string or query value. */
+const compact = [];
+const serverPath = (url) => {
+  try {
+    const p = new URL(url).pathname;
+    return /^\/(s|badge)\//.test(p) ? p : undefined;
+  } catch {
+    return undefined;
+  }
+};
 for (const e of logs.events) {
   const request = under(e, 'request') ?? {};
   const url = typeof request.url === 'string' ? request.url : under(e, 'url');
@@ -308,6 +318,10 @@ for (const e of logs.events) {
   if (Number.isFinite(cpu)) {
     cpuAll.push(cpu);
     (cpuByShape.get(s) ?? cpuByShape.set(s, []).get(s)).push(cpu);
+  }
+  if (process.env.WATCH_EVENTS_FILE) {
+    const wall = Number(under(e, 'wallTimeMs'));
+    compact.push({ t: under(e, 'timestamp') ?? null, shape: s, path: serverPath(url), status, cpu: Number.isFinite(cpu) ? cpu : null, wall: Number.isFinite(wall) ? wall : null, colo: under(e, 'colo') ?? null, kind: k, outcome: under(e, 'outcome') ?? null });
   }
   bump(byStatus, String(status));
   bump(byNetShape, `${network.slice(0, 30)} · ${k} · ${s.replace(/\?.*$/, '?…')} · ${status}`);
@@ -420,5 +434,10 @@ if (alarms.length) {
 
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
 if (process.env.WATCH_REPORT_FILE) writeFileSync(process.env.WATCH_REPORT_FILE, lines.join('\n') + '\n');
+if (process.env.WATCH_EVENTS_FILE) {
+  // The key paths of one event, without values: what else a closer look could ask the logs for.
+  const keyPaths = (o, prefix = '') => (o && typeof o === 'object' ? Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' && !Array.isArray(v) ? keyPaths(v, `${prefix}${k}.`) : [`${prefix}${k}`])) : []);
+  writeFileSync(process.env.WATCH_EVENTS_FILE, JSON.stringify({ from: iso(from), to: iso(to), truncated: logs.truncated, keys: keyPaths(logs.events[0]), events: compact }));
+}
 if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `alarm=${alarms.join('; ').replace(/[\r\n]+/g, ' ')}\n`);
 process.exit(alarms.length ? 1 : 0);

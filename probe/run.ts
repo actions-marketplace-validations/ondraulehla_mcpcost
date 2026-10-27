@@ -13,6 +13,7 @@ import { probeRemoteRaw } from '../packages/mcpcost/src/core.js';
 import { priceTools } from '../packages/mcpcost/src/probe.js';
 import { createClaudeCounter, payloadHash, reportKeyError } from './claude-cache.js';
 import { shardOf, todayShard } from './shard.js';
+import { LISTED_META, familyKey, loadListed, type ListedEntry } from './sources.js';
 import { createGeminiCounter } from './gemini-cache.js';
 import { loadCredentials, saveCredentials, credentialsFor, type CredentialStore, type FileProvider } from '../packages/mcpcost/src/credentials.js';
 import type { ProbeResult, RegistryEntry } from '../packages/mcpcost/src/index.js';
@@ -82,15 +83,21 @@ const gemini = await createGeminiCounter({
   deadline: started + (Number(args['claude-deadline-min']) || 270) * 60_000
 });
 
+/** An entry as the cached registry file keeps it; build-data reads the same file. A listed server carries its catalogs. */
+function cacheEntry(e: RegistryEntry | ListedEntry) {
+  return { server: e.server, _meta: { 'io.modelcontextprotocol.registry/official': e.meta, ...('listedIn' in e ? { [LISTED_META]: e.listedIn } : {}) } };
+}
+
 async function loadRegistry(): Promise<RegistryEntry[]> {
   if (existsSync(args.cache)) {
     const raw = JSON.parse(await readFile(args.cache, 'utf8')) as Array<{ server: RegistryEntry['server']; _meta: Record<string, RegistryEntry['meta']> }>;
-    return raw.map((r) => ({ server: r.server, meta: r._meta['io.modelcontextprotocol.registry/official'] }));
+    // The servers from outside the registry that an earlier run added are loaded fresh below.
+    return raw.map((r) => ({ server: r.server, meta: r._meta['io.modelcontextprotocol.registry/official'] })).filter((e) => e.meta.status !== 'tracked' && e.meta.status !== 'listed');
   }
   console.error('downloading registry…');
   const entries = await fetchRegistry({ onPage: (n) => n % 2000 === 0 && console.error(`  ${n} entries`) });
   await mkdir('data/raw', { recursive: true });
-  await writeFile(args.cache, JSON.stringify(entries.map((e) => ({ server: e.server, _meta: { 'io.modelcontextprotocol.registry/official': e.meta } }))));
+  await writeFile(args.cache, JSON.stringify(entries.map(cacheEntry)));
   return entries;
 }
 
@@ -250,12 +257,24 @@ function summarize(rows: Array<Target & { result: ProbeResult }>) {
 
 const registryEntries = await loadRegistry();
 const tracked = await loadTracked();
+const listed = await loadListed(registryEntries);
 const known = new Set(registryEntries.map((e) => e.server.name));
-const entries = [...registryEntries, ...tracked.filter((t) => !known.has(t.server.name))];
-if (entries.length > registryEntries.length) {
-  // build-data reads the same file, so the tracked servers must be in it too.
-  await writeFile(args.cache, JSON.stringify(entries.map((e) => ({ server: e.server, _meta: { 'io.modelcontextprotocol.registry/official': e.meta } }))));
-  console.error(`${entries.length - registryEntries.length} tracked servers added to the targets`);
+// A URL tracked from /check that a catalog lists is one server: the catalog's entry takes the tracked name, so the page stays where it was.
+const trackedByFamily = new Map(tracked.map((t) => [familyKey(t.server.remotes?.[0]?.url ?? ''), t.server.name]));
+const superseded = new Set<string>();
+for (const l of listed) {
+  const name = trackedByFamily.get(familyKey(l.server.remotes?.[0]?.url ?? ''));
+  if (name) {
+    l.server.name = name;
+    superseded.add(name);
+  }
+}
+const outside = [...tracked.filter((t) => !superseded.has(t.server.name)), ...listed].filter((e) => !known.has(e.server.name));
+const entries = [...registryEntries, ...outside];
+if (outside.length) {
+  // build-data reads the same file, so the servers from outside the registry must be in it too.
+  await writeFile(args.cache, JSON.stringify(entries.map(cacheEntry)));
+  console.error(`${outside.length - listed.length} tracked and ${listed.length} listed servers added to the targets`);
 }
 const targets = pickTargets(entries);
 console.error(`${entries.length} registry entries, ${targets.length} targets, concurrency ${concurrency}, timeout ${timeoutMs}ms`);
