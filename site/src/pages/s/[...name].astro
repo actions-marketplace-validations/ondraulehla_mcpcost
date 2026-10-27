@@ -143,6 +143,11 @@ switch (server.status) {
   default:
     hints.push('The probe could not complete the handshake. The error output is above.');
 }
+// Smithery ends its MCP connection proxy on 2026-10-31 (https://smithery.ai/future): its hosted URLs stop working then.
+if (server.host === 'server.smithery.ai' || server.host.endsWith('.run.tools')) {
+  const ended = new Date().toISOString().slice(0, 10) >= '2026-10-31';
+  hints.unshift(`Smithery ${ended ? 'stopped' : 'stops'} its MCP connection proxy on 31 October 2026. URLs on server.smithery.ai and run.tools ${ended ? 'do not work any more' : 'stop working then'}. Publish a new version of the registry entry with the server's own URL.`);
+}
 const pageTitle = ok
   ? `${who}: ${num(cost)} tokens of context${exact ? ` in ${model}` : ''}, ${num(server.tool_count)} tools, alive`
   : derived
