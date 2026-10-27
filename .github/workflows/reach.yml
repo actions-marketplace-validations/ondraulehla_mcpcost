@@ -1,0 +1,30 @@
+name: Reach
+# Every Monday: who came to the board in the last seven days and from where, against the seven days before, plus the
+# package, the repository, the board's own features and the pending listings. The report is the run's summary.
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      end:
+        description: 'End of the week, ISO 8601 UTC (default: now)'
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: reach
+jobs:
+  reach:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Count the week
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GH_TOKEN: ${{ github.token }}
+        run: node site/edge/reach.mjs "${{ inputs.end }}"
