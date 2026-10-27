@@ -13,6 +13,8 @@ export interface ServerRecord {
   website: string | null;
   registry_status: string | null;
   registry_updated_at: string | null;
+  /** For a server outside the registry that a catalog lists (registry_status "listed"): JSON [{name, url}]. See listingsOf. */
+  listed_in?: string | null;
   /** The version of the registry entry that was probed. Null before migration 011 ran a probe. */
   version: string | null;
   probed_at: string;
@@ -95,9 +97,23 @@ export interface TokenStats {
   total: number;
 }
 
+/** The catalogs that list a server from outside the registry, from listed_in; empty for a registry entry. */
+export function listingsOf(server: Pick<ServerRecord, 'listed_in'>): Array<{ name: string; url: string }> {
+  try {
+    const v = server.listed_in ? JSON.parse(server.listed_in) : [];
+    return Array.isArray(v) ? v.filter((x) => typeof x?.name === 'string' && typeof x?.url === 'string' && /^https:\/\//.test(x.url)) : [];
+  } catch {
+    return [];
+  }
+}
+
 export interface RunSummary {
   probedAt: string;
   registryEntries: number;
+  /** Servers outside the registry from public catalogs; runs since 2026-10-27. */
+  listed?: number;
+  /** Servers outside the registry tracked from /check. */
+  tracked?: number;
   registryWithRemote: number;
   probed: number;
   byStatus: Record<string, number>;

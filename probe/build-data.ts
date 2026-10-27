@@ -12,7 +12,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { GATED_STATUSES, hostOf, isConfirmedDown, isFailing, isSchemaRefusal } from '../packages/mcpcost/src/index.js';
-import { downChange, failingSinceOf } from './rows.js';
+import { downChange, failingSinceOf, OUTSIDE_REGISTRY } from './rows.js';
+import { LISTED_META, type Listing } from './sources.js';
 import type { ProbeResult, RegistryEntry } from '../packages/mcpcost/src/index.js';
 
 const PACKAGE_HOST: Record<string, string> = { npm: 'npmjs.com', pypi: 'pypi.org', nuget: 'nuget.org', cargo: 'crates.io' };
@@ -86,6 +87,8 @@ export interface ServerRow {
   website?: string;
   registryStatus: string;
   registryUpdatedAt: string;
+  /** For a server outside the registry (registryStatus "listed"): the catalogs that list it, with a link each. */
+  listedIn?: Listing[];
   /** The version of the registry entry that was probed (the latest one). */
   version?: string;
   probedAt: string;
@@ -151,9 +154,13 @@ export interface ServerRow {
 }
 
 const run = JSON.parse(await readFile(args.in, 'utf8')) as { probedAt: string; rows: RawRow[] };
-const registryRaw = JSON.parse(await readFile(args.registry, 'utf8')) as Array<{ server: RegistryEntry['server']; _meta: Record<string, RegistryEntry['meta']> }>;
+const registryRaw = JSON.parse(await readFile(args.registry, 'utf8')) as Array<{ server: RegistryEntry['server']; _meta: Record<string, unknown> }>;
 const registry = new Map(registryRaw.map((r) => [r.server.name, r.server]));
-const registryMeta = new Map(registryRaw.map((r) => [r.server.name, r._meta['io.modelcontextprotocol.registry/official']]));
+const registryMeta = new Map(registryRaw.map((r) => [r.server.name, r._meta['io.modelcontextprotocol.registry/official'] as RegistryEntry['meta'] | undefined]));
+/** The catalogs that list a server from outside the registry (probe/sources.ts). */
+const listings = new Map(registryRaw.map((r) => [r.server.name, r._meta[LISTED_META] as Listing[] | undefined]));
+/** Entries of the official registry, without the servers tracked from /check or listed by a catalog. */
+const registryOnly = registryRaw.filter((r) => !OUTSIDE_REGISTRY.has(registryMeta.get(r.server.name)?.status ?? ''));
 
 /**
  * Package servers: the stdio run probes one seventh of them a day, in
@@ -206,6 +213,7 @@ const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
     website: s?.websiteUrl,
     registryStatus: r.status,
     registryUpdatedAt: r.updatedAt,
+    listedIn: listings.get(r.name),
     version: s?.version,
     probedAt: res.probedAt,
     status: res.status,
@@ -310,7 +318,7 @@ function unprobedRow(s: RegistryEntry['server'], meta: RegistryEntry['meta'] | u
 const onBoard = new Set(rows.map((r) => r.name));
 for (const raw of registryRaw) {
   const meta = registryMeta.get(raw.server.name);
-  if (onBoard.has(raw.server.name) || meta?.status === 'tracked') continue;
+  if (onBoard.has(raw.server.name) || OUTSIDE_REGISTRY.has(meta?.status ?? '')) continue;
   rows.push(unprobedRow(raw.server, meta, run.probedAt));
 }
 const probedRows = rows.filter((r) => r.status !== 'unprobed');
@@ -421,10 +429,15 @@ function diffRuns(previousRows: ServerRow[], current: ServerRow[]): Changes {
   };
 }
 
+// The statistics, the changes and the report are about the official registry. The servers tracked from /check or listed
+// by a catalog are on the board (servers.json) only.
+const inRegistry = (r: ServerRow) => !OUTSIDE_REGISTRY.has(r.registryStatus);
+const registryRows = rows.filter(inRegistry);
+const registryProbed = probedRows.filter(inRegistry);
 const previousRows = args.previous && existsSync(args.previous) ? (JSON.parse(await readFile(args.previous, 'utf8')) as ServerRow[]) : null;
-const changes = previousRows ? diffRuns(previousRows, rows) : undefined;
+const changes = previousRows ? diffRuns(previousRows.filter(inRegistry), registryRows) : undefined;
 
-const ok = probedRows.filter((r) => r.status === 'ok');
+const ok = registryProbed.filter((r) => r.status === 'ok');
 const tokens = ok.map((r) => r.toolsTokens ?? 0);
 const counted = ok.filter((r) => r.claudeTokens != null);
 const claude = counted.map((r) => r.claudeTokens!);
@@ -441,7 +454,7 @@ const histogram = (xs: number[]) => {
 };
 const uniqueToolsets = new Set(ok.map((r) => r.toolsetHash)).size;
 const hostMap = new Map<string, ServerRow[]>();
-for (const r of probedRows) (hostMap.get(r.host) ?? hostMap.set(r.host, []).get(r.host)!).push(r);
+for (const r of registryProbed) (hostMap.get(r.host) ?? hostMap.set(r.host, []).get(r.host)!).push(r);
 const hosts = [...hostMap.entries()]
   .map(([host, list]) => ({
     host,
@@ -471,26 +484,28 @@ const topHosts = hosts.slice(0, 500).map((h) => ({
 const weight = (r: ServerRow) => r.claudeTokens ?? (counted.length ? -1 : (r.toolsTokens ?? 0));
 const summary = {
   probedAt: run.probedAt,
-  registryEntries: registryRaw.filter((r) => r._meta['io.modelcontextprotocol.registry/official']?.status !== 'tracked').length,
-  tracked: registryRaw.filter((r) => r._meta['io.modelcontextprotocol.registry/official']?.status === 'tracked').length,
-  registryWithRemote: registryRaw.filter((r) => r.server.remotes?.length).length,
-  registryWithPackage: registryRaw.filter((r) => !r.server.remotes?.length && r.server.packages?.some((p) => p.registryType === 'npm' || p.registryType === 'pypi')).length,
-  stdioProbed: probedRows.filter((r) => r.transport === 'stdio').length,
+  registryEntries: registryOnly.length,
+  tracked: registryRaw.filter((r) => registryMeta.get(r.server.name)?.status === 'tracked').length,
+  /** Servers outside the registry from public catalogs (probe/sources.ts). */
+  listed: registryRaw.filter((r) => registryMeta.get(r.server.name)?.status === 'listed').length,
+  registryWithRemote: registryOnly.filter((r) => r.server.remotes?.length).length,
+  registryWithPackage: registryOnly.filter((r) => !r.server.remotes?.length && r.server.packages?.some((p) => p.registryType === 'npm' || p.registryType === 'pypi')).length,
+  stdioProbed: registryProbed.filter((r) => r.transport === 'stdio').length,
   stdioToday: stdioRows.length,
-  probed: probedRows.length,
+  probed: registryProbed.length,
   /** Registry entries the probe does not run yet, by kind: oci, mcpb, nuget, cargo, npm or pypi (new), remote, none. */
-  unprobed: count(rows.filter((r) => r.status === 'unprobed'), unprobedKind),
-  byStatus: count(rows, (r) => r.status),
+  unprobed: count(registryRows.filter((r) => r.status === 'unprobed'), unprobedKind),
+  byStatus: count(registryRows, (r) => r.status),
   /** The failing servers that are not down yet: fewer than DOWN_AFTER_DAYS days without a valid answer, by status. */
-  noAnswer: count(rows.filter((r) => isFailing(r.status) && !isConfirmedDown(r.status, r.failingSince, r.probedAt)), (r) => r.status),
-  reachable: ok.length + probedRows.filter((r) => GATED_STATUSES.has(r.status)).length,
+  noAnswer: count(registryRows.filter((r) => isFailing(r.status) && !isConfirmedDown(r.status, r.failingSince, r.probedAt)), (r) => r.status),
+  reachable: ok.length + registryProbed.filter((r) => GATED_STATUSES.has(r.status)).length,
   ok: ok.length,
   uniqueToolsets,
   duplicateServers: ok.length - uniqueToolsets,
   protocols: count(ok, (r) => r.protocolVersion),
-  authSchemes: count(rows.filter((r) => r.status === 'auth'), (r) => r.authScheme ?? 'none'),
-  authKinds: count(rows.filter((r) => r.status === 'auth'), (r) => r.authKind ?? 'unknown'),
-  transports: count(probedRows, (r) => r.transport),
+  authSchemes: count(registryRows.filter((r) => r.status === 'auth'), (r) => r.authScheme ?? 'none'),
+  authKinds: count(registryRows.filter((r) => r.status === 'auth'), (r) => r.authKind ?? 'unknown'),
+  transports: count(registryProbed, (r) => r.transport),
   toolsTokens: { median: quantile(tokens, 0.5), p90: quantile(tokens, 0.9), p99: quantile(tokens, 0.99), max: Math.max(0, ...tokens), total: tokens.reduce((a, b) => a + b, 0) },
   claudeTokens: counted.length
     ? {
@@ -514,7 +529,7 @@ const summary = {
     : undefined,
   toolCount: { median: quantile(ok.map((r) => r.toolCount ?? 0), 0.5), p90: quantile(ok.map((r) => r.toolCount ?? 0), 0.9), max: Math.max(0, ...ok.map((r) => r.toolCount ?? 0)) },
   initMs: { median: quantile(ok.map((r) => r.initMs ?? 0), 0.5), p90: quantile(ok.map((r) => r.initMs ?? 0), 0.9) },
-  hosts: new Set(rows.map((r) => r.host)).size,
+  hosts: new Set(registryRows.map((r) => r.host)).size,
   topHosts,
   shownTokens: (() => {
     const shown = ok.map((r) => r.claudeTokens ?? r.toolsTokens).filter((n): n is number => n != null);

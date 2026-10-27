@@ -17,7 +17,7 @@ import { dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { gzipSync } from 'node:zlib';
 import type { ServerRow } from './build-data.js';
-import { DATASET_FIELDS, datasetRow, evidenceRow } from './rows.js';
+import { DATASET_FIELDS, OUTSIDE_REGISTRY, datasetRow, evidenceRow } from './rows.js';
 export { DATASET_FIELDS, EVIDENCE_STATE, datasetRow, evidenceRow } from './rows.js';
 export type { DatasetRow, EvidenceRow, EvidenceState } from './rows.js';
 
@@ -34,9 +34,11 @@ const { values: args } = parseArgs({
 
 
 // The board also lists the registry entries the probe does not run (status unprobed); the dataset holds what was probed.
-const servers = (JSON.parse(await readFile(`${args.in}/servers.json`, 'utf8')) as ServerRow[]).filter((s) => s.status !== 'unprobed');
+// The dataset and the evidence are about the official registry, like the summary. The servers tracked from /check or
+// listed by a catalog are on the board only.
+const servers = (JSON.parse(await readFile(`${args.in}/servers.json`, 'utf8')) as ServerRow[]).filter((s) => s.status !== 'unprobed' && !OUTSIDE_REGISTRY.has(s.registryStatus));
 const summary = JSON.parse(await readFile(`${args.in}/summary.json`, 'utf8')) as { probedAt: string; probed: number };
-if (servers.length !== summary.probed) throw new Error(`servers.json has ${servers.length} rows, summary.json says ${summary.probed} probed: the two files are not from the same run`);
+if (servers.length !== summary.probed) throw new Error(`servers.json has ${servers.length} probed registry rows, summary.json says ${summary.probed}: the two files are not from the same run`);
 const rows = servers.map(datasetRow).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 const month = summary.probedAt.slice(0, 7);
 const dataset = {
