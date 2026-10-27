@@ -113,8 +113,9 @@ function source(host) {
   if (!host) return 'direct or hidden';
   const h = host.toLowerCase().replace(/^www\./, '');
   if (h === HOST) return 'the board itself';
-  if (/(^|\.)(google|bing|duckduckgo|yandex|baidu|ecosia|qwant|startpage|yahoo|naver|seznam)\.|search\.brave\.com/.test(h)) return 'search engines';
+  // AI first: gemini.google.com is not a search engine visit.
   if (/chatgpt\.com|openai\.com|perplexity\.ai|claude\.ai|gemini\.google|copilot\.microsoft|you\.com|phind\.com|kagi\.com|mistral\.ai|deepseek/.test(h)) return 'AI answers';
+  if (/(^|\.)(google|bing|duckduckgo|yandex|baidu|ecosia|qwant|startpage|yahoo|naver|seznam)\.|search\.brave\.com/.test(h)) return 'search engines';
   if (/github\.com|gitlab\.com|npmjs\.com|pypi\.org|glama\.ai|smithery\.ai|pulsemcp\.com|mcp\.so|lobehub\.com|modelcontextprotocol\.io/.test(h)) return 'code and MCP directories';
   if (/news\.ycombinator\.com|reddit\.com|x\.com|^t\.co$|twitter\.com|linkedin\.com|lnkd\.in|facebook\.com|bsky\.app|mastodon|discord|slack|dev\.to|medium\.com|substack/.test(h)) return 'social and news';
   return 'other sites';
