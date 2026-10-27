@@ -163,8 +163,12 @@ export interface RunSummary {
     removed: string[];
     wentDown: Array<{ name: string; from: string; to: string }>;
     cameBack: Array<{ name: string; from: string; to: string }>;
+    /** Packages that failed to start again at their weekly check; runs since 2026-10-27. Before that they were in wentDown. */
+    packagesDown?: Array<{ name: string; from: string; to: string }>;
+    /** Packages that start again at their weekly check; runs since 2026-10-27. Before that they were in cameBack. */
+    packagesBack?: Array<{ name: string; from: string; to: string }>;
     tokenChanges: Array<{ name: string; before: number; after: number; exact: boolean }>;
-    counts: { added: number; removed: number; wentDown: number; cameBack: number; tokenChanges: number };
+    counts: { added: number; removed: number; wentDown: number; cameBack: number; packagesDown?: number; packagesBack?: number; tokenChanges: number };
   };
 }
 

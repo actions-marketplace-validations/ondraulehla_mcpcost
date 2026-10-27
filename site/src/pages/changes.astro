@@ -25,6 +25,7 @@ const sign = (n: number) => (n > 0 ? `+${num(n)}` : num(n));
           <div class="stat"><b>{num(c.counts.removed)}</b><span>removed</span></div>
           <div class="stat"><b>{num(c.counts.wentDown)}</b><span>stopped answering</span></div>
           <div class="stat"><b>{num(c.counts.cameBack)}</b><span>answer again</span></div>
+          {c.counts.packagesDown != null && <div class="stat"><b>{num(c.counts.packagesDown)}</b><span>packages failed again a week later</span></div>}
           <div class="stat"><b>{num(c.counts.tokenChanges)}</b><span>tool sets grew or shrank</span></div>
         </div>
 
@@ -65,6 +66,27 @@ const sign = (n: number) => (n > 0 ? `+${num(n)}` : num(n));
             <ul class="cols">
               {c.cameBack.slice(0, 40).map((s) => <li><a href={`/s/${s.name}`}>{s.name}</a> <span class={`tag ${bucket(s.to)}`}>{label(s.to)}</span></li>)}
               {c.counts.cameBack > 40 && <li class="muted">and {num(c.counts.cameBack - 40)} more</li>}
+            </ul>
+          </>
+        )}
+
+        {(c.packagesDown?.length ?? 0) > 0 && (
+          <>
+            <h3>Packages that failed again a week later</h3>
+            <p class="muted small">A package server is checked once a week. These did not start at their check a week ago and again in this run, so the board now counts them as down.</p>
+            <ul class="cols">
+              {c.packagesDown!.slice(0, 40).map((s) => <li><a href={`/s/${s.name}`}>{s.name}</a> <span class={`tag ${bucket(s.to)}`}>{label(s.to)}</span></li>)}
+              {(c.counts.packagesDown ?? 0) > 40 && <li class="muted">and {num(c.counts.packagesDown! - 40)} more</li>}
+            </ul>
+          </>
+        )}
+
+        {(c.packagesBack?.length ?? 0) > 0 && (
+          <>
+            <h3>Packages that start again</h3>
+            <ul class="cols">
+              {c.packagesBack!.slice(0, 40).map((s) => <li><a href={`/s/${s.name}`}>{s.name}</a> <span class={`tag ${bucket(s.to)}`}>{label(s.to)}</span></li>)}
+              {(c.counts.packagesBack ?? 0) > 40 && <li class="muted">and {num(c.counts.packagesBack! - 40)} more</li>}
             </ul>
           </>
         )}

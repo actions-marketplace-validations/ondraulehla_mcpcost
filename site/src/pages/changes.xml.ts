@@ -12,7 +12,8 @@ export const GET: APIRoute = async ({ site }) => {
   const entries = runs.map((run) => {
     const c = run.changes!;
     const day = run.probedAt.slice(0, 10);
-    const title = `${day}: ${num(c.counts.added)} new, ${num(c.counts.removed)} removed, ${num(c.counts.wentDown)} down, ${num(c.counts.cameBack)} back, ${num(c.counts.tokenChanges)} tool sets changed`;
+    const packages = c.counts.packagesDown ? `, ${num(c.counts.packagesDown)} packages down at their weekly check` : '';
+    const title = `${day}: ${num(c.counts.added)} new, ${num(c.counts.removed)} removed, ${num(c.counts.wentDown)} down, ${num(c.counts.cameBack)} back${packages}, ${num(c.counts.tokenChanges)} tool sets changed`;
     const rows = c.tokenChanges.slice(0, 15).map((t) => `<li><a href="${base}/s/${esc(t.name)}">${esc(t.name)}</a>: ${num(t.before)} → ${num(t.after)} tokens${t.exact ? '' : ' (estimate)'}</li>`).join('');
     const down = c.wentDown.slice(0, 15).map((s) => `<li><a href="${base}/s/${esc(s.name)}">${esc(s.name)}</a>: ${esc(s.to)}</li>`).join('');
     const html = `<p>Against the run of ${esc(c.since.slice(0, 16).replace('T', ' '))} UTC.</p>${rows ? `<h3>Tool sets that changed most</h3><ul>${rows}</ul>` : ''}${down ? `<h3>Stopped answering</h3><ul>${down}</ul>` : ''}<p><a href="${base}/changes#${day}">Everything from this run</a></p>`;

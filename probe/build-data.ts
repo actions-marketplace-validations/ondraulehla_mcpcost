@@ -385,7 +385,9 @@ const quantile = (xs: number[], q: number) => {
  * What changed since the previous run: servers that appeared or left the
  * registry, that went down or came back, and whose tool definitions grew or
  * shrank by a fifth and at least 500 tokens. The exact Claude count is used
- * when both runs have it, the estimate otherwise.
+ * when both runs have it, the estimate otherwise. A package is down when it
+ * fails again at its weekly check, so its first failure was a week ago: the
+ * packages are in lists of their own, not in "went down" and "came back".
  */
 export interface Changes {
   since: string;
@@ -393,8 +395,12 @@ export interface Changes {
   removed: string[];
   wentDown: Array<{ name: string; from: string; to: string }>;
   cameBack: Array<{ name: string; from: string; to: string }>;
+  /** Packages that failed to start again at their weekly check. */
+  packagesDown: Array<{ name: string; from: string; to: string }>;
+  /** Packages that start again at their weekly check. */
+  packagesBack: Array<{ name: string; from: string; to: string }>;
   tokenChanges: Array<{ name: string; before: number; after: number; exact: boolean }>;
-  counts: { added: number; removed: number; wentDown: number; cameBack: number; tokenChanges: number };
+  counts: { added: number; removed: number; wentDown: number; cameBack: number; packagesDown: number; packagesBack: number; tokenChanges: number };
 }
 function diffRuns(previousRows: ServerRow[], current: ServerRow[]): Changes {
   const prev = new Map(previousRows.map((r) => [r.name, r]));
@@ -404,13 +410,16 @@ function diffRuns(previousRows: ServerRow[], current: ServerRow[]): Changes {
   const removed = previousRows.filter((r) => !now.has(r.name)).map((r) => r.name);
   const wentDown: Changes['wentDown'] = [];
   const cameBack: Changes['cameBack'] = [];
+  const packagesDown: Changes['packagesDown'] = [];
+  const packagesBack: Changes['packagesBack'] = [];
   const tokenChanges: Changes['tokenChanges'] = [];
   for (const r of current) {
     const p = prev.get(r.name);
     if (!p) continue;
     const change = downChange(p, r, d1FailingSince.get(p.name));
-    if (change === 'went-down') wentDown.push({ name: r.name, from: p.status, to: r.status });
-    if (change === 'came-back') cameBack.push({ name: r.name, from: p.status, to: r.status });
+    const pkg = r.transport === 'stdio';
+    if (change === 'went-down') (pkg ? packagesDown : wentDown).push({ name: r.name, from: p.status, to: r.status });
+    if (change === 'came-back') (pkg ? packagesBack : cameBack).push({ name: r.name, from: p.status, to: r.status });
     const exact = p.claudeTokens != null && r.claudeTokens != null;
     const before = exact ? p.claudeTokens! : p.toolsTokens;
     const after = exact ? r.claudeTokens! : r.toolsTokens;
@@ -424,8 +433,8 @@ function diffRuns(previousRows: ServerRow[], current: ServerRow[]): Changes {
   const cap = <T>(xs: T[]) => xs.slice(0, 60);
   return {
     since,
-    added: cap(added), removed: cap(removed), wentDown: cap(wentDown), cameBack: cap(cameBack), tokenChanges: cap(tokenChanges),
-    counts: { added: added.length, removed: removed.length, wentDown: wentDown.length, cameBack: cameBack.length, tokenChanges: tokenChanges.length }
+    added: cap(added), removed: cap(removed), wentDown: cap(wentDown), cameBack: cap(cameBack), packagesDown: cap(packagesDown), packagesBack: cap(packagesBack), tokenChanges: cap(tokenChanges),
+    counts: { added: added.length, removed: removed.length, wentDown: wentDown.length, cameBack: cameBack.length, packagesDown: packagesDown.length, packagesBack: packagesBack.length, tokenChanges: tokenChanges.length }
   };
 }
 
