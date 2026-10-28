@@ -37,6 +37,8 @@ export interface EvidenceIndex {
   sha256: string;
   license: string;
   updates: string;
+  /** The client, the SDK and the protocol version it asks for, as the file says (runs since 2026-10-28). */
+  checked_with?: Record<string, string>;
   /** The GitHub Actions run of the probe that wrote the file, when it is known. */
   run_id?: number;
   run_url?: string;
@@ -48,6 +50,7 @@ interface Doc {
   probed_at?: unknown;
   entries?: unknown;
   license?: unknown;
+  checked_with?: unknown;
   rows?: unknown;
 }
 
@@ -100,6 +103,7 @@ export function indexOf(gz: Buffer, opts: { minEntries?: number; maxBytes?: numb
     sha256: createHash('sha256').update(gz).digest('hex'),
     license: typeof doc.license === 'string' ? doc.license : 'CC BY 4.0',
     updates: 'after each successful daily probe run; the monthly copies stay at /data/mcpcost-evidence-YYYY-MM.json.gz',
+    ...(doc.checked_with && typeof doc.checked_with === 'object' ? { checked_with: doc.checked_with as Record<string, string> } : {}),
     ...(runId ? { run_id: runId, run_url: `${REPOSITORY}/actions/runs/${runId}` } : {})
   };
 }

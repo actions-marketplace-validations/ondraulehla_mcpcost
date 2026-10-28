@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { getHistory, getServer, listingsOf } from '../../../lib/db';
+import { bundleOf, getHistory, getServer, listingsOf } from '../../../lib/db';
 import { label } from '../../../lib/format';
 
 /** One server as JSON: the latest probe plus its history. */
@@ -44,7 +44,7 @@ export const GET: APIRoute = async ({ params, site }) => {
       instructionsChars: server.instructions_chars,
       topTools: server.top_tools ? JSON.parse(server.top_tools) : null,
       toolsetSiblings: server.toolset_siblings,
-      registry: { status: server.registry_status, version: server.version, updatedAt: server.registry_updated_at, repo: server.repo, website: server.website, ...(server.registry_status === 'listed' ? { listedIn: listingsOf(server) } : {}) },
+      registry: { status: server.registry_status, version: server.version, updatedAt: server.registry_updated_at, repo: server.repo, website: server.website, ...(server.listed_in ? { listedIn: listingsOf(server) } : {}), ...(server.bundle ? { bundle: bundleOf(server) } : {}) },
       probedAt: server.probed_at,
       history: history.map((h) => ({ probedAt: h.probed_at, status: h.status, initMs: h.init_ms, toolCount: h.tool_count, toolsTokens: h.tools_tokens, claudeTokens: h.claude_tokens }))
     },

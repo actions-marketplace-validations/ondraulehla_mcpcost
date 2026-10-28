@@ -12,8 +12,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { GATED_STATUSES, hostOf, isConfirmedDown, isFailing, isSchemaRefusal } from '../packages/mcpcost/src/index.js';
-import { downChange, failingSinceOf, OUTSIDE_REGISTRY } from './rows.js';
+import { downChange, failingSinceOf, NOT_AN_ENTRY } from './rows.js';
 import { LISTED_META, type Listing } from './sources.js';
+import { BUNDLE_META, type Bundle } from './bundles.js';
 import type { ProbeResult, RegistryEntry } from '../packages/mcpcost/src/index.js';
 
 const PACKAGE_HOST: Record<string, string> = { npm: 'npmjs.com', pypi: 'pypi.org', nuget: 'nuget.org', cargo: 'crates.io' };
@@ -87,8 +88,10 @@ export interface ServerRow {
   website?: string;
   registryStatus: string;
   registryUpdatedAt: string;
-  /** For a server outside the registry (registryStatus "listed"): the catalogs that list it, with a link each. */
+  /** For a server outside the registry (registryStatus "listed"), or one of a bundle: the catalogs that list it, with a link each. */
   listedIn?: Listing[];
+  /** An entry that lists several servers: its others. One of those servers (registryStatus "bundled"): its entry. */
+  bundle?: Bundle;
   /** The version of the registry entry that was probed (the latest one). */
   version?: string;
   probedAt: string;
@@ -159,8 +162,10 @@ const registry = new Map(registryRaw.map((r) => [r.server.name, r.server]));
 const registryMeta = new Map(registryRaw.map((r) => [r.server.name, r._meta['io.modelcontextprotocol.registry/official'] as RegistryEntry['meta'] | undefined]));
 /** The catalogs that list a server from outside the registry (probe/sources.ts). */
 const listings = new Map(registryRaw.map((r) => [r.server.name, r._meta[LISTED_META] as Listing[] | undefined]));
+/** An entry that lists several servers, and each of those servers (probe/bundles.ts). */
+const bundles = new Map(registryRaw.map((r) => [r.server.name, r._meta[BUNDLE_META] as Bundle | undefined]));
 /** Entries of the official registry, without the servers tracked from /check or listed by a catalog. */
-const registryOnly = registryRaw.filter((r) => !OUTSIDE_REGISTRY.has(registryMeta.get(r.server.name)?.status ?? ''));
+const registryOnly = registryRaw.filter((r) => !NOT_AN_ENTRY.has(registryMeta.get(r.server.name)?.status ?? ''));
 
 /**
  * Package servers: the stdio run probes one seventh of them a day, in
@@ -198,6 +203,7 @@ const carried: ServerRow[] = previousForCarry
 
 const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
   const s = registry.get(r.name);
+  const bundle = bundles.get(r.name);
   const res = r.result;
   const toolsetHash = res.tools?.length
     ? createHash('sha1').update(res.tools.map((t) => `${t.name}:${t.bytes}`).sort().join('|')).digest('hex').slice(0, 12)
@@ -213,7 +219,8 @@ const rows: ServerRow[] = [...run.rows, ...stdioRows].map((r) => {
     website: s?.websiteUrl,
     registryStatus: r.status,
     registryUpdatedAt: r.updatedAt,
-    listedIn: listings.get(r.name),
+    listedIn: listings.get(r.name) ?? (bundle && 'entry' in bundle ? bundle.listedIn : undefined),
+    bundle,
     version: s?.version,
     probedAt: res.probedAt,
     status: res.status,
@@ -318,7 +325,7 @@ function unprobedRow(s: RegistryEntry['server'], meta: RegistryEntry['meta'] | u
 const onBoard = new Set(rows.map((r) => r.name));
 for (const raw of registryRaw) {
   const meta = registryMeta.get(raw.server.name);
-  if (onBoard.has(raw.server.name) || OUTSIDE_REGISTRY.has(meta?.status ?? '')) continue;
+  if (onBoard.has(raw.server.name) || NOT_AN_ENTRY.has(meta?.status ?? '')) continue;
   rows.push(unprobedRow(raw.server, meta, run.probedAt));
 }
 const probedRows = rows.filter((r) => r.status !== 'unprobed');
@@ -440,7 +447,7 @@ function diffRuns(previousRows: ServerRow[], current: ServerRow[]): Changes {
 
 // The statistics, the changes and the report are about the official registry. The servers tracked from /check or listed
 // by a catalog are on the board (servers.json) only.
-const inRegistry = (r: ServerRow) => !OUTSIDE_REGISTRY.has(r.registryStatus);
+const inRegistry = (r: ServerRow) => !NOT_AN_ENTRY.has(r.registryStatus);
 const registryRows = rows.filter(inRegistry);
 const registryProbed = probedRows.filter(inRegistry);
 const previousRows = args.previous && existsSync(args.previous) ? (JSON.parse(await readFile(args.previous, 'utf8')) as ServerRow[]) : null;

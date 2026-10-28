@@ -6,8 +6,11 @@
 import { isConfirmedDown, isFailing } from '../packages/mcpcost/src/index.js';
 import type { ServerRow } from './build-data.js';
 
-/** The registry statuses of the servers on the board that are not registry entries: tracked from /check, listed by a catalog. */
-export const OUTSIDE_REGISTRY: ReadonlySet<string> = new Set(['tracked', 'listed']);
+/**
+ * The registry statuses of the rows on the board that are not registry entries: a URL tracked from /check, a server a
+ * catalog lists, and a server that a registry entry lists among several (probe/bundles.ts).
+ */
+export const NOT_AN_ENTRY: ReadonlySet<string> = new Set(['tracked', 'listed', 'bundled']);
 
 /** The columns, with the words the page and the JSON API use for them. Null when the probe did not record the value. */
 export const DATASET_FIELDS: Record<string, string> = {

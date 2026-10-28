@@ -15,6 +15,8 @@ export interface ServerRecord {
   registry_updated_at: string | null;
   /** For a server outside the registry that a catalog lists (registry_status "listed"): JSON [{name, url}]. See listingsOf. */
   listed_in?: string | null;
+  /** A registry entry that lists several servers, or one of them (registry_status "bundled"): JSON. See bundleOf. */
+  bundle?: string | null;
   /** The version of the registry entry that was probed. Null before migration 011 ran a probe. */
   version: string | null;
   probed_at: string;
@@ -105,6 +107,22 @@ export function listingsOf(server: Pick<ServerRecord, 'listed_in'>): Array<{ nam
   } catch {
     return [];
   }
+}
+
+/**
+ * A registry entry whose remotes are several servers (com.cloudflare.mcp/mcp lists 15): on the entry, its other servers;
+ * on one of those (registry_status "bundled"), its entry. Null for every other row. See probe/bundles.ts.
+ */
+export type BundleInfo = { members: Array<{ name: string; host: string }>; servers: number } | { entry: string; servers: number };
+
+export function bundleOf(server: Pick<ServerRecord, 'bundle'>): BundleInfo | null {
+  try {
+    const v = server.bundle ? JSON.parse(server.bundle) : null;
+    if (v && typeof v.servers === 'number' && (Array.isArray(v.members) || typeof v.entry === 'string')) return v as BundleInfo;
+  } catch {
+    // A row from before migration 014, or not JSON: no bundle.
+  }
+  return null;
 }
 
 export interface RunSummary {

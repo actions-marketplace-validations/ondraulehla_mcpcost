@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS servers (
   registry_updated_at TEXT,
   -- For a server outside the registry (registry_status "listed"): the catalogs that list it, JSON [{"name","url"}]. See migrations/013-listed-in.sql.
   listed_in TEXT,
+  -- A registry entry that lists several servers: JSON {"members":[{"name","host"}],"servers"}; one of those servers
+  -- (registry_status "bundled"): {"entry","servers","listedIn"?}. See probe/bundles.ts and migrations/014-bundle.sql.
+  bundle TEXT,
   -- The version of the registry entry that was probed. See migrations/011-failing-since-version.sql.
   version TEXT,
   probed_at TEXT NOT NULL,

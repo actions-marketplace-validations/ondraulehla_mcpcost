@@ -1,6 +1,6 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { serverPage, listingsOf } from '../../lib/db';
+import { serverPage, listingsOf, bundleOf } from '../../lib/db';
 import { bucket, label, ms, num, tokens, date, windowShare, modelName } from '../../lib/format';
 
 const name = Astro.params.name ?? '';
@@ -30,8 +30,15 @@ const heading = server.title ?? server.server_name ?? name;
 /** The catalogs that list a server from outside the registry (registry_status "listed"). */
 const listings = listingsOf(server);
 const listed = server.registry_status === 'listed';
-/** How the title and the summary name the server: the registry name, or for a catalog's server its title and host, which people search for. */
-const who = listed && server.title ? `${server.title} MCP server (${server.host})` : name;
+/** A registry entry that lists several servers, or one of those servers (registry_status "bundled"); see probe/bundles.ts. */
+const bundle = bundleOf(server);
+const bundled = server.registry_status === 'bundled' && bundle && 'entry' in bundle ? bundle : null;
+const members = bundle && 'members' in bundle ? bundle : null;
+/**
+ * How the title and the summary name the server: the registry name, or for a server without a registry name of its
+ * own (a catalog's, or one of a bundle) its title and host, which people search for.
+ */
+const who = (listed || bundled) && server.title ? `${server.title} MCP server (${server.host})` : name;
 /** up, gated, noanswer or down: a failing server is down after two days of failed probes, "no answer" before. */
 const group = bucket(server.status, server.failing_since, server.down_since);
 const failingSince = group === 'down' || group === 'noanswer' ? (server.failing_since ?? server.probed_at) : null;
@@ -263,11 +270,14 @@ const jsonld = {
     )}
     {server.repo && <><dt>Repository</dt><dd><a href={server.repo} rel="noopener" class="break">{server.repo}</a></dd></>}
     {server.website && <><dt>Website</dt><dd><a href={server.website} rel="noopener" class="break">{server.website}</a></dd></>}
-    {listed
+    {bundled
+      ? <><dt>Registry</dt><dd>One of the {bundled.servers} servers of the registry entry <a href={`/s/${bundled.entry}`}>{bundled.entry}</a>, which lists them under one name. The board measures each of them on its own.{listings.length > 0 && <> Also listed on its own in {listings.map((l, i) => <>{i ? ' and ' : ''}<a href={l.url} rel="noopener">{l.name}</a></>)}.</>}</dd></>
+      : listed
       ? <><dt>Registry</dt><dd>Not in the official registry. Listed in {listings.map((l, i) => <>{i ? ' and ' : ''}<a href={l.url} rel="noopener">{l.name}</a></>)}, so the daily probe measures it with the registry servers. <a href="https://registry.modelcontextprotocol.io" rel="noopener">Publish it</a> and it gets its registry name here.</dd></>
       : server.registry_status === 'tracked'
       ? <><dt>Registry</dt><dd>Not in the official registry. Tracked on request since {date(server.registry_updated_at)}. <a href="https://registry.modelcontextprotocol.io" rel="noopener">Publish it</a> and it gets its registry name here.</dd></>
       : <><dt>Registry</dt><dd>{server.registry_status}, updated {date(server.registry_updated_at)} · <a href={`https://registry.modelcontextprotocol.io/v0/servers?search=${encodeURIComponent(name)}`} rel="noopener">registry entry</a></dd></>}
+    {members && <><dt>Servers</dt><dd>The entry lists {members.servers} servers under one name. This page measures the first one, <span class="mono break">{server.host}</span>. The others have pages of their own: {members.members.map((m, i) => <>{i ? ', ' : ''}<a href={`/s/${m.name}`} class="break">{m.name.replace(/^url\//, '')}</a></>)}.</dd></>}
     {history.length > 1 && <><dt>Changes</dt><dd>{history.length} recorded, reachable in {reachable} of them. A row is added when the result, the tool count or the cost changes.</dd></>}
   </dl>
 

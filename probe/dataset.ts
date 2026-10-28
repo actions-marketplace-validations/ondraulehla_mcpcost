@@ -16,8 +16,9 @@ import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { gzipSync } from 'node:zlib';
+import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
 import type { ServerRow } from './build-data.js';
-import { DATASET_FIELDS, OUTSIDE_REGISTRY, datasetRow, evidenceRow } from './rows.js';
+import { DATASET_FIELDS, NOT_AN_ENTRY, datasetRow, evidenceRow } from './rows.js';
 export { DATASET_FIELDS, EVIDENCE_STATE, datasetRow, evidenceRow } from './rows.js';
 export type { DatasetRow, EvidenceRow, EvidenceState } from './rows.js';
 
@@ -36,7 +37,7 @@ const { values: args } = parseArgs({
 // The board also lists the registry entries the probe does not run (status unprobed); the dataset holds what was probed.
 // The dataset and the evidence are about the official registry, like the summary. The servers tracked from /check or
 // listed by a catalog are on the board only.
-const servers = (JSON.parse(await readFile(`${args.in}/servers.json`, 'utf8')) as ServerRow[]).filter((s) => s.status !== 'unprobed' && !OUTSIDE_REGISTRY.has(s.registryStatus));
+const servers = (JSON.parse(await readFile(`${args.in}/servers.json`, 'utf8')) as ServerRow[]).filter((s) => s.status !== 'unprobed' && !NOT_AN_ENTRY.has(s.registryStatus));
 const summary = JSON.parse(await readFile(`${args.in}/summary.json`, 'utf8')) as { probedAt: string; probed: number };
 if (servers.length !== summary.probed) throw new Error(`servers.json has ${servers.length} probed registry rows, summary.json says ${summary.probed}: the two files are not from the same run`);
 const rows = servers.map(datasetRow).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -64,6 +65,20 @@ await writeFile(`${args.out}/dataset.json.gz`, gz);
 console.error(`wrote ${rows.length} rows: dataset.json ${(json.length / 1e6).toFixed(1)} MB, dataset.json.gz ${(gz.length / 1e6).toFixed(2)} MB`);
 
 const evidenceRows = servers.map(evidenceRow).sort((a, b) => (a.entry < b.entry ? -1 : a.entry > b.entry ? 1 : 0));
+/**
+ * What ran the checks. In modelcontextprotocol/registry#1715 a liveness result is a function of the endpoint, the
+ * protocol version the client asks for and the client itself, so the file names all three. The version the server
+ * answered is in each row (evidence.protocol_version).
+ */
+const versionOf = (path: string) => readFile(new URL(path, import.meta.url), 'utf8').then((t) => JSON.parse(t).version as string).catch(() => 'unknown');
+const checkedWith = {
+  client: `mcpcost ${await versionOf('../packages/mcpcost/package.json')}`,
+  sdk: `@modelcontextprotocol/sdk ${await versionOf('../node_modules/@modelcontextprotocol/sdk/package.json')} (TypeScript)`,
+  requested_protocol_version: LATEST_PROTOCOL_VERSION,
+  answered_protocol_version: 'evidence.protocol_version of each row: the version the server answered in initialize',
+  endpoint: 'initialize, then tools/list, over the transport the entry lists (streamable-http, else SSE), with no credentials; a 401 or 403 is read for its WWW-Authenticate header and OAuth metadata',
+  package: 'the same client in a container with the network off, after an install with the network on; the container has the newest 1.x SDK on the day of the run, so its requested version can be newer'
+};
 const evidence = {
   dataset: 'mcpcost-evidence',
   title: `Re-check evidence for every entry of the official MCP registry, run of ${summary.probedAt.slice(0, 10)}`,
@@ -76,6 +91,7 @@ const evidence = {
     unknown: 'a package that needs values, arguments or a network to start, or crashed on start; a URL with placeholders that each user fills in, so it was not called; or an error the probe could not classify'
   },
   probed_at: summary.probedAt,
+  checked_with: checkedWith,
   entries: evidenceRows.length,
   license: 'CC BY 4.0',
   license_url: 'https://creativecommons.org/licenses/by/4.0/',

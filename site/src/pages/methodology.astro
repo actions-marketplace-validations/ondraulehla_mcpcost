@@ -96,6 +96,9 @@ Astro.response.headers.set('cache-control', 'public, max-age=3600, s-maxage=8640
     <p>
       Some official servers of known vendors are not in the registry. The probe also reads two public catalogs under the MIT license once a day: <a href="https://hub.docker.com/mcp" rel="noopener">Docker's MCP Catalog</a> and <a href="https://github.com/punkpeye/awesome-remote-mcp-servers" rel="noopener">awesome-remote-mcp-servers</a>. Each remote endpoint in them that no registry entry has, under either transport path (<code>/mcp</code> or <code>/sse</code>), gets a page under the same <code>url/</code> name, with a link to the catalog. These servers, and the ones tracked from /check, are in the list and the search, but not in the statistics, the changes, the report, the dataset or the re-check evidence: those are about the official registry.
     </p>
+    <p>
+      The remotes of a registry entry are ways to reach one server: a transport, a region. A few publishers list a set of servers in one entry instead; <code>com.cloudflare.mcp/mcp</code> lists 15. When the remotes of an entry are three or more servers (by host and path, with <code>/mcp</code> and <code>/sse</code> of one host as one server), the first keeps the entry's name, and each of the others gets a page of its own under its <code>url/</code> name, with a link to the entry. The probe tries a second remote of the same server only, never another server under the entry's name. Regional copies of one server are split by this rule too; their pages say so. The statistics and the evidence keep one row per entry.
+    </p>
   </section>
 
   <section class="panel" aria-labelledby="retries-h">
