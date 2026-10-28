@@ -42,7 +42,9 @@ jobs:
   probe:
     needs: image
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    # A part takes 15 to 25 minutes. Every command in it has its own time limit, so a part that runs much longer is
+    # stuck: stop it, and the merge joins the parts that finished (on 2026-10-28 five stuck parts held the run five hours).
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

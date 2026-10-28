@@ -157,6 +157,32 @@ async function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<
   return Promise.race([p, new Promise<T>((_, rej) => { t = setTimeout(() => rej(new Error(`${what} timed out after ${ms} ms`)), ms); })]).finally(() => clearTimeout(t));
 }
 
+/**
+ * Runs a command and kills it when it takes longer than ms. A promise that loses a race does not stop its process, and
+ * a process left behind keeps this script alive: on 2026-10-28 five parts of the run waited five hours, after their last
+ * package, on an unzip and on docker clients whose time was up.
+ */
+async function runFor(cmd: string, argv: string[], ms: number, what: string, opts: { maxBuffer?: number } = {}) {
+  try {
+    return await run(cmd, argv, { ...opts, timeout: ms, killSignal: 'SIGKILL' });
+  } catch (e) {
+    if ((e as { killed?: boolean }).killed) throw Object.assign(new Error(`${what} timed out after ${ms} ms`), { stderr: (e as { stderr?: string }).stderr });
+    throw e;
+  }
+}
+
+/** A container with the limits of every probe container, killed when it takes longer than ms, and removed then too. */
+async function dockerRun(extra: string[], ms: number, what: string, opts: { maxBuffer?: number } = {}) {
+  const name = `mcpcost-${randomUUID().slice(0, 8)}`;
+  try {
+    return await runFor('docker', dockerArgs(['--name', name, ...extra]), ms, what, opts);
+  } catch (e) {
+    // A killed client leaves its container running: remove it, so it holds no memory for the rest of the run.
+    await runFor('docker', ['rm', '-f', name], 30_000, 'docker rm').catch(() => undefined);
+    throw e;
+  }
+}
+
 /** Installs the package into the work directory with the network on. Returns the command that starts it. */
 async function install(t: Target, dir: string): Promise<{ command: string[] } | { status: StdioStatus; error: string }> {
   const kind = t.pkg.registryType as Kind;
@@ -164,7 +190,7 @@ async function install(t: Target, dir: string): Promise<{ command: string[] } | 
   if (kind === 'npm') {
     const spec = t.pkg.version ? `${id}@${t.pkg.version}` : id;
     try {
-      await withTimeout(run('docker', dockerArgs(['-v', `${dir}:/work`, '-w', '/work', args.image, 'npm', 'install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', '/work', '--loglevel', 'error', spec]), { maxBuffer: 4e6 }), Number(args['install-timeout']), 'install');
+      await dockerRun(['-v', `${dir}:/work`, '-w', '/work', args.image, 'npm', 'install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', '/work', '--loglevel', 'error', spec], Number(args['install-timeout']), 'install', { maxBuffer: 4e6 });
     } catch (e) {
       const msg = String((e as { stderr?: string }).stderr ?? e);
       return { status: /E404|404 Not Found|ETARGET|No matching version|notarget/.test(msg) ? 'not_found' : 'install_failed', error: msg.trim().split('\n').slice(-3).join(' ').slice(0, 300) };
@@ -182,7 +208,7 @@ async function install(t: Target, dir: string): Promise<{ command: string[] } | 
   let lastError = '';
   for (const py of ['3.12', '3.13']) {
     try {
-      await withTimeout(run('docker', dockerArgs(['-v', `${dir}:/work`, '-v', `${uvCache}:/root/.cache/uv`, '-w', '/work', args.image, 'uv', 'tool', 'install', '--quiet', '--python', py, spec]), { maxBuffer: 4e6 }), Number(args['install-timeout']), 'install');
+      await dockerRun(['-v', `${dir}:/work`, '-v', `${uvCache}:/root/.cache/uv`, '-w', '/work', args.image, 'uv', 'tool', 'install', '--quiet', '--python', py, spec], Number(args['install-timeout']), 'install', { maxBuffer: 4e6 });
       lastError = '';
       break;
     } catch (e) {
@@ -214,7 +240,7 @@ async function probeOci(t: Target, row: Row): Promise<Row> {
   if (missing.length) { row.status = 'needs_args'; row.error = `requires ${missing.join(', ')}`; return row; }
   const t0 = Date.now();
   try {
-    await withTimeout(run('docker', ['pull', '--quiet', image], { maxBuffer: 4e6 }), Number(args['install-timeout']), 'pull');
+    await runFor('docker', ['pull', '--quiet', image], Number(args['install-timeout']), 'pull', { maxBuffer: 4e6 });
   } catch (e) {
     const msg = String((e as { stderr?: string }).stderr ?? e);
     row.status = /not found|manifest unknown|does not exist|repository .* not found|pull access denied|denied|unauthorized/i.test(msg) ? 'not_found' : 'install_failed';
@@ -227,11 +253,11 @@ async function probeOci(t: Target, row: Row): Promise<Row> {
   try {
     const probeWith = async (vars: Record<string, string>) => {
       const envArgs = Object.entries(vars).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
-      const dockerRun = dockerArgs(['-i', '--name', name, '--pull', 'never', '--network', 'none', '--cap-drop', 'ALL', '--tmpfs', '/tmp', ...envArgs, image, ...cliArgs]);
-      row.command = ['docker', ...dockerRun];
-      const { result, tools } = await withTimeout(probeStdioRaw({ command: 'docker', args: dockerRun }, { timeoutMs: Number(args['probe-timeout']) }), Number(args['probe-timeout']) + 20_000, 'probe');
+      const runArgs = dockerArgs(['-i', '--name', name, '--pull', 'never', '--network', 'none', '--cap-drop', 'ALL', '--tmpfs', '/tmp', ...envArgs, image, ...cliArgs]);
+      row.command = ['docker', ...runArgs];
+      const { result, tools } = await withTimeout(probeStdioRaw({ command: 'docker', args: runArgs }, { timeoutMs: Number(args['probe-timeout']) }), Number(args['probe-timeout']) + 20_000, 'probe');
       priceTools(result, tools);
-      await run('docker', ['rm', '-f', name]).catch(() => undefined);
+      await runFor('docker', ['rm', '-f', name], 30_000, 'docker rm').catch(() => undefined);
       return { parsed: { result, tools }, ...classify(result) };
     };
     let attempt = await probeWith(env);
@@ -250,8 +276,8 @@ async function probeOci(t: Target, row: Row): Promise<Row> {
     if (row.status !== 'ok') row.error = attempt.text.slice(0, 300);
     return row;
   } finally {
-    await run('docker', ['rm', '-f', name]).catch(() => undefined);
-    await run('docker', ['rmi', '-f', image]).catch(() => undefined);
+    await runFor('docker', ['rm', '-f', name], 30_000, 'docker rm').catch(() => undefined);
+    await runFor('docker', ['rmi', '-f', image], 60_000, 'docker rmi').catch(() => undefined);
   }
 }
 
@@ -277,8 +303,9 @@ async function installMcpb(t: Target, dir: string): Promise<{ command: string[];
   if (t.pkg.fileSha256 && createHash('sha256').update(file).digest('hex') !== t.pkg.fileSha256.toLowerCase()) return { status: 'install_failed', error: 'the bundle does not match the SHA-256 in the registry entry' };
   await writeFile(join(dir, 'bundle.mcpb'), file);
   try {
-    // unzip keeps every path inside bundle/: it drops a leading / and refuses ../ parts.
-    await run('unzip', ['-q', '-o', join(dir, 'bundle.mcpb'), '-d', join(dir, 'bundle')], { maxBuffer: 4e6 });
+    // unzip keeps every path inside bundle/: it drops a leading / and refuses ../ parts. -o and an empty -P keep it from
+    // asking (about a file it would replace, or for the password of an encrypted bundle), since nobody would answer.
+    await runFor('unzip', ['-q', '-o', '-P', '', join(dir, 'bundle.mcpb'), '-d', join(dir, 'bundle')], 120_000, 'unzip', { maxBuffer: 4e6 });
   } catch (e) {
     return { status: 'install_failed', error: `not a zip file: ${String((e as { stderr?: string }).stderr ?? e).trim().slice(0, 200)}` };
   }
@@ -332,9 +359,9 @@ async function probeOne(t: Target): Promise<Row> {
     // 3. run with the network off, read-only install, then list the tools
     const probeWith = async (vars: Record<string, string>) => {
       const envArgs = Object.entries(vars).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
-      const { stdout } = await withTimeout(
-        run('docker', dockerArgs(['--network', 'none', '-v', `${dir}:/work:ro`, '--tmpfs', '/tmp', '-e', `PROBE_TIMEOUT_MS=${args['probe-timeout']}`, ...envArgs, args.image, 'node', '/app/probe.mjs', ...command]), { maxBuffer: 64e6 }),
-        Number(args['probe-timeout']) + 20_000, 'probe'
+      const { stdout } = await dockerRun(
+        ['--network', 'none', '-v', `${dir}:/work:ro`, '--tmpfs', '/tmp', '-e', `PROBE_TIMEOUT_MS=${args['probe-timeout']}`, ...envArgs, args.image, 'node', '/app/probe.mjs', ...command],
+        Number(args['probe-timeout']) + 20_000, 'probe', { maxBuffer: 64e6 }
       );
       const parsed = JSON.parse(stdout.slice(stdout.indexOf('{'))) as { result: ProbeResult; tools: RawTool[] };
       priceTools(parsed.result, parsed.tools);
@@ -386,3 +413,5 @@ const summary = { probed: rows.length, byStatus, ok: ok.length, medianTokens: to
 await mkdir(args.out.slice(0, args.out.lastIndexOf('/')), { recursive: true });
 await writeFile(args.out, JSON.stringify({ probedAt: new Date().toISOString(), summary, rows }, null, 1));
 console.log(JSON.stringify(summary, null, 2));
+// The results are written. A process that a package left behind must not hold the job until its time limit.
+process.exit(0);
