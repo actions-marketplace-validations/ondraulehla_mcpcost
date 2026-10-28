@@ -68,7 +68,7 @@
             },
             "status": {
               "type": "string",
-              "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), needs_url (every URL in the registry has a placeholder each user fills in; not called), unprobed (an entry the probe does not run yet: an MCPB bundle, an OCI image, a NuGet or Cargo package, or nothing to connect to), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed. A failure counts as down only after two days of failed probes (see failingSince)"
+              "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), needs_url (every URL in the registry has a placeholder each user fills in; not called), unprobed (an entry the probe does not run yet: an MCPB bundle, an OCI image, a NuGet or Cargo package, or nothing to connect to), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol, unsupported_version (rejects the protocol version the client asks for); package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed. A failure counts as down only after two days of failed probes (see failingSince)"
             },
             "toolCount": {
               "anyOf": [
@@ -397,7 +397,7 @@
                   },
                   "status": {
                     "type": "string",
-                    "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), needs_url (every URL in the registry has a placeholder each user fills in; not called), unprobed (an entry the probe does not run yet: an MCPB bundle, an OCI image, a NuGet or Cargo package, or nothing to connect to), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed. A failure counts as down only after two days of failed probes (see failingSince)"
+                    "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), needs_url (every URL in the registry has a placeholder each user fills in; not called), unprobed (an entry the probe does not run yet: an MCPB bundle, an OCI image, a NuGet or Cargo package, or nothing to connect to), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol, unsupported_version (rejects the protocol version the client asks for); package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed. A failure counts as down only after two days of failed probes (see failingSince)"
                   },
                   "toolCount": {
                     "anyOf": [
@@ -499,7 +499,7 @@
             },
             "status": {
               "type": "string",
-              "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), needs_url (every URL in the registry has a placeholder each user fills in; not called), unprobed (an entry the probe does not run yet: an MCPB bundle, an OCI image, a NuGet or Cargo package, or nothing to connect to), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol; package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed. A failure counts as down only after two days of failed probes (see failingSince)"
+              "description": "ok (answered initialize and tools/list), auth (needs credentials), payment (402), needs_url (every URL in the registry has a placeholder each user fills in; not called), unprobed (an entry the probe does not run yet: an MCPB bundle, an OCI image, a NuGet or Cargo package, or nothing to connect to), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol, unsupported_version (rejects the protocol version the client asks for); package servers also install_failed, no_bin, needs_env, needs_args, needs_network, crashed. A failure counts as down only after two days of failed probes (see failingSince)"
             },
             "statusLabel": {
               "type": "string",

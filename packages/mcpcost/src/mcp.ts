@@ -42,7 +42,7 @@ const text = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSO
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 
 const TOKEN_FIELDS = {
-  status: { type: 'string', description: 'ok (answered initialize and tools/list), auth (needs credentials), payment (402), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol, or for a local command: install_failed, no_bin, needs_env, needs_args, needs_network, crashed' },
+  status: { type: 'string', description: 'ok (answered initialize and tools/list), auth (needs credentials), payment (402), not_found, protocol_error (not MCP), timeout, dns, tls, refused, server_error, rate_limited, newer_protocol, unsupported_version (rejects the protocol version the client asks for), or for a local command: install_failed, no_bin, needs_env, needs_args, needs_network, crashed' },
   error: { type: 'string', description: 'The first line of the failure, when status is not ok' },
   protocolVersion: { type: 'string', description: 'The MCP protocol version the server negotiated' },
   serverInfo: { type: 'object', description: 'name, version and title the server reports in initialize' },

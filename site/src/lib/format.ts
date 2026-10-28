@@ -9,6 +9,7 @@ export const STATUS_LABEL: Record<string, string> = {
   server_error: 'server error',
   protocol_error: 'not MCP',
   newer_protocol: 'newer protocol',
+  unsupported_version: 'rejects our protocol version',
   needs_url: 'needs your URL',
   unprobed: 'not probed',
   timeout: 'timeout',

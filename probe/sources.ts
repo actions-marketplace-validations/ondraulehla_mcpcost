@@ -157,7 +157,7 @@ export function listedEntries(listed: Listed[], registry: RegistryEntry[], now: 
 }
 
 /** Both catalogs, read once a run. A catalog that cannot be read is left out of this run, with a line in the log. */
-export async function loadListed(registry: RegistryEntry[], fetcher: typeof fetch = fetch): Promise<ListedEntry[]> {
+export async function loadCatalogs(fetcher: typeof fetch = fetch): Promise<Listed[]> {
   const get = async (source: Source, parse: (body: string) => Listed[]): Promise<Listed[]> => {
     try {
       const res = await fetcher(source.data, { signal: AbortSignal.timeout(30_000), headers: { 'user-agent': 'mcpcost-probe (+https://mcpcost.ulehla.dev/methodology)' } });
@@ -170,6 +170,5 @@ export async function loadListed(registry: RegistryEntry[], fetcher: typeof fetc
       return [];
     }
   };
-  const all = [...(await get(DOCKER, (b) => parseDocker(JSON.parse(b)))), ...(await get(AWESOME_REMOTE, parseAwesomeRemote))];
-  return listedEntries(all, registry, new Date().toISOString());
+  return [...(await get(DOCKER, (b) => parseDocker(JSON.parse(b)))), ...(await get(AWESOME_REMOTE, parseAwesomeRemote))];
 }

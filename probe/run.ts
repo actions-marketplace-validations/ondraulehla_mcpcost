@@ -13,7 +13,8 @@ import { probeRemoteRaw } from '../packages/mcpcost/src/core.js';
 import { priceTools } from '../packages/mcpcost/src/probe.js';
 import { createClaudeCounter, payloadHash, reportKeyError } from './claude-cache.js';
 import { shardOf, todayShard } from './shard.js';
-import { LISTED_META, familyKey, loadListed, type ListedEntry } from './sources.js';
+import { LISTED_META, familyKey, listedEntries, loadCatalogs, type ListedEntry } from './sources.js';
+import { BUNDLE_META, splitBundles, type Bundle, type BundledEntry } from './bundles.js';
 import { createGeminiCounter } from './gemini-cache.js';
 import { loadCredentials, saveCredentials, credentialsFor, type CredentialStore, type FileProvider } from '../packages/mcpcost/src/credentials.js';
 import type { ProbeResult, RegistryEntry } from '../packages/mcpcost/src/index.js';
@@ -83,21 +84,25 @@ const gemini = await createGeminiCounter({
   deadline: started + (Number(args['claude-deadline-min']) || 270) * 60_000
 });
 
-/** An entry as the cached registry file keeps it; build-data reads the same file. A listed server carries its catalogs. */
-function cacheEntry(e: RegistryEntry | ListedEntry) {
-  return { server: e.server, _meta: { 'io.modelcontextprotocol.registry/official': e.meta, ...('listedIn' in e ? { [LISTED_META]: e.listedIn } : {}) } };
+/**
+ * An entry as the cached registry file keeps it; build-data reads the same file. A listed server carries its catalogs,
+ * a bundle and each of its servers carry the bundle (probe/bundles.ts).
+ */
+function cacheEntry(e: RegistryEntry | ListedEntry | BundledEntry, bundle?: Bundle) {
+  const b = bundle ?? ('bundle' in e ? e.bundle : undefined);
+  return { server: e.server, _meta: { 'io.modelcontextprotocol.registry/official': e.meta, ...('listedIn' in e ? { [LISTED_META]: e.listedIn } : {}), ...(b ? { [BUNDLE_META]: b } : {}) } };
 }
 
 async function loadRegistry(): Promise<RegistryEntry[]> {
   if (existsSync(args.cache)) {
     const raw = JSON.parse(await readFile(args.cache, 'utf8')) as Array<{ server: RegistryEntry['server']; _meta: Record<string, RegistryEntry['meta']> }>;
-    // The servers from outside the registry that an earlier run added are loaded fresh below.
-    return raw.map((r) => ({ server: r.server, meta: r._meta['io.modelcontextprotocol.registry/official'] })).filter((e) => e.meta.status !== 'tracked' && e.meta.status !== 'listed');
+    // The rows that an earlier run added (tracked, listed, the servers of a bundle) are made fresh below.
+    return raw.map((r) => ({ server: r.server, meta: r._meta['io.modelcontextprotocol.registry/official'] })).filter((e) => !['tracked', 'listed', 'bundled'].includes(e.meta.status));
   }
   console.error('downloading registry…');
   const entries = await fetchRegistry({ onPage: (n) => n % 2000 === 0 && console.error(`  ${n} entries`) });
   await mkdir('data/raw', { recursive: true });
-  await writeFile(args.cache, JSON.stringify(entries.map(cacheEntry)));
+  await writeFile(args.cache, JSON.stringify(entries.map((e) => cacheEntry(e))));
   return entries;
 }
 
@@ -257,27 +262,31 @@ function summarize(rows: Array<Target & { result: ProbeResult }>) {
 
 const registryEntries = await loadRegistry();
 const tracked = await loadTracked();
-const listed = await loadListed(registryEntries);
+const catalog = await loadCatalogs();
+// An entry that lists several servers is measured server by server (probe/bundles.ts).
+const { targets: registryTargets, members, entries: bundles } = splitBundles(registryEntries, catalog);
+const listed = listedEntries(catalog, registryEntries, new Date().toISOString());
 const known = new Set(registryEntries.map((e) => e.server.name));
-// A URL tracked from /check that a catalog lists is one server: the catalog's entry takes the tracked name, so the page stays where it was.
+// A URL tracked from /check that a bundle or a catalog has is one server: that row takes the tracked name, so the page stays where it was.
 const trackedByFamily = new Map(tracked.map((t) => [familyKey(t.server.remotes?.[0]?.url ?? ''), t.server.name]));
-const superseded = new Set<string>();
-for (const l of listed) {
-  const name = trackedByFamily.get(familyKey(l.server.remotes?.[0]?.url ?? ''));
-  if (name) {
-    l.server.name = name;
-    superseded.add(name);
+const superseded = new Map<string, string>();
+for (const e of [...members, ...listed]) {
+  const name = trackedByFamily.get(familyKey(e.server.remotes?.[0]?.url ?? ''));
+  if (name && ![...superseded.values()].includes(name)) {
+    superseded.set(e.server.name, name);
+    e.server.name = name;
   }
 }
-const outside = [...tracked.filter((t) => !superseded.has(t.server.name)), ...listed].filter((e) => !known.has(e.server.name));
-const entries = [...registryEntries, ...outside];
-if (outside.length) {
-  // build-data reads the same file, so the servers from outside the registry must be in it too.
-  await writeFile(args.cache, JSON.stringify(entries.map(cacheEntry)));
-  console.error(`${outside.length - listed.length} tracked and ${listed.length} listed servers added to the targets`);
-}
+for (const b of bundles.values()) if ('members' in b) for (const m of b.members) m.name = superseded.get(m.name) ?? m.name;
+const taken = new Set(superseded.values());
+const outside = [...members, ...tracked.filter((t) => !taken.has(t.server.name)), ...listed].filter((e) => !known.has(e.server.name));
+const entries = [...registryTargets, ...outside];
+// build-data reads the same file, so the rows that are not registry entries must be in it too. The registry entries go in
+// whole: a bundle is cut to its first server for the probe only.
+await writeFile(args.cache, JSON.stringify([...registryEntries.map((e) => cacheEntry(e, bundles.get(e.server.name))), ...outside.map((e) => cacheEntry(e))]));
+console.error(`${bundles.size} entries list several servers: ${members.length} more targets; ${outside.length - members.length - listed.length} tracked and ${listed.length} listed servers added`);
 const targets = pickTargets(entries);
-console.error(`${entries.length} registry entries, ${targets.length} targets, concurrency ${concurrency}, timeout ${timeoutMs}ms`);
+console.error(`${registryEntries.length} registry entries and ${outside.length} other rows, ${targets.length} targets, concurrency ${concurrency}, timeout ${timeoutMs}ms`);
 /**
  * A URL with a placeholder that each user fills in (https://{tenant}.example.com/mcp) is not called: the literal URL
  * has no DNS name or no route, and that is not a fact about the server. The row says what the user must supply.

@@ -55,7 +55,7 @@ export async function createTracked(url: URL, status: string, ipHash: string): P
   const d = db();
   const existing = await d.prepare('SELECT name FROM tracked WHERE name = ? OR url = ?').bind(name, url.toString()).first<{ name: string }>();
   if (existing) return { ok: true, name: existing.name, existed: true, inRegistry: false };
-  if (!['ok', 'auth', 'payment', 'newer_protocol', 'rate_limited'].includes(status)) return { ok: false, reason: 'The server did not answer the probe, so there is nothing to track yet. Bring it up and check again.' };
+  if (!['ok', 'auth', 'payment', 'newer_protocol', 'unsupported_version', 'rate_limited'].includes(status)) return { ok: false, reason: 'The server did not answer the probe, so there is nothing to track yet. Bring it up and check again.' };
   const perIp = await d.prepare("SELECT count(*) AS n FROM tracked WHERE ip_hash = ? AND submitted_at > datetime('now', '-1 day')").bind(ipHash).first<{ n: number }>();
   if ((perIp?.n ?? 0) >= MAX_PER_IP_DAY) return { ok: false, reason: 'Too many new servers from here today. Try again tomorrow.' };
   const transport = /\/sse\/?$/.test(url.pathname) ? 'sse' : 'streamable-http';

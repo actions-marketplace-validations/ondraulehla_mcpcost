@@ -122,7 +122,7 @@ const site = Astro.site?.toString().replace(/\/$/, '') ?? '';
                 : <> <a href="https://registry.modelcontextprotocol.io" rel="noopener">Publish the server</a> with this remote URL and the daily probe tracks it.</>}
             </dd>
       </dl>
-      {['ok', 'auth', 'payment', 'newer_protocol', 'rate_limited'].includes(view.result.status) && (
+      {['ok', 'auth', 'payment', 'newer_protocol', 'unsupported_version', 'rate_limited'].includes(view.result.status) && (
         <form class="checkform" method="post" action="/track" style="margin-top:14px">
           <input type="hidden" name="url" value={view.url} />
           <span class="muted small track-note">Not in the registry? The daily probe can track this URL too: a page, a badge, a feed and alerts.</span>
