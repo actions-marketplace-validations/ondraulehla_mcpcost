@@ -27,6 +27,8 @@ const FOREIGN = /ENOEXEC|exec format error|cannot execute binary file|executable
 export function classify(result: Pick<ProbeResult, 'status' | 'error'>): { status: StdioStatus; text: string } {
   const text = `${result.error ?? ''}`;
   if (result.status === 'ok') return { status: 'ok', text };
+  // The server answered initialize, with a protocol version this client does not take or a refusal of the one it asked for.
+  if (result.status === 'newer_protocol' || result.status === 'unsupported_version') return { status: result.status, text };
   const key = text.split('\n').map((l) => l.trim()).find((l) => KEY_LINE.test(l)) ?? '';
   let status: StdioStatus = result.status;
   if (FOREIGN.test(text)) status = 'no_bin';

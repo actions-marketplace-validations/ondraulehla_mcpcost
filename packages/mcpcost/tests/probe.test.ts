@@ -193,6 +193,15 @@ describe('probeRemote classification with a fake fetch', () => {
     expect(r.error).toContain('Missing required _meta');
   });
 
+  it('maps an initialize that the server rejects for its protocol version to unsupported_version, not to a failure', async () => {
+    const rejected = JSON.stringify({ jsonrpc: '2.0', id: 0, error: { code: -32022, message: 'Unsupported protocol version: 2025-11-25', data: { supported: ['2026-07-28'] } } });
+    const r400 = await probeRemote(target, { fetch: respond(400, { 'content-type': 'application/json' }, rejected) });
+    expect(r400.status).toBe('unsupported_version');
+    expect(r400.httpStatus).toBe(400);
+    const mcp = JSON.stringify({ jsonrpc: '2.0', id: 0, error: { code: -32602, message: 'Unsupported MCP protocol version.' } });
+    expect((await probeRemote(target, { fetch: respond(200, { 'content-type': 'application/json' }, mcp) })).status).toBe('unsupported_version');
+  });
+
   it('maps DNS, TLS, refused and timeout failures', async () => {
     const withCause = (code: string) => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error(code), { code }) });
     expect((await probeRemote(target, { fetch: fail(withCause('ENOTFOUND')) })).status).toBe('dns');

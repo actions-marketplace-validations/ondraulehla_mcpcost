@@ -127,6 +127,8 @@ export function bundleOf(server: Pick<ServerRecord, 'bundle'>): BundleInfo | nul
 
 export interface RunSummary {
   probedAt: string;
+  /** The protocol version the probe asks for in initialize; runs since 2026-10-28. */
+  requestedProtocolVersion?: string;
   registryEntries: number;
   /** Servers outside the registry from public catalogs; runs since 2026-10-27. */
   listed?: number;

@@ -12,6 +12,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { GATED_STATUSES, hostOf, isConfirmedDown, isFailing, isSchemaRefusal } from '../packages/mcpcost/src/index.js';
+import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
 import { downChange, failingSinceOf, NOT_AN_ENTRY } from './rows.js';
 import { LISTED_META, type Listing } from './sources.js';
 import { BUNDLE_META, type Bundle } from './bundles.js';
@@ -500,6 +501,8 @@ const topHosts = hosts.slice(0, 500).map((h) => ({
 const weight = (r: ServerRow) => r.claudeTokens ?? (counted.length ? -1 : (r.toolsTokens ?? 0));
 const summary = {
   probedAt: run.probedAt,
+  /** The protocol version the probe asks for in initialize (the newest one of its SDK). */
+  requestedProtocolVersion: LATEST_PROTOCOL_VERSION,
   registryEntries: registryOnly.length,
   tracked: registryRaw.filter((r) => registryMeta.get(r.server.name)?.status === 'tracked').length,
   /** Servers outside the registry from public catalogs (probe/sources.ts). */

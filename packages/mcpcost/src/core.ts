@@ -246,6 +246,8 @@ export function classify(message: string | undefined, first: Observed | undefine
   const text = message ?? '';
   // The server speaks a protocol version that this SDK does not support yet.
   if (/protocol version is not supported/i.test(text)) return 'newer_protocol';
+  // The server rejects the version this SDK asks for, with HTTP 400 or a JSON-RPC error: it is up, just not for this version.
+  if (/unsupported (?:or missing )?(?:mcp )?protocol version/i.test(text)) return 'unsupported_version';
   if (first) {
     if (first.status === 401 || first.status === 403) return 'auth';
     if (first.status === 402) return 'payment';

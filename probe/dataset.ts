@@ -88,7 +88,7 @@ const evidence = {
     auth: 'reachable, needs credentials or payment: 401, 403, 402',
     transient: 'no valid answer in this run, and not dead: a timeout, a 429, a 5xx or a refused connection; or a dead cause seen for less than two days',
     dead: 'no DNS, a TLS failure, 404/405/410, or an answer that is not MCP, in every check for two days or more (evidence.failing_since); a package that does not install or has no executable at two checks a week apart',
-    unknown: 'a package that needs values, arguments or a network to start, or crashed on start; a URL with placeholders that each user fills in, so it was not called; or an error the probe could not classify'
+    unknown: 'a package that needs values, arguments or a network to start, or crashed on start; a URL with placeholders that each user fills in, so it was not called; a server that rejects the protocol version the probe asks for (status unsupported_version: it is up); or an error the probe could not classify'
   },
   probed_at: summary.probedAt,
   checked_with: checkedWith,

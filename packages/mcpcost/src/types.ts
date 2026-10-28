@@ -75,6 +75,9 @@ export type ProbeStatus =
   | 'server_error'
   | 'protocol_error'
   | 'newer_protocol'
+  // The server rejects the protocol version that the client asks for in initialize (it may speak an older or a newer one).
+  // It is up and speaks MCP; a client with another SDK version may connect.
+  | 'unsupported_version'
   | 'timeout'
   | 'dns'
   | 'tls'
@@ -92,8 +95,11 @@ export type ProbeStatus =
   | 'needs_network'
   | 'crashed';
 
-/** Reachable but not usable without something from the user: credentials, arguments, a network, a URL of their own, or a newer SDK. */
-export const GATED_STATUSES: ReadonlySet<string> = new Set(['auth', 'payment', 'newer_protocol', 'needs_env', 'needs_args', 'needs_network', 'needs_url']);
+/**
+ * Reachable but not usable without something from the user: credentials, arguments, a network, a URL of their own, or
+ * another SDK version (the server speaks a newer protocol, or rejects the version the client asks for).
+ */
+export const GATED_STATUSES: ReadonlySet<string> = new Set(['auth', 'payment', 'newer_protocol', 'unsupported_version', 'needs_env', 'needs_args', 'needs_network', 'needs_url']);
 
 /** A result that is neither alive nor gated: the server did not give a valid answer in this probe. An entry the probe did not run has no result. */
 export function isFailing(status: string): boolean {

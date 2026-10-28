@@ -50,3 +50,16 @@ test('evidence carries the entry version and the first failed check', () => {
   assert.equal(row.evidence.failing_since, DAY1);
   assert.equal('version' in evidenceRow(server({ status: 'ok' })), false);
 });
+
+test('a server that rejects the requested protocol version is unknown, never dead, and the row keeps the step and the error code', () => {
+  const rejected = server({ status: 'unsupported_version', httpStatus: 400, failingSince: DAY1, error: 'Streamable HTTP error: Error POSTing to endpoint: {"jsonrpc":"2.0","id":0,"error":{"code":-32022,"message":"Unsupported protocol version: 2025-11-25"}}' });
+  const row = evidenceRow(rejected);
+  assert.equal(row.state, 'unknown');
+  assert.equal(row.evidence.method_phase, 'initialize');
+  assert.equal(row.evidence.jsonrpc_error_code, -32022);
+  // A server that answered initialize and failed on tools/list says so; a package check has no phase.
+  assert.equal(evidenceRow(server({ status: 'protocol_error', initMs: 120, error: 'MCP error -32601: Method not found' })).evidence.method_phase, 'tools/list');
+  assert.equal(evidenceRow(server({ status: 'protocol_error', initMs: 120, error: 'MCP error -32601: Method not found' })).evidence.jsonrpc_error_code, -32601);
+  assert.equal(evidenceRow(server({ status: 'crashed', transport: 'stdio' })).evidence.method_phase, undefined);
+  assert.equal(evidenceRow(server({ status: 'ok' })).evidence.method_phase, undefined);
+});

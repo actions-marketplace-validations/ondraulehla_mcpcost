@@ -18,7 +18,7 @@ export const DATASET_FIELDS: Record<string, string> = {
   version: 'the version of the registry entry that was probed (the latest one)',
   host: 'the host of the remote endpoint; npmjs.com or pypi.org for a package server',
   transport: 'streamable-http, sse or stdio',
-  status: 'the probe result: ok, auth, payment, newer_protocol, needs_url, not_found, protocol_error, dns, tls, timeout, refused, server_error, rate_limited, error; for a package: crashed, install_failed, no_bin, needs_env, needs_args, needs_network. needs_url: every URL of the entry has a placeholder that each user fills in, so the probe did not call it',
+  status: 'the probe result: ok, auth, payment, newer_protocol, unsupported_version (the server rejects the protocol version the probe asks for), needs_url, not_found, protocol_error, dns, tls, timeout, refused, server_error, rate_limited, error; for a package: crashed, install_failed, no_bin, needs_env, needs_args, needs_network. needs_url: every URL of the entry has a placeholder that each user fills in, so the probe did not call it',
   failing_since: 'for a server with no valid answer: the first probe of the current run of failed probes (ISO 8601). The board calls a server down after two days of them; one failed probe is "no answer"',
   http_status: 'the HTTP status of the first response, when there was one',
   auth_scheme: 'the WWW-Authenticate scheme of a server that needs auth',
@@ -80,6 +80,8 @@ export type EvidenceState = 'alive' | 'auth' | 'transient' | 'dead' | 'unknown';
 export const EVIDENCE_STATE: Record<string, EvidenceState> = {
   ok: 'alive',
   newer_protocol: 'alive',
+  // Up and speaking MCP, but not the version this client asks for: not dead, and not alive for this client either.
+  unsupported_version: 'unknown',
   auth: 'auth',
   payment: 'auth',
   timeout: 'transient',
@@ -121,6 +123,10 @@ export interface EvidenceRow {
     tool_count?: number;
     /** For a failed check: the first check of the current run of failed checks, ISO 8601. */
     failing_since?: string;
+    /** For an endpoint check that did not pass: the step it stopped at. */
+    method_phase?: 'initialize' | 'tools/list';
+    /** The JSON-RPC error code in the server's answer, when there is one. */
+    jsonrpc_error_code?: number;
     error?: string;
   };
 }
@@ -133,6 +139,11 @@ export function evidenceRow(s: ServerRow): EvidenceRow {
   if (s.protocolVersion) evidence.protocol_version = s.protocolVersion;
   if (s.toolCount != null) evidence.tool_count = s.toolCount;
   if (s.failingSince) evidence.failing_since = s.failingSince;
+  // What modelcontextprotocol/registry#1715 asks a liveness row to keep: the step that failed and the server's error code.
+  // initMs is set only when initialize succeeded. The requested protocol version and the SDK are in checked_with.
+  if (s.status !== 'ok' && s.transport !== 'stdio' && s.status !== 'needs_url') evidence.method_phase = s.initMs != null ? 'tools/list' : 'initialize';
+  const code = /"code"\s*:\s*(-?\d+)|MCP error (-?\d+)/.exec(s.error ?? '');
+  if (code) evidence.jsonrpc_error_code = Number(code[1] ?? code[2]);
   if (s.error) evidence.error = s.error;
   let state = EVIDENCE_STATE[s.status] ?? 'unknown';
   // Our own failed check is not proof that the entry is dead: that takes two days of failed checks.

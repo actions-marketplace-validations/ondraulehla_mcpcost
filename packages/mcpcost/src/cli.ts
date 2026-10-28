@@ -280,6 +280,7 @@ function statusText(r: Row): string {
   }
   if (s === 'payment') return 'payment required';
   if (s === 'newer_protocol') return 'newer protocol than this SDK';
+  if (s === 'unsupported_version') return 'rejects the protocol version this SDK asks for';
   if (s === 'not_found') return r.kind === 'stdio' ? 'command not found' : 'not found';
   return s.replace('_', ' ');
 }

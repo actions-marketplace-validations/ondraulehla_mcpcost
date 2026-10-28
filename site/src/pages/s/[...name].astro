@@ -108,6 +108,9 @@ switch (server.status) {
   case 'protocol_error':
     hints.push('The endpoint answers HTTP 200, but not with a valid MCP initialize result. Common causes: the URL is a web page or a REST API and not the MCP endpoint, the server answers a JSON-RPC error on initialize, or the response is HTML.');
     break;
+  case 'unsupported_version':
+    hints.push(`The server answers initialize with an error: it does not support the protocol version the probe asks for${run?.requestedProtocolVersion ? `, ${run.requestedProtocolVersion}` : ''}, the newest one of the TypeScript SDK. The server is up, so the board does not count it as down. A client on that SDK cannot connect until the server accepts that version; a client that offers a version the server supports can.`);
+    break;
   case 'newer_protocol':
     hints.push(`The server negotiates protocol ${server.protocol_version ?? ''}, which the current TypeScript SDK refuses. Clients built on the SDK cannot connect until the server accepts the version the client offers.`);
     break;
