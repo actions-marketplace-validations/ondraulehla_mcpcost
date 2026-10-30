@@ -164,6 +164,8 @@ function shape(raw) {
 function kind(agent) {
   if (!agent) return 'no agent';
   if (/bot|crawl|spider|slurp|externalhit|externalagent|preview|validator|monitor|feedfetcher|archive/i.test(agent)) return 'named crawler';
+  // Google's crawlers and fetchers whose names do not say bot. GoogleOther sent 4,484 requests in a night of October 2026.
+  if (/GoogleOther|GoogleProducer|Google-(?:InspectionTool|Read-Aloud|Site-Verification|Safety|NotebookLM)|Mediapartners-Google|APIs-Google/.test(agent)) return 'named crawler';
   if (/Mozilla\/5\.0/.test(agent) && /Chrome|Safari|Firefox|Edg/.test(agent)) return 'browser';
   return 'tool';
 }
