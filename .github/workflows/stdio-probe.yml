@@ -15,6 +15,10 @@ on:
         description: 'Probe only this many packages per part (testing)'
         required: false
         default: ''
+      names:
+        description: 'Probe only these registry names, separated by spaces, in one part (testing)'
+        required: false
+        default: ''
 concurrency:
   group: stdio-probe
   cancel-in-progress: false
@@ -48,7 +52,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+        # A test of a few names needs one part.
+        part: ${{ fromJSON(inputs.names && '[0]' || '[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]') }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -72,7 +77,14 @@ jobs:
           done
           d=$(find data/cache -name derived-packages.json | head -1); test -n "$d" && { [ "$d" = data/cache/derived-packages.json ] || cp "$d" data/cache/derived-packages.json; } || echo "::notice::No derived packages yet."
       - name: Probe this part of today's shard
+        env:
+          NAMES: ${{ inputs.names }}
         run: |
+          if [ -n "$NAMES" ]; then
+            mkdir -p data/raw && printf '%s\n' $NAMES > data/raw/names.txt
+            node --import tsx probe/stdio-run.ts --kind npm,pypi,oci,mcpb --names data/raw/names.txt --concurrency 2 --out "data/raw/stdio-part-${{ matrix.part }}.json"
+            exit 0
+          fi
           # 10#: the day of the year is decimal; 008 would be read as octal and fail.
           shard="${{ inputs.shard }}"; [ -z "$shard" ] && shard=$(( 10#$(date -u +%j) % 7 ))
           sample="${{ inputs.sample }}"
@@ -103,9 +115,11 @@ jobs:
             fs.writeFileSync("stdio-run.json", JSON.stringify({ probedAt: new Date().toISOString(), summary: { probed: rows.length, byStatus }, rows }));
             console.log(JSON.stringify({ probed: rows.length, byStatus }));
           '
+      # A test run (names or sample) keeps its file under another name: the daily probe takes the newest stdio-<run id>,
+      # and a test would stand in for the day's seventh of the packages.
       - uses: actions/upload-artifact@v4
         with:
-          name: stdio-${{ github.run_id }}
+          name: ${{ (inputs.names || inputs.sample) && 'stdio-test' || 'stdio' }}-${{ github.run_id }}
           path: stdio-run.json
           retention-days: 30
           compression-level: 9

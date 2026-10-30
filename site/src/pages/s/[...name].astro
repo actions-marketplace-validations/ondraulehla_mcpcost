@@ -48,6 +48,20 @@ const model = modelName(server.claude_model);
 /** The number the page leads with: the exact Claude count, else the estimate. */
 const cost = exact ? server.claude_tokens : server.tools_tokens;
 const share = ok && cost ? ((cost / 200_000) * 100).toFixed(1) : null;
+/** A PyPI package that starts only with mcp<2: the probe listed its tools with that pin (probe/stdio-run.ts). */
+const pinned = server.status === 'needs_old_sdk' && server.tool_count != null;
+const pinnedCost = pinned ? (server.claude_tokens ?? server.tools_tokens) : null;
+const pinnedExact = pinned && server.claude_tokens != null;
+/** The package stopped at the import of FastMCP, which mcp 2.0 renamed to MCPServer (FASTMCP_MOVED in probe/stdio-classify.ts). */
+const fastmcpMoved = /No module named '?mcp\.server\.fastmcp/.test(server.error ?? '');
+/** How a user starts a package: npx, uvx (with the pin it needs), or docker for an OCI image. An MCPB bundle is a file to open in a client. */
+const runIt = server.url.startsWith('npm:')
+  ? `npx -y ${server.url.slice(4)}`
+  : server.url.startsWith('pypi:')
+    ? `uvx ${server.status === 'needs_old_sdk' ? "--with 'mcp<2' " : ''}${server.url.slice(5).replace('==', '@')}`
+    : server.url.startsWith('oci:')
+      ? `docker run -i --rm ${server.url.slice(4)}`
+      : null;
 /** For a server that needs auth: the tool set of the publisher's open-source package, measured in a container without credentials. */
 const derived =
   !ok && server.derived_status === 'ok' && (server.derived_claude_tokens ?? server.derived_tools_tokens) != null
@@ -147,8 +161,13 @@ switch (server.status) {
   case 'needs_network':
     hints.push('The server tries to reach the network on start. The probe runs in a container with the network off, so a server that connects lazily, on the first tool call, is measured.');
     break;
+  case 'needs_old_sdk':
+    hints.push(`The package imports FastMCP from mcp.server.fastmcp. mcp 2.0, the Python SDK of 28 July 2026, renamed FastMCP to MCPServer, and the package asks for mcp with no upper bound, so a plain install (uvx, pip) gets mcp 2.x and the server stops at the import. Installed with mcp<2, it starts and lists its tools. The fix for the publisher: pin mcp<2 in the dependencies, for example mcp>=1.2,<2, and publish a new version, or move to MCPServer as the SDK's migration guide says. Until then, run it with uvx --with 'mcp<2'.`);
+    break;
   case 'crashed':
-    hints.push('The process exited on start before it answered initialize. The error output is above.');
+    hints.push(fastmcpMoved
+      ? 'The package stops at the import of FastMCP from mcp.server.fastmcp. mcp 2.0, the Python SDK of 28 July 2026, renamed FastMCP to MCPServer, and a plain install gets mcp 2.x. Pin mcp<2 in the dependencies, or move to MCPServer as the SDK\'s migration guide says. The error output is above.'
+      : 'The process exited on start before it answered initialize. The error output is above.');
     break;
   default:
     hints.push('The probe could not complete the handshake. The error output is above.');
@@ -160,13 +179,17 @@ if (server.host === 'server.smithery.ai' || server.host.endsWith('.run.tools')) 
 }
 const pageTitle = ok
   ? `${who}: ${num(cost)} tokens of context${exact ? ` in ${model}` : ''}, ${num(server.tool_count)} tools, alive`
-  : derived
-    ? `${who}: ${label(server.status)}, ${num(derived.cost)} tokens of context from the publisher's package, ${num(derived.tools)} tools`
-    : `${who}: ${label(server.status)}`;
+  : pinned
+    ? `${who}: needs mcp<2, ${num(pinnedCost)} tokens of context${pinnedExact ? ` in ${model}` : ''}, ${num(server.tool_count)} tools`
+    : derived
+      ? `${who}: ${label(server.status)}, ${num(derived.cost)} tokens of context from the publisher's package, ${num(derived.tools)} tools`
+      : `${who}: ${label(server.status)}`;
 const answer = ok
   ? exact
     ? `${who} costs ${num(server.claude_tokens)} tokens of context per session in ${model}. In Claude Code it costs ${num(server.claude_tokens_cc ?? server.claude_tokens)} tokens. It has ${num(server.tool_count)} tool definitions. That is ${share} % of a 200k window. Measured ${date(server.claude_measured_at ?? server.probed_at)}.`
     : `${who} costs about ${num(server.tools_tokens)} tokens of context per session (o200k_base estimate${server.claude_error ? ', Claude refused the schema' : ''}). It has ${num(server.tool_count)} tool definitions. That is ${share} % of a 200k window. Measured ${date(server.probed_at)}.`
+  : pinned
+    ? `${who} does not start from a plain install: it imports FastMCP, which mcp 2.0 renamed. Installed with mcp<2, it starts, and its ${num(server.tool_count)} tool definitions cost ${num(pinnedCost)} tokens of context per session${pinnedExact ? ` in ${model}` : ' (o200k_base estimate)'}. Measured ${date(server.claude_measured_at && server.claude_measured_at > server.probed_at ? server.claude_measured_at : server.probed_at)}.`
   : derived
     ? `${who} needs auth, so the daily probe cannot list its tools. The publisher's package ${derived.name} has ${num(derived.tools)} tool definitions that cost ${num(derived.cost)} tokens of context per session${derived.exact ? ` in ${derivedModel}` : ' (o200k_base estimate)'}, ${derivedShare} % of a 200k window. The tool definitions were read from the open-source package in a container, not from the authenticated server. Measured ${date(derived.probedAt)}.`
     : server.status === 'needs_url'
@@ -228,6 +251,16 @@ const jsonld = {
       <div class="stat"><b>{ms(server.tools_ms)}</b><span>to list tools</span></div>
     </div>
   )}
+  {pinned && (
+    <>
+      <div class="stats">
+        <div class="stat"><b>{num(server.tool_count)}</b><span>tools, with mcp&lt;2</span></div>
+        <div class="stat"><b>{pinnedExact ? tokens(pinnedCost) : `≈ ${tokens(pinnedCost)}`}</b><span>{pinnedExact ? `tokens in ${model}` : 'tokens, estimate'}</span></div>
+        <div class="stat"><b>{pinnedExact ? windowShare(pinnedCost) : `≈ ${windowShare(pinnedCost)}`}</b><span>of Claude's 200k window</span></div>
+      </div>
+      <p class="muted small" style="margin:10px 0 0">A plain install of the package stops at the import below. These tool definitions are from a second install with <span class="mono">mcp&lt;2</span>, started in a container with the network off, on {date(server.probed_at)}.</p>
+    </>
+  )}
   {derived && (
     <>
       <div class="stats">
@@ -242,7 +275,9 @@ const jsonld = {
 
   <dl class="facts">
     {server.transport === 'stdio'
-      ? <><dt>Run it</dt><dd class="mono">{server.url.startsWith('npm:') ? `npx -y ${server.url.slice(4)}` : `uvx ${server.url.slice(5)}`} <span class="faint">(stdio, probed in a container with the network off)</span></dd></>
+      ? runIt
+        ? <><dt>Run it</dt><dd class="mono">{runIt} <span class="faint">(stdio, probed in a container with the network off)</span></dd></>
+        : <><dt>Bundle</dt><dd><a href={server.url.replace(/^mcpb:/, '')} rel="noopener" class="mono break">{server.url.replace(/^mcpb:/, '')}</a> <span class="faint">(MCPB, for a client that installs bundles; probed in a container with the network off)</span></dd></>
       : <><dt>Endpoint</dt><dd class="mono">{server.url} <span class="faint">({server.transport})</span></dd></>}
     <dt>Host</dt><dd><a class="mono" href={`/servers?host=${encodeURIComponent(server.host)}`}>{server.host}</a></dd>
     {server.protocol_version && <><dt>Protocol</dt><dd class="mono">{server.protocol_version}</dd></>}

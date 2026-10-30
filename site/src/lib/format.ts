@@ -22,6 +22,7 @@ export const STATUS_LABEL: Record<string, string> = {
   needs_env: 'needs env',
   needs_args: 'needs args',
   needs_network: 'needs network',
+  needs_old_sdk: 'needs mcp<2',
   crashed: 'crashed on start'
 };
 

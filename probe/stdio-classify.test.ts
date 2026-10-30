@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { classify } from './stdio-classify.js';
+import { classify, sdkPin } from './stdio-classify.js';
 import { stderrSummary } from '../packages/mcpcost/src/stdio.js';
 
 const closed = 'MCP error -32000: Connection closed';
@@ -19,6 +19,18 @@ test('a module that is not there or a syntax error is a broken package', () => {
   assert.equal(failed("node:internal/modules/cjs/loader:1228\n  throw err;\n  ^\n\nError: Cannot find module 'zod'\nRequire stack:\n- /work/node_modules/x/index.js"), 'crashed');
   assert.equal(failed("file:///work/node_modules/x/index.js:3\nSyntaxError: Unexpected token '?'"), 'crashed');
   assert.equal(classify({ status: 'error', error: closed }).status, 'crashed');
+});
+
+test('a PyPI package that stops at the import of FastMCP from mcp 2.x is installed once more with mcp<2', () => {
+  // The message of mcp 2.x, src/mcp/server/fastmcp.py in modelcontextprotocol/python-sdk.
+  const moved = "Traceback (most recent call last):\n  File \"/work/bin/server\", line 4\nModuleNotFoundError: No module named 'mcp.server.fastmcp'. This is mcp 2.x, where FastMCP was renamed to MCPServer (from mcp.server.mcpserver import MCPServer) and other APIs changed; see the migration guide at https://py.sdk.modelcontextprotocol.io/v2/migration/#fastmcp-renamed-to-mcpserver or pin 'mcp<2' to keep running v1 code.";
+  const { status, text } = classify({ status: 'error', error: `${closed}\n${stderrSummary(moved)}` });
+  assert.equal(status, 'crashed');
+  assert.equal(sdkPin('pypi', status, text), 'mcp<2');
+  // Only that import, only PyPI, and only a crash: another missing module is the package's own defect.
+  assert.equal(sdkPin('pypi', 'crashed', "ModuleNotFoundError: No module named 'httpx'"), undefined);
+  assert.equal(sdkPin('npm', 'crashed', text), undefined);
+  assert.equal(sdkPin('pypi', 'needs_env', text), undefined);
 });
 
 test('the network on start, a usage text and a foreign binary each have their own status', () => {

@@ -116,6 +116,16 @@ function serverValues(s: ServerRow): Value[] {
 const previousRows = new Map((previous ?? []).map((s) => [s.name, s]));
 const newServers = servers.filter((s) => !previousRows.has(s.name));
 const changedServers = servers.filter((s) => previousRows.has(s.name));
+/**
+ * A package checked again in this run (its weekly check) gets its error written even when nothing else changed. The
+ * error output is how its page explains a failed start, and the fingerprint leaves the error out, so a package that
+ * kept its result since 2026-10-26, when the exception line moved to the front, kept the old text. About a seventh of
+ * the failed packages a day, one write each: the error column is in no index.
+ */
+const recheckedPackages = allServers.filter((s) => {
+  const p = previousRows.get(s.name);
+  return s.transport === 'stdio' && s.error && p && p.probedAt !== s.probedAt && previousByName.get(s.name) === fingerprint(s);
+});
 
 /**
  * SQLite rewrites every index whose column is in the SET list, whether the
@@ -134,14 +144,15 @@ function updateCost(columns: string[]): number {
 }
 /** Writes of the narrow updates, summed by narrowUpdates: a column with no index (failing_since, version) costs one. */
 let updateWrites = 0;
-function narrowUpdates(rows: ServerRow[]): string[] {
+/** With only, every row gets exactly those columns, whatever differs. */
+function narrowUpdates(rows: ServerRow[], only?: string[]): string[] {
   const groups = new Map<string, { columns: string[]; values: Value[][] }>();
   for (const s of rows) {
     const before = serverValues(previousRows.get(s.name)!);
     const after = serverValues(s);
     // The two latencies differ on every probe and sit in two indexes each. They are written only when the result changed; the probes table keeps the fresh value.
     const statusChanged = s.status !== previousRows.get(s.name)!.status;
-    const changed = serverColumns.filter((c, i) => c !== 'name' && lit(before[i]) !== lit(after[i]) && (statusChanged || (c !== 'init_ms' && c !== 'tools_ms' && c !== 'error')));
+    const changed = only ?? serverColumns.filter((c, i) => c !== 'name' && lit(before[i]) !== lit(after[i]) && (statusChanged || (c !== 'init_ms' && c !== 'tools_ms' && c !== 'error')));
     if (!changed.length) continue;
     updateWrites += updateCost(changed);
     const key = changed.join(',');
@@ -161,7 +172,8 @@ function narrowUpdates(rows: ServerRow[]): string[] {
 }
 const serverStatements = [
   ...multiInsert('servers', serverColumns, newServers.map(serverValues), 'INSERT', upsertSuffix('name', serverColumns)),
-  ...narrowUpdates(changedServers)
+  ...narrowUpdates(changedServers),
+  ...narrowUpdates(recheckedPackages, ['error'])
 ];
 /** History gets a row when the result, the tool count or a token count changed; a new registry entry gets its first row. */
 const probeRows = servers
@@ -215,6 +227,6 @@ await writeFile(args.out, statements.join('\n') + '\n');
 await writeFile(`${args.in}/changed.json`, JSON.stringify({ changed: servers.map((s) => s.name), removed }));
 console.error(
   previous
-    ? `wrote ${statements.length} statements: ${newServers.length} new and ${changedServers.length} changed of ${allServers.length} servers, ${removed.length} removed, to ${args.out}`
+    ? `wrote ${statements.length} statements: ${newServers.length} new and ${changedServers.length} changed of ${allServers.length} servers, the error of ${recheckedPackages.length} packages checked again, ${removed.length} removed, to ${args.out}`
     : `wrote ${statements.length} statements for ${servers.length} servers to ${args.out}`
 );

@@ -16,6 +16,7 @@ import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
 import { downChange, failingSinceOf, NOT_AN_ENTRY } from './rows.js';
 import { LISTED_META, type Listing } from './sources.js';
 import { BUNDLE_META, type Bundle } from './bundles.js';
+import { FASTMCP_MOVED } from './stdio-classify.js';
 import type { ProbeResult, RegistryEntry } from '../packages/mcpcost/src/index.js';
 
 const PACKAGE_HOST: Record<string, string> = { npm: 'npmjs.com', pypi: 'pypi.org', nuget: 'nuget.org', cargo: 'crates.io' };
@@ -511,6 +512,8 @@ const summary = {
   registryWithPackage: registryOnly.filter((r) => !r.server.remotes?.length && r.server.packages?.some((p) => p.registryType === 'npm' || p.registryType === 'pypi')).length,
   stdioProbed: registryProbed.filter((r) => r.transport === 'stdio').length,
   stdioToday: stdioRows.length,
+  /** PyPI servers that stop at the import of FastMCP from mcp 2.x: crashed, or needs_old_sdk when they start with mcp<2. Runs since 2026-10-30. */
+  fastmcpMoved: registryProbed.filter((r) => r.transport === 'stdio' && FASTMCP_MOVED.test(r.error ?? '')).length,
   probed: registryProbed.length,
   /** Registry entries the probe does not run yet, by kind: oci, mcpb, nuget, cargo, npm or pypi (new), remote, none. */
   unprobed: count(registryRows.filter((r) => r.status === 'unprobed'), unprobedKind),

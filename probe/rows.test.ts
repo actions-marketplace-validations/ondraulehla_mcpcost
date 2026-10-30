@@ -33,6 +33,9 @@ test('a server goes down only after two days of failed probes, and comes back on
   // A previous row from before the rule counts as down when it failed, as the board said then.
   assert.equal(downChange({ status: 'not_found', probedAt: DAY2 }, { status: 'auth', probedAt: DAY3 }), 'came-back');
   assert.equal(downChange({ status: 'not_found', probedAt: DAY2 }, { status: 'not_found', probedAt: DAY3, failingSince: DAY1 }), undefined);
+  // A package down as crashed that starts with mcp<2 at its next check did not come back: the probe tried the pin.
+  assert.equal(downChange({ status: 'crashed', probedAt: DAY3, failingSince: DAY1 }, { status: 'needs_old_sdk', probedAt: '2026-11-02T08:00:00.000Z' }), undefined);
+  assert.equal(downChange({ status: 'crashed', probedAt: DAY3, failingSince: DAY1 }, { status: 'ok', probedAt: '2026-11-02T08:00:00.000Z' }), 'came-back');
 });
 
 test('evidence calls an entry dead only after two days, and a URL template unknown', () => {
