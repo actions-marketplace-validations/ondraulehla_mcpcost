@@ -175,6 +175,8 @@ export interface RunSummary {
   /** Package (stdio) servers on the board, and how many of them this run probed. */
   stdioProbed?: number;
   stdioToday?: number;
+  /** PyPI servers that stop at the import of FastMCP from mcp 2.x (crashed), or start only with mcp<2 (needs_old_sdk); runs since 2026-10-30. */
+  fastmcpMoved?: number;
   registryWithPackage?: number;
   /** What changed since the previous run; absent on the first run. */
   changes?: {

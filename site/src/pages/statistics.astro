@@ -59,6 +59,7 @@ const heavyMax = Math.max(1, ...topHeavy.map((h) => h.claudeTokens ?? h.toolsTok
           { label: 'down for two days or more', value: down, tone: 'down', href: '/servers?status=down' }
         ]} />
         <Bars id="results-bars" items={statusItems} columns={['Result', 'Servers']} />
+        {run.fastmcpMoved ? <p class="panel-note">{num(run.fastmcpMoved)} PyPI servers stop at the import of FastMCP from <span class="mono">mcp.server.fastmcp</span>: mcp 2.0, the Python SDK of 28 July 2026, renamed FastMCP to MCPServer, and these packages ask for mcp with no upper bound, so a plain install gets 2.x. At its weekly check the probe installs such a package once more with <span class="mono">mcp&lt;2</span>{run.byStatus.needs_old_sdk ? <>, and {num(run.byStatus.needs_old_sdk)} of them have started that way so far and listed their tools: <a href="/servers?status=needs_old_sdk">needs mcp&lt;2</a></> : null}.</p> : null}
       </section>
 
       {run.claudeTokens && (
