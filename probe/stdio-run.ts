@@ -17,7 +17,7 @@ import { priceTools } from '../packages/mcpcost/src/probe.js';
 import { probeStdioRaw } from '../packages/mcpcost/src/stdio.js';
 import type { RawTool } from '../packages/mcpcost/src/core.js';
 import { envNamesFromError } from '../packages/mcpcost/src/env-hints.js';
-import { classify, type StdioStatus } from './stdio-classify.js';
+import { classify, sdkPin, type StdioStatus } from './stdio-classify.js';
 import { shardOf } from './shard.js';
 
 const run = promisify(execFile);
@@ -183,8 +183,11 @@ async function dockerRun(extra: string[], ms: number, what: string, opts: { maxB
   }
 }
 
-/** Installs the package into the work directory with the network on. Returns the command that starts it. */
-async function install(t: Target, dir: string): Promise<{ command: string[] } | { status: StdioStatus; error: string }> {
+/**
+ * Installs the package into the work directory with the network on. Returns the command that starts it. A pin such as
+ * mcp<2 goes into the PyPI install as --with, the same as uvx --with 'mcp<2' for a user.
+ */
+async function install(t: Target, dir: string, pins: string[] = []): Promise<{ command: string[] } | { status: StdioStatus; error: string }> {
   const kind = t.pkg.registryType as Kind;
   const id = t.pkg.identifier;
   if (kind === 'npm') {
@@ -208,7 +211,7 @@ async function install(t: Target, dir: string): Promise<{ command: string[] } | 
   let lastError = '';
   for (const py of ['3.12', '3.13']) {
     try {
-      await dockerRun(['-v', `${dir}:/work`, '-v', `${uvCache}:/root/.cache/uv`, '-w', '/work', args.image, 'uv', 'tool', 'install', '--quiet', '--python', py, spec], Number(args['install-timeout']), 'install', { maxBuffer: 4e6 });
+      await dockerRun(['-v', `${dir}:/work`, '-v', `${uvCache}:/root/.cache/uv`, '-w', '/work', args.image, 'uv', 'tool', 'install', '--quiet', '--python', py, ...pins.flatMap((p) => ['--with', p]), spec], Number(args['install-timeout']), 'install', { maxBuffer: 4e6 });
       lastError = '';
       break;
     } catch (e) {
@@ -345,6 +348,7 @@ async function probeOne(t: Target): Promise<Row> {
     }
   }
   const dir = await mkdtemp(join(tmpdir(), 'mcpcost-stdio-'));
+  let pinnedDir: string | undefined;
   try {
     const { args: cliArgs, missing } = row.kind === 'mcpb' ? { args: [] as string[], missing: [] as string[] } : buildArgs(t.pkg);
     if (missing.length) { row.status = 'needs_args'; row.error = `requires ${missing.join(', ')}`; return row; }
@@ -357,10 +361,10 @@ async function probeOne(t: Target): Promise<Row> {
     const bundleEnv: Record<string, string> = 'env' in installed ? (installed as { env: Record<string, string> }).env : {};
     const env = { ...buildEnv(t.pkg), ...bundleEnv };
     // 3. run with the network off, read-only install, then list the tools
-    const probeWith = async (vars: Record<string, string>) => {
+    const probeWith = async (vars: Record<string, string>, workDir = dir, cmd = command) => {
       const envArgs = Object.entries(vars).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
       const { stdout } = await dockerRun(
-        ['--network', 'none', '-v', `${dir}:/work:ro`, '--tmpfs', '/tmp', '-e', `PROBE_TIMEOUT_MS=${args['probe-timeout']}`, ...envArgs, args.image, 'node', '/app/probe.mjs', ...command],
+        ['--network', 'none', '-v', `${workDir}:/work:ro`, '--tmpfs', '/tmp', '-e', `PROBE_TIMEOUT_MS=${args['probe-timeout']}`, ...envArgs, args.image, 'node', '/app/probe.mjs', ...cmd],
         Number(args['probe-timeout']) + 20_000, 'probe', { maxBuffer: 64e6 }
       );
       const parsed = JSON.parse(stdout.slice(stdout.indexOf('{'))) as { result: ProbeResult; tools: RawTool[] };
@@ -377,6 +381,22 @@ async function probeOne(t: Target): Promise<Row> {
         if (again.status === 'ok' || again.status !== attempt.status) attempt = again;
       }
     }
+    // It stopped at the import of FastMCP from mcp 2.x: once more with mcp<2, in a fresh directory. When it lists its tools
+    // then, the row says so (needs_old_sdk) with those tools and the error of the plain install. Anything else, and the
+    // plain install's crash stands.
+    const pin = sdkPin(row.kind, attempt.status, attempt.text);
+    if (pin) {
+      try {
+        pinnedDir = await mkdtemp(join(tmpdir(), 'mcpcost-stdio-'));
+        const pinned = await install(t, pinnedDir, [pin]);
+        if (!('status' in pinned)) {
+          const again = await probeWith(env, pinnedDir, [...pinned.command, ...cliArgs]);
+          if (again.status === 'ok') attempt = { ...again, status: 'needs_old_sdk', text: attempt.text };
+        }
+      } catch {
+        // The second run timed out or gave no answer: the crash of the plain install stands.
+      }
+    }
     row.env = Object.keys(env);
     row.result = attempt.parsed.result;
     row.tools = attempt.parsed.tools;
@@ -389,6 +409,7 @@ async function probeOne(t: Target): Promise<Row> {
     return row;
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    if (pinnedDir) await rm(pinnedDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 

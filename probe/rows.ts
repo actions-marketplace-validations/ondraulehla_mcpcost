@@ -18,7 +18,7 @@ export const DATASET_FIELDS: Record<string, string> = {
   version: 'the version of the registry entry that was probed (the latest one)',
   host: 'the host of the remote endpoint; npmjs.com or pypi.org for a package server',
   transport: 'streamable-http, sse or stdio',
-  status: 'the probe result: ok, auth, payment, newer_protocol, unsupported_version (the server rejects the protocol version the probe asks for), needs_url, not_found, protocol_error, dns, tls, timeout, refused, server_error, rate_limited, error; for a package: crashed, install_failed, no_bin, needs_env, needs_args, needs_network. needs_url: every URL of the entry has a placeholder that each user fills in, so the probe did not call it',
+  status: 'the probe result: ok, auth, payment, newer_protocol, unsupported_version (the server rejects the protocol version the probe asks for), needs_url, not_found, protocol_error, dns, tls, timeout, refused, server_error, rate_limited, error; for a package: crashed, install_failed, no_bin, needs_env, needs_args, needs_network, needs_old_sdk (a plain install gets a new major version of the MCP SDK and stops at an import of the old one; with mcp<2 it starts and lists its tools). needs_url: every URL of the entry has a placeholder that each user fills in, so the probe did not call it',
   failing_since: 'for a server with no valid answer: the first probe of the current run of failed probes (ISO 8601). The board calls a server down after two days of them; one failed probe is "no answer"',
   http_status: 'the HTTP status of the first response, when there was one',
   auth_scheme: 'the WWW-Authenticate scheme of a server that needs auth',
@@ -98,6 +98,8 @@ export const EVIDENCE_STATE: Record<string, EvidenceState> = {
   needs_env: 'unknown',
   needs_args: 'unknown',
   needs_network: 'unknown',
+  // Starts only with mcp<2: a plain install of the entry's package stops on start, but the server is not gone.
+  needs_old_sdk: 'unknown',
   needs_url: 'unknown',
   error: 'unknown'
 };
@@ -174,6 +176,7 @@ export function downChange(previous: Pick<ServerRow, 'status' | 'probedAt' | 'fa
   const downBefore = since ? isConfirmedDown(previous.status, since, previous.probedAt) : isFailing(previous.status);
   const downNow = isConfirmedDown(current.status, current.failingSince, current.probedAt);
   if (!downBefore && downNow) return 'went-down';
-  if (downBefore && !isFailing(current.status)) return 'came-back';
+  // crashed to needs_old_sdk is the same package, started this time with the SDK pin it needs (probe/stdio-run.ts): not back.
+  if (downBefore && !isFailing(current.status) && !(previous.status === 'crashed' && current.status === 'needs_old_sdk')) return 'came-back';
   return undefined;
 }

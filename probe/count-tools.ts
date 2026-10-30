@@ -16,8 +16,9 @@ const file = JSON.parse(await readFile(args.in, 'utf8')) as { rows: Array<{ name
 const deadline = Date.now() + Number(args['deadline-min']) * 60_000;
 const claude = await createClaudeCounter({ apiKey: process.env.ANTHROPIC_API_KEY, cachePath: args.cache, deadline });
 const gemini = await createGeminiCounter({ apiKey: process.env.GEMINI_API_KEY, cachePath: args.cache, deadline });
+// A package that starts only with mcp<2 (needs_old_sdk) listed its tools in that run: they are counted the same way.
 for (const row of file.rows) {
-  if (row.status !== 'ok' || !row.result || !row.tools?.length) continue;
+  if ((row.status !== 'ok' && row.status !== 'needs_old_sdk') || !row.result || !row.tools?.length) continue;
   row.payloadHash = payloadHash(row.tools);
   row.result.claude = await claude.count(row.name, row.tools, row.payloadHash);
   row.result.gemini = await gemini.count(row.name, row.tools, row.payloadHash);

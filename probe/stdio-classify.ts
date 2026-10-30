@@ -7,7 +7,19 @@
  */
 import type { ProbeResult } from '../packages/mcpcost/src/index.js';
 
-export type StdioStatus = ProbeResult['status'] | 'install_failed' | 'no_bin' | 'needs_env' | 'needs_args' | 'needs_network' | 'crashed';
+export type StdioStatus = ProbeResult['status'] | 'install_failed' | 'no_bin' | 'needs_env' | 'needs_args' | 'needs_network' | 'needs_old_sdk' | 'crashed';
+
+/**
+ * mcp 2.0 (PyPI, 2026-07-28) renamed FastMCP to MCPServer: an import of mcp.server.fastmcp fails with a message that
+ * says to move to MCPServer or to pin mcp<2. A package that asks for mcp with no upper bound gets 2.x from a plain
+ * install, the same as anyone who runs it with uvx.
+ */
+export const FASTMCP_MOVED = /No module named '?mcp\.server\.fastmcp'?/;
+
+/** The pin to install a crashed package with once more: mcp<2 for a PyPI package that stopped at the import of FastMCP. */
+export function sdkPin(kind: string, status: StdioStatus, text: string): string | undefined {
+  return kind === 'pypi' && status === 'crashed' && FASTMCP_MOVED.test(text) ? 'mcp<2' : undefined;
+}
 
 /** The line that names the exception: Python's last traceback line, or Node's first error line. */
 const KEY_LINE = /^(?:Uncaught )?(?:[A-Za-z_][\w.]*(?:Error|Exception|Exit)\b|(?:[A-Z]\w*)?Error(?: \[[A-Z0-9_]+\])?:)/;

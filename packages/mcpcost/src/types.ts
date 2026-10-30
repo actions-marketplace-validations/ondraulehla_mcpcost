@@ -93,13 +93,17 @@ export type ProbeStatus =
   | 'needs_env'
   | 'needs_args'
   | 'needs_network'
+  // The package stops at an import that a new major version of its MCP SDK removed, and it starts and lists its tools
+  // when that SDK is held below it (PyPI: mcp<2). A plain install gets the new version.
+  | 'needs_old_sdk'
   | 'crashed';
 
 /**
  * Reachable but not usable without something from the user: credentials, arguments, a network, a URL of their own, or
- * another SDK version (the server speaks a newer protocol, or rejects the version the client asks for).
+ * another SDK version (the server speaks a newer protocol, rejects the version the client asks for, or starts only
+ * with an older major version of its own SDK).
  */
-export const GATED_STATUSES: ReadonlySet<string> = new Set(['auth', 'payment', 'newer_protocol', 'unsupported_version', 'needs_env', 'needs_args', 'needs_network', 'needs_url']);
+export const GATED_STATUSES: ReadonlySet<string> = new Set(['auth', 'payment', 'newer_protocol', 'unsupported_version', 'needs_env', 'needs_args', 'needs_network', 'needs_url', 'needs_old_sdk']);
 
 /** A result that is neither alive nor gated: the server did not give a valid answer in this probe. An entry the probe did not run has no result. */
 export function isFailing(status: string): boolean {
