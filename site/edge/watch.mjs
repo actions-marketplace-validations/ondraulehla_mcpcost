@@ -23,9 +23,14 @@ const HOST = 'mcpcost.ulehla.dev';
 const SCRIPT = 'mcpcost';
 const DB_ID = 'f1984775-849a-4277-805e-537ea5ad7611';
 
-/** The thresholds, per hour. The scrapers of October 2026 made 4 000 requests an hour from one network, readers make a few hundred a day. */
+/**
+ * The thresholds, per hour. The scrapers of October 2026 made 4 000 requests an hour from one network, readers
+ * make a few hundred a day. Since the server pages link to each other (2026-11-04) the named crawlers (Google,
+ * Perplexity) walk the board at about 10 000 requests an hour together, which the Workers Paid plan covers,
+ * so the threshold for everyone sits above them; the per-network thresholds below still catch a scraper.
+ */
 const LIMITS = {
-  requests: Number(process.env.WATCH_REQUESTS_PER_HOUR ?? 5000), // Worker requests from everyone
+  requests: Number(process.env.WATCH_REQUESTS_PER_HOUR ?? 25_000), // Worker requests from everyone
   network: Number(process.env.WATCH_NETWORK_REQUESTS_PER_HOUR ?? 800), // requests from one network that does not name itself a crawler
   lists: Number(process.env.WATCH_LIST_REQUESTS_PER_HOUR ?? 300), // list variants from one network, whatever it calls itself: robots.txt disallows them for everyone
   rowsRead: Number(process.env.WATCH_ROWS_READ_PER_HOUR ?? 1_000_000) // D1 rows read
@@ -199,26 +204,54 @@ const tenMinutes = (e) => {
 };
 const sorted = (m) => [...m.entries()].sort((a, b) => b[1] - a[1]);
 
-/** What the zone stopped before the Worker, when the zone token may read analytics. */
+/**
+ * What the zone stopped before the Worker, when the zone token may read analytics. The two datasets are asked
+ * apart: a dataset the zone's plan does not hold answers "does not have access to the path", a token without
+ * Zone: Analytics: Read answers "does not have permission", and the one that answers is still shown.
+ */
 async function edge(since, until) {
   if (!zoneToken) return { note: 'CLOUDFLARE_ZONE_TOKEN is not set, so what the zone stopped before the Worker is not shown.' };
+  let zone;
   try {
     const z = await cf('/zones?name=ulehla.dev', undefined, zoneToken);
-    const zone = z.result?.[0]?.id;
+    zone = z.result?.[0]?.id;
     if (!zone) return { note: 'The zone token does not see ulehla.dev.' };
-    const d = await gql(
-      `query($zone: string!, $from: Time!, $to: Time!) { viewer { zones(filter: {zoneTag: $zone}) {
-        all: httpRequestsAdaptiveGroups(limit: 1, filter: {datetime_geq: $from, datetime_lt: $to, clientRequestHTTPHost: "${HOST}"}) { count }
-        stopped: firewallEventsAdaptiveGroups(limit: 40, filter: {datetime_geq: $from, datetime_lt: $to, clientRequestHTTPHost: "${HOST}"}, orderBy: [count_DESC]) {
-          count dimensions { action clientASNDescription clientRequestPath userAgent } } } } }`,
-      { zone, from: iso(since), to: iso(until) },
-      zoneToken
-    );
-    const v = d.viewer.zones[0] ?? {};
-    return { total: v.all?.[0]?.count ?? 0, stopped: v.stopped ?? [] };
   } catch (e) {
-    return { note: `The zone's analytics are not readable with the zone token (${String(e.message).slice(0, 120)}). Add Zone: Analytics: Read to it to see what the edge stops.` };
+    return { note: `The zone token cannot list the zones (${String(e.message).slice(0, 160)}).` };
   }
+  const vars = { zone, from: iso(since), to: iso(until) };
+  const ask = (field) => gql(`query($zone: string!, $from: Time!, $to: Time!) { viewer { zones(filter: {zoneTag: $zone}) { ${field} } } }`, vars, zoneToken).then((d) => d.viewer.zones[0] ?? {});
+  const filter = `filter: {datetime_geq: $from, datetime_lt: $to, clientRequestHTTPHost: "${HOST}"}`;
+  // The Free zone plan holds the grouped request counts and the single firewall events, not the grouped firewall
+  // events (2026-11-05), so the events are grouped here when the grouped dataset answers "does not have access".
+  const grouped = (events) => {
+    const by = new Map();
+    for (const e of events) {
+      // By the agent's first 60 characters, which is what the table shows: the versions after them would split one scraper over many rows.
+      const agent = String(e.userAgent ?? '').slice(0, 60);
+      const key = [e.action, e.clientASNDescription, e.clientRequestPath, agent].join('\u0000');
+      const g = by.get(key) ?? by.set(key, { count: 0, dimensions: { action: e.action, clientASNDescription: e.clientASNDescription, clientRequestPath: e.clientRequestPath, userAgent: agent } }).get(key);
+      g.count += 1;
+    }
+    return { stopped: [...by.values()].sort((a, b) => b.count - a.count).slice(0, 40) };
+  };
+  const [all, stopped] = await Promise.allSettled([
+    ask(`all: httpRequestsAdaptiveGroups(limit: 1, ${filter}) { count }`),
+    ask(`stopped: firewallEventsAdaptiveGroups(limit: 40, ${filter}, orderBy: [count_DESC]) { count dimensions { action clientASNDescription clientRequestPath userAgent } }`).catch((e) =>
+      /does not have access/.test(e.message)
+        ? ask(`stopped: firewallEventsAdaptive(limit: 5000, ${filter}) { action clientASNDescription clientRequestPath userAgent }`).then((v) => grouped(v.stopped ?? []))
+        : Promise.reject(e)
+    )
+  ]);
+  const why = (r) => String(r.reason?.message ?? r.reason).slice(0, 200);
+  const notes = [];
+  if (all.status === 'rejected') notes.push(`The zone's request count is not readable with the zone token (httpRequestsAdaptiveGroups: ${why(all)}).`);
+  if (stopped.status === 'rejected') notes.push(`What the zone stopped is not readable with the zone token (firewallEventsAdaptiveGroups: ${why(stopped)}).`);
+  return {
+    total: all.status === 'fulfilled' ? (all.value.all?.[0]?.count ?? 0) : undefined,
+    stopped: stopped.status === 'fulfilled' ? (stopped.value.stopped ?? []) : undefined,
+    note: notes.length ? notes.join(' ') : undefined
+  };
 }
 
 const lines = [];
@@ -259,8 +292,10 @@ say(`| Worker errors | ${fmt(sum(windowHours, 'errors'))} | ${fmt(perHour(sum(wi
 say(`| D1 rows read | ${fmt(rowsRead)} | ${fmt(d1PerHour(rowsRead))} | ${fmt(sum(d1, 'rowsRead'))} |`);
 say(`| D1 rows written | ${fmt(sum(d1Window, 'rowsWritten'))} | ${fmt(d1PerHour(sum(d1Window, 'rowsWritten')))} | ${fmt(sum(d1, 'rowsWritten'))} |`);
 if (zone.total !== undefined) {
-  const stopped = zone.stopped.reduce((a, r) => a + r.count, 0);
   say(`| Requests at the edge | ${fmt(zone.total)} | ${fmt(perHour(zone.total))} | |`);
+}
+if (zone.stopped !== undefined) {
+  const stopped = zone.stopped.reduce((a, r) => a + r.count, 0);
   say(`| Stopped by the zone's rules | ${fmt(stopped)} | ${fmt(perHour(stopped))} | |`);
 }
 say();
@@ -379,7 +414,7 @@ else if (queries.length) {
   say();
 }
 if (zone.note) say(zone.note);
-else if (zone.stopped.length) {
+if (zone.stopped?.length) {
   say('## Stopped before the Worker');
   say();
   say('| action | network | path | agent | requests |');
