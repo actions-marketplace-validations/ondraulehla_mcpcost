@@ -9,6 +9,7 @@ import { payloadBytes, BYTES_PER_TOKEN } from '../../../packages/mcpcost/src/pay
 import { liveClaudeCount } from './claude';
 import { formatComparison } from '../../../packages/mcpcost/src/compare.ts';
 import { compareOnBoard } from './compare';
+import pkg from '../../../packages/mcpcost/package.json';
 
 const SITE = 'https://mcpcost.ulehla.dev';
 
@@ -46,13 +47,29 @@ type RegisterTool = <Args>(
  */
 function build(): McpServer {
   const server = new McpServer(
-    { name: 'mcpcost', version: '0.2.0' },
+    {
+      name: 'mcpcost',
+      title: 'mcpcost',
+      // The version of the package, which has the same board tools (packages/mcpcost/src/mcp.ts).
+      version: pkg.version,
+      websiteUrl: `${SITE}/connect`,
+      icons: [
+        { src: `${SITE}/icon-512.png`, mimeType: 'image/png', sizes: ['512x512'] },
+        { src: `${SITE}/favicon.svg`, mimeType: 'image/svg+xml', sizes: ['any'] }
+      ]
+    },
     {
       instructions:
         'Health and token cost of every remote server in the official MCP registry, and of its npm and PyPI package servers, probed daily. Use lookup_server for a registry name or URL, search_servers to find servers, compare_servers to put two to five next to each other, check_server to probe a URL that is not in the registry. claudeTokens is the exact count from the Anthropic count_tokens endpoint (claudeTokensClaudeCode with the mcp__<server>__ prefix); toolsTokens is an o200k_base estimate over each tool definition.'
     }
   );
-  const tool = server.registerTool.bind(server) as unknown as RegisterTool;
+  const register = server.registerTool.bind(server) as unknown as RegisterTool;
+  // The name of a tool for people: the directory of Claude reads it from annotations.title, other clients from title.
+  // The output schema names the fields a client can rely on; an answer may carry more (registry_summary gives the whole
+  // run summary). A client that checks structured content against the JSON Schema, as MCP Inspector does, refuses an
+  // answer with a key the schema does not name unless the object says additionalProperties, so every object does.
+  const tool: RegisterTool = (name, config, cb) =>
+    register(name, { ...config, annotations: { ...config.annotations, title: config.title }, outputSchema: z.object(config.outputSchema as z.ZodRawShape).passthrough() as unknown as Record<string, unknown> }, cb);
 
   tool<{ nameOrUrl: string }>(
     'lookup_server',
@@ -78,8 +95,8 @@ function build(): McpServer {
         down: z.boolean().optional().describe('True when the server has failed for two days or more; a more recent failure is "no answer", not down'),
         toolsTokensNote: z.string().optional(),
         shareOf200k: z.number().nullable().optional().describe('Percent of a 200k window, exact when claudeTokens is present'),
-        latencyMs: z.object({ initialize: nullableInt('milliseconds'), toolsList: nullableInt('milliseconds') }).optional(),
-        topTools: z.array(z.object({ name: z.string(), tokens: z.number() })).nullable().optional().describe('The five most expensive tools: name and o200k_base tokens'),
+        latencyMs: z.object({ initialize: nullableInt('milliseconds'), toolsList: nullableInt('milliseconds') }).passthrough().optional(),
+        topTools: z.array(z.object({ name: z.string(), tokens: z.number() }).passthrough()).nullable().optional().describe('The five most expensive tools: name and o200k_base tokens'),
         probedAt: z.string().describe('ISO 8601 time of the probe')
       }
     },
@@ -121,7 +138,7 @@ function build(): McpServer {
         sort: z.string().describe('The sort that was applied'),
         hasNext: z.boolean(),
         next: z.string().nullable().optional().describe('The cursor for the next page, when hasNext'),
-        servers: z.array(z.object(SERVER_ROW))
+        servers: z.array(z.object(SERVER_ROW).passthrough())
       }
     },
     async ({ query, status, sort, page, cursor }) => {
@@ -136,7 +153,7 @@ function build(): McpServer {
     {
       title: 'Probe a server live',
       description:
-        'Connects to an MCP server URL now (initialize and tools/list, 10 s timeout) and reports status, protocol, how a client gets access, tool names and the token cost of the tool definitions: exact in Claude when the counter is available, else an estimate from the schema size. Use it for a URL that is not in the official registry, or to see the state this minute; for a registry server prefer lookup_server, which is instant. Sends no credentials: a server that needs them comes back with status "auth", not an error. A URL that is not https, or a server that does not answer, returns its failure as status and error.',
+        'Connects to an MCP server URL now (initialize and tools/list, 10 s timeout) and reports status, protocol, how a client gets access, tool names and the token cost of the tool definitions: exact in Claude when the counter is available, else an estimate from the schema size. Use it for a URL that is not in the official registry, or to see the state this minute; for a registry server prefer lookup_server, which is instant. Sends no credentials: a server that needs them comes back with status "auth", not an error. A URL that is not https, or a server that does not answer, returns its failure as status and error. The requests are the ones the MCP specification defines for a client (https://modelcontextprotocol.io/specification): the initialize handshake and tools/list over Streamable HTTP or SSE; the tool calls no tool of the server.',
       annotations: READ_ONLY,
       inputSchema: { url: z.string().url().describe('The https URL of the MCP endpoint, Streamable HTTP (…/mcp) or SSE (…/sse)') },
       outputSchema: {
@@ -151,15 +168,20 @@ function build(): McpServer {
         protocolVersion: z.string().optional(),
         serverInfo: z.record(z.string(), z.unknown()).optional().describe('name, version and title from initialize'),
         toolCount: z.number().int().optional(),
-        toolsBytes: z.number().int().describe('Bytes of the compact JSON of every tool definition'),
+        toolsBytes: z.number().int().optional().describe('Bytes of the compact JSON of every tool definition, for a live probe'),
         claudeTokens: z.number().int().optional().describe('Exact count from the Anthropic count_tokens endpoint'),
         claudeTokensClaudeCode: z.number().int().optional().describe('The exact count with the Claude Code prefix on each tool name'),
         claudeModel: z.string().optional(),
         claudeError: z.string().optional(),
-        toolsTokensEstimate: z.number().int().describe('Tokens estimated from the schema size at the registry median of 4.42 bytes per token'),
-        estimateNote: z.string(),
-        tools: z.array(z.string()).describe('The tool names, in the order the server lists them'),
-        latencyMs: z.object({ initialize: z.number().optional(), toolsList: z.number().optional() }),
+        toolsTokensEstimate: z.number().int().optional().describe('Tokens estimated from the schema size at the registry median of 4.42 bytes per token, for a live probe'),
+        estimateNote: z.string().optional(),
+        tools: z.array(z.string()).optional().describe('The tool names, in the order the server lists them, for a live probe'),
+        inRegistry: z.boolean().optional().describe('True when the board already probes this URL each day: the answer is then the stored record, with no new connection'),
+        name: z.string().optional().describe('The name of the server on the board, when inRegistry is true; give it to lookup_server for the full record'),
+        toolsTokens: z.number().int().optional().describe('o200k_base estimate from the stored record, when inRegistry is true'),
+        probedAt: z.string().optional().describe('ISO 8601 time of the stored probe, when inRegistry is true'),
+        page: z.string().optional().describe("The server's page on the board, when inRegistry is true"),
+        latencyMs: z.object({ initialize: z.number().optional(), toolsList: z.number().optional() }).passthrough().optional().describe('Milliseconds to the initialize result and to the tools/list result, for a live probe'),
         error: z.string().optional().describe('The first line of the failure, when status is not ok')
       }
     },
@@ -169,7 +191,16 @@ function build(): McpServer {
       const known = await findByUrl(u.toString());
       if (known) {
         const s = await getServer(known);
-        if (s) return { content: [{ type: 'text', text: JSON.stringify({ inRegistry: true, name: s.name, status: s.status, toolCount: s.tool_count, claudeTokens: s.claude_tokens, toolsTokens: s.tools_tokens, page: `${SITE}/s/${s.name}` }, null, 2) }] };
+        if (s) {
+          // The board probes this URL each day: the stored record answers, with no connection. A tool with an output
+          // schema must give structured content, and a field the record does not have is left out, not null.
+          const stored = {
+            url: u.toString(), status: s.status, statusLabel: label(s.status), inRegistry: true, name: s.name,
+            toolCount: s.tool_count ?? undefined, claudeTokens: s.claude_tokens ?? undefined, toolsTokens: s.tools_tokens ?? undefined,
+            probedAt: s.probed_at, page: `${SITE}/s/${s.name}`
+          };
+          return { content: [{ type: 'text', text: JSON.stringify(stored, null, 2) }], structuredContent: stored };
+        }
       }
       const { result, tools } = await probeRemoteRaw({ url: u.toString(), type: /\/sse\/?$/.test(u.pathname) ? 'sse' : 'streamable-http' }, { timeoutMs: 10_000 });
       const bytes = tools.reduce((a, t) => a + payloadBytes(t), 0);
@@ -215,7 +246,7 @@ function build(): McpServer {
           probedAt: nullableStr('ISO 8601 time of the probe'),
           page: nullableStr("The server's page on the board"),
           error: nullableStr('Why there is no data, for example "not on the board"')
-        })).describe('One row per requested server, in the order given'),
+        }).passthrough()).describe('One row per requested server, in the order given'),
         measured: z.number().int().describe('How many rows have a token number'),
         cheapest: z.string().nullable().describe('The server with the fewest tokens, when two or more rows are measured'),
         mostExpensive: z.string().nullable(),

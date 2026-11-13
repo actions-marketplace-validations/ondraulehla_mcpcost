@@ -15,6 +15,9 @@ Token counts: claudeTokens is exact. It comes from the Anthropic count_tokens en
 - https://mcpcost.ulehla.dev/check?target=<https url> : probe a server that is not in the registry; a form there tracks it on the board (name url/<host>/<path>)
 - https://mcpcost.ulehla.dev/watch?server=<name> : e-mail alerts when a server stops answering, comes back, or its tool set or token cost changes
 - https://mcpcost.ulehla.dev/report : monthly reports, The state of the MCP registry; https://mcpcost.ulehla.dev/report/2026-10 reads the runs of October 2026 and ends with a CC BY 4.0 dataset, one row per server, at https://mcpcost.ulehla.dev/data/mcpcost-2026-10.json.gz
+- https://mcpcost.ulehla.dev/errors : the start-up errors of PyPI servers after mcp 2.0, the Python SDK (FastMCP renamed to MCPServer, lowlevel Server decorators removed, streamablehttp_client removed, McpError renamed); one page per error text at /errors/<slug> with the cause, the fix and the registry servers that stop with it today
+- https://mcpcost.ulehla.dev/connect : how to add the MCP server to Claude, ChatGPT and other clients, its five tools and example questions
+- https://mcpcost.ulehla.dev/privacy : privacy policy; https://mcpcost.ulehla.dev/terms : terms of use
 - https://mcpcost.ulehla.dev/statistics, /hosts, /methodology
 
 ## Machine access
@@ -26,6 +29,7 @@ Token counts: claudeTokens is exact. It comes from the Anthropic count_tokens en
 - JSON, run summary: https://mcpcost.ulehla.dev/api/summary.json
 - Re-check evidence for the registry, the newest run, in the row shape of modelcontextprotocol/registry#1715 (entry, checked_at, check, state, evidence; gzip of JSON, CC BY 4.0, changes after each daily run): https://mcpcost.ulehla.dev/data/mcpcost-evidence-latest.json.gz ; its index (run date, rows, size, SHA-256): https://mcpcost.ulehla.dev/data/mcpcost-evidence-latest.index.json
 - JSON, servers tracked outside the registry: https://mcpcost.ulehla.dev/api/tracked.json
+- In the directory of Claude: https://claude.ai/directory/mcpcost
 - MCP server (Streamable HTTP, no auth): https://mcpcost.ulehla.dev/mcp with tools lookup_server, search_servers, compare_servers (two to five side by side, as JSON, Markdown or CSV), check_server, registry_summary
 - CLI for your own config: npx mcpcost (https://www.npmjs.com/package/mcpcost)
 - Source and raw data: https://github.com/ondraulehla/mcpcost (MIT)
